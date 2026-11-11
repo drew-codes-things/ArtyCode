@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 
 from arty_cli import extras as extra_tools
@@ -6,6 +7,10 @@ from arty_cli import hooks, permissions, tools
 
 MAX_ROUNDS = 40
 STUCK_REPEATS = 3
+ANNOUNCED_STEP = re.compile(r"\b(let'?s|let me|i'?ll|i will|i'?m going to|next,? i)\b[^.?!]{0,80}\b(check|look|read|open|run|"
+                            r"search|find|inspect|examine|fix|edit|change|update|try|see)\b", re.I)
+ANNOUNCED_STEP_TAIL_CHARS = 300
+DO_IT_NOW = "Do that now with your tools rather than describing it."
 MAX_EXPLORE_ANSWER_CHARS = 8_000
 MAX_RESULT_CHARS = 60_000
 REFUSED = permissions.REFUSED
@@ -229,13 +234,18 @@ def asked_to_carry_on(messages: list[dict], extras, screen, continued: int) -> b
     return True
 
 
+def announces_a_next_step(content: str) -> bool:
+    tail = content.strip()[-ANNOUNCED_STEP_TAIL_CHARS:]
+    return bool(tail) and not tail.endswith("?") and bool(ANNOUNCED_STEP.search(tail))
+
+
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
              squeeze=None, extras=None, stop_hooks=True, stopped=None) -> str:
     extras = extras or extra_tools.NONE
     offered = offered_definitions(extras) if offered is None else offered
     done = [] if done is None else done
     helpers = Helpers(brain, workspace, gate, screen, extras)
-    recent, continued, steered_from = [], 0, None
+    recent, continued, steered_from, nudged = [], 0, None, False
     for _round in range(MAX_ROUNDS + 1):
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
@@ -246,6 +256,10 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         calls = reply.get("tool_calls") or []
         if not calls:
             messages.append({"role": "assistant", "content": content})
+            if not nudged and offered and announces_a_next_step(content):
+                nudged = True
+                messages.append({"role": "user", "content": DO_IT_NOW})
+                continue
             if stop_hooks and asked_to_carry_on(messages, extras, screen, continued):
                 continued += 1
                 continue

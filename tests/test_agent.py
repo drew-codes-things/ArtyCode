@@ -3,6 +3,8 @@ import shlex
 import sys
 import threading
 
+import pytest
+
 from arty_cli import agent, extras, hooks, permissions, skills, tools
 
 
@@ -497,3 +499,40 @@ def test_refusing_an_mcp_server_s_first_use_runs_nothing(tmp_path):
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                    permissions.Gate(workspace, lambda q, p="": "n"), Screen(), extras=extras.Extras(hub=hub))
     assert hub.calls == []
+
+
+def test_a_reply_that_only_announces_its_next_step_is_sent_back_once_to_do_it(tmp_path):
+    (tmp_path / "ops.py").write_text("x = 1\n")
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(
+        ("Let's check the file to see how it's defined.", []),
+        ("", [call("read_file", path="ops.py")]),
+        ("ops.py sets x to 1.", []),
+    )
+    messages = [{"role": "user", "content": "what does ops.py set?"}]
+    answer = agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, lambda q, p="": "y"), Screen())
+    assert answer == "ops.py sets x to 1."
+    nudge = scripted.sent[1]["messages"][-1]
+    assert nudge["role"] == "user" and agent.DO_IT_NOW in nudge["content"]
+
+
+def test_an_announced_step_is_only_nudged_once_per_request(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(("I'll run the tests next.", []), ("Let me run the tests now.", []))
+    answer = agent.run_turn([{"role": "user", "content": "test it"}], scripted, workspace,
+                            permissions.Gate(workspace, lambda q, p="": "y"), Screen())
+    assert answer == "Let me run the tests now."
+    assert len(scripted.sent) == 2
+
+
+@pytest.mark.parametrize("final", [
+    "Fixed: subtract now subtracts, and all 3 tests pass.",
+    "Should I run the full test suite too?",
+    "The file defines add, subtract and multiply.",
+])
+def test_a_finished_answer_or_a_question_is_not_nudged(tmp_path, final):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain((final, []))
+    assert agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
+                          permissions.Gate(workspace, lambda q, p="": "y"), Screen()) == final
+    assert len(scripted.sent) == 1
