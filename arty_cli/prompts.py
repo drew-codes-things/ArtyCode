@@ -15,7 +15,7 @@ def system_prompt(workspace, notes: str = "") -> str:
         "before guessing a path. "
         "Use "
         "edit_file for changes (copy old_text exactly as read_file showed it, without the line numbers; once an edit "
-        "succeeds, don't repeat it), "
+        "succeeds, don't repeat it; multi_edit for several changes to one file), "
         "write_file only for new files, run_command for tests, builds and git (background for servers, then "
         "command_output), web_fetch for documentation, explore to hand a long search to a helper, and todo_write "
         "to keep a checklist when a job has several steps. "

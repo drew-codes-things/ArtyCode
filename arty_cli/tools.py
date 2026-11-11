@@ -32,7 +32,7 @@ WINDOWS_LINE_END = "\r\n"
 UNIX_LINE_END = "\n"
 SKIPPED_FOLDERS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
                    ".pytest_cache", ".gradle", "build", "dist"}
-CHANGING_TOOLS = ("write_file", "edit_file", "notebook_edit")
+CHANGING_TOOLS = ("write_file", "edit_file", "multi_edit", "notebook_edit")
 NOTEBOOK_SUFFIX = ".ipynb"
 CELL_TYPES = ("code", "markdown", "raw")
 EDIT_MODES = ("replace", "insert", "delete")
@@ -268,6 +268,22 @@ def edited_text(before: str, old_text: str, new_text: str, replace_all: bool) ->
     return before.replace(old_text, new_text)
 
 
+def multi_edited_text(before: str, edits) -> str:
+    if not isinstance(edits, list) or not edits:
+        raise ToolError("edits needs at least one {old_text, new_text} change")
+    after = before
+    for number, edit in enumerate(edits, start=1):
+        if not isinstance(edit, dict):
+            raise ToolError(f"edit {number} should be an object with old_text and new_text; nothing was changed")
+        old_text = in_line_style_of(str(edit.get("old_text", "")), before)
+        new_text = in_line_style_of(str(edit.get("new_text", "")), before)
+        try:
+            after = edited_text(after, old_text, new_text, bool(edit.get("replace_all", False)))
+        except ToolError as error:
+            raise ToolError(f"edit {number}: {error}; nothing was changed") from None
+    return after
+
+
 def source_lines(text: str) -> list[str]:
     return str(text).splitlines(keepends=True)
 
@@ -325,6 +341,9 @@ def planned_change(name: str, arguments: dict, workspace) -> tuple[Path, str, st
         new_text = in_line_style_of(str(arguments.get("new_text", "")), before)
         after = edited_text(before, old_text, new_text, bool(arguments.get("replace_all", False)))
         return target, before, after
+    if name == "multi_edit":
+        before = read_text(target)
+        return target, before, multi_edited_text(before, arguments.get("edits"))
     if name == "notebook_edit":
         if not is_notebook(target):
             raise ToolError("notebook_edit only changes .ipynb notebooks; use edit_file for other files")
@@ -366,6 +385,11 @@ def edit_file(workspace, path, old_text, new_text, replace_all=False):
     arguments = {"path": path, "old_text": old_text, "new_text": new_text, "replace_all": replace_all}
     target, _before, _after = changed_file(workspace, "edit_file", arguments)
     return f"Edited {workspace.shown(target)}"
+
+
+def multi_edit(workspace, path, edits):
+    target, _before, _after = changed_file(workspace, "multi_edit", {"path": path, "edits": edits})
+    return f"Made {len(edits)} edits to {workspace.shown(target)}"
 
 
 def notebook_edit(workspace, path, cell, source="", cell_type="", edit_mode="replace"):
@@ -573,6 +597,7 @@ HANDLERS = {
     "read_file": read_file,
     "write_file": write_file,
     "edit_file": edit_file,
+    "multi_edit": multi_edit,
     "notebook_edit": notebook_edit,
     "list_files": list_files,
     "search": search,
@@ -603,6 +628,12 @@ DEFINITIONS = [
                           "(copy it from read_file without the line numbers) unless replace_all is true.",
              {"path": TEXT, "old_text": TEXT, "new_text": TEXT, "replace_all": {"type": "boolean"}},
              ["path", "old_text", "new_text"]),
+    function("multi_edit", "Make several edit_file changes to one file in one step, in order, each applied to the "
+                           "result of the one before. Each old_text must match exactly once unless its replace_all "
+                           "is true. All or nothing: if any edit fails, the file is left as it was.",
+             {"path": TEXT, "edits": {"type": "array", "items": {"type": "object", "properties": {
+                 "old_text": TEXT, "new_text": TEXT, "replace_all": {"type": "boolean"}},
+                 "required": ["old_text", "new_text"]}}}, ["path", "edits"]),
     function("notebook_edit", "Change one cell of a Jupyter notebook (.ipynb); never edit notebooks with edit_file. "
                               "cell is the number read_file shows. edit_mode: replace (default; a code cell's old "
                               "output is cleared), insert (the new cell takes that number) or delete.",

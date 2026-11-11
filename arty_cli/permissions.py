@@ -56,7 +56,7 @@ RULE_SHAPE = re.compile(r"^([A-Za-z0-9_*?\[\]-]+)(?:\((.*)\))?$", re.DOTALL)
 COMMAND_PARTS = re.compile(r"[;&|\n]+")
 SETTINGS_FILE = "settings.json"
 PROJECT_SETTINGS = Path(".arty") / SETTINGS_FILE
-PATH_TOOLS = ("read_file", "write_file", "edit_file", "notebook_edit", "search")
+PATH_TOOLS = ("read_file", "write_file", "edit_file", "multi_edit", "notebook_edit", "search")
 PLAN_REFUSAL = ("Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan "
                 "step by step and ask the user to switch plan mode off (/mode default) to carry it out.")
 

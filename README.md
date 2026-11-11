@@ -26,6 +26,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 |---|---|---|
 | `read_file`, `list_files`, `search` | Read and find code in the project; a Jupyter notebook reads as numbered cells with their text output. Big files and searches stop at a size limit and say where to read on | Only outside the project folder |
 | `edit_file`, `write_file` | Change or create files, keeping each file's line endings. An existing file has to be read first, and is refused if it changed on disk since; every write is atomic (a temporary file, then a swap) | Yes, showing the diff (`--auto-edit` skips this inside the project) |
+| `multi_edit` | Several edits to one file in one step, applied in order; all or nothing, so if one edit doesn't match exactly once nothing is changed. One question with the whole diff, and one `/undo` puts it all back | Yes, like an edit |
 | `notebook_edit` | Replace, insert or delete one cell of a `.ipynb` notebook (a replaced code cell's old output is cleared) | Yes, like an edit |
 | `run_command` | Tests, builds, git (bash on Linux, PowerShell on Windows) | Yes, except look-only commands (below) |
 | `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a long build); background commands end when arty-cli does | No |

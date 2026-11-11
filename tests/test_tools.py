@@ -420,3 +420,45 @@ def test_search_globs_match_by_name_or_by_path_in_the_project(workspace, glob):
 @pytest.mark.parametrize("glob", ["*.js", "docs/*.py", "**/*.txt"])
 def test_search_globs_that_match_nothing_find_nothing(workspace, glob):
     assert tools.run("search", {"pattern": r"return a", "glob": glob}, workspace).startswith("No matches")
+
+
+def test_multi_edit_makes_every_change_in_order_as_one_undoable_step(workspace):
+    tools.run("read_file", {"path": "src/app.py"}, workspace)
+    edits = [{"old_text": "def add", "new_text": "def plus"}, {"old_text": "a - b", "new_text": "a + b"},
+             {"old_text": "plus(a, b)", "new_text": "plus(a, b=0)"}]
+    result = tools.run("multi_edit", {"path": "src/app.py", "edits": edits}, workspace)
+    assert result == "Made 3 edits to src/app.py"
+    assert (workspace.root / "src" / "app.py").read_text() == "def plus(a, b=0):\n    return a + b\n"
+    assert len(workspace.checkpoints) == 1
+    workspace.undo_last()
+    assert (workspace.root / "src" / "app.py").read_text() == "def add(a, b):\n    return a - b\n"
+
+
+@pytest.mark.parametrize("edits, problem", [
+    ([{"old_text": "a - b", "new_text": "a + b"}, {"old_text": "a * b", "new_text": "x"}], "edit 2: old_text was not found"),
+    ([{"old_text": "a", "new_text": "z"}], "edit 1: old_text is in"),
+    ([{"old_text": "", "new_text": "z"}], "edit 1: old_text is empty"),
+    ([], "edits needs at least one"),
+    (["a - b"], "edit 1 should be an object"),
+])
+def test_multi_edit_changes_nothing_when_any_edit_fails(workspace, edits, problem):
+    tools.run("read_file", {"path": "src/app.py"}, workspace)
+    result = tools.run("multi_edit", {"path": "src/app.py", "edits": edits}, workspace)
+    assert result.startswith("Error") and problem in result
+    assert (workspace.root / "src" / "app.py").read_text() == "def add(a, b):\n    return a - b\n"
+    assert workspace.checkpoints == []
+
+
+def test_multi_edit_can_replace_every_match_when_asked(workspace):
+    (workspace.root / "twice.txt").write_text("x\nx\ny\n")
+    tools.run("read_file", {"path": "twice.txt"}, workspace)
+    edits = [{"old_text": "x", "new_text": "z", "replace_all": True}, {"old_text": "y", "new_text": "w"}]
+    tools.run("multi_edit", {"path": "twice.txt", "edits": edits}, workspace)
+    assert (workspace.root / "twice.txt").read_text() == "z\nz\nw\n"
+
+
+def test_multi_edit_needs_the_file_read_first(workspace):
+    result = tools.run("multi_edit", {"path": "src/app.py", "edits": [{"old_text": "a - b", "new_text": "a + b"}]},
+                       workspace)
+    assert result.startswith("Error")
+    assert (workspace.root / "src" / "app.py").read_text() == "def add(a, b):\n    return a - b\n"

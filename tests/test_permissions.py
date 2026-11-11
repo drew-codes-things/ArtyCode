@@ -412,3 +412,16 @@ def test_without_a_rule_file_saving_is_the_same_as_always(workspace):
     assert gate.allows("run_command", {"command": "pytest -q"})
     assert gate.allows("run_command", {"command": "pytest -q"})
     assert len(ask.questions) == 1
+
+
+def test_a_multi_edit_asks_once_and_shows_the_whole_diff(workspace):
+    (workspace.root / "a.py").write_text("x = 1\ny = 1\n")
+    ask = Asker("y")
+    gate = permissions.Gate(workspace, ask)
+    edits = [{"old_text": "x = 1", "new_text": "x = 2"}, {"old_text": "y = 1", "new_text": "y = 2"}]
+    assert gate.allows("multi_edit", {"path": "a.py", "edits": edits})
+    question, preview = ask.questions[0]
+    assert question == "Edit a.py?"
+    assert "+x = 2" in preview and "+y = 2" in preview
+    assert not permissions.Gate(workspace, Asker(), mode=permissions.PLAN).allows("multi_edit", {"path": "a.py",
+                                                                                                "edits": edits})
