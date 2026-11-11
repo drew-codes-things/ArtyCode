@@ -26,6 +26,9 @@ STOP_HOOK_LEAD = "A Stop hook asked you to carry on:"
 MAX_STOP_CONTINUES = 3
 SUBAGENT_STOP_LEAD = "A SubagentStop hook asked you to carry on:"
 EXPLORE_NAME = "explore"
+HELPER_TOOL = "helper"
+HELPER_ROLE = ("You are a helper inside arty-cli, called by the main agent for one job. Do it with your tools, then "
+               "reply briefly with what you found or did, naming files and line numbers.")
 MAX_HELPERS = 4
 HELPER_STOPPED = "The helper was stopped."
 HELPER_JOIN_SECONDS = 0.2
@@ -62,8 +65,18 @@ def activity_line(name: str, arguments: dict) -> str:
     return f"{name} {target}".strip()
 
 
+def helper_definition(found: dict) -> dict:
+    listed = "\n".join(f"- {helper.name}: {helper.description}" for helper in found.values())
+    return tools.function(
+        HELPER_TOOL,
+        "Hand a job to one of the user's own helpers, each with its own instructions, tools and fresh conversation; "
+        f"it reports back when done. Call it several times in one reply to run up to four at once. Helpers:\n{listed}",
+        {"name": {"type": "string", "enum": list(found)}, "task": tools.TEXT}, ["name", "task"])
+
+
 def offered_definitions(extras) -> list[dict]:
-    return tools.DEFINITIONS + [EXPLORE_DEFINITION] + extras.definitions()
+    custom = [helper_definition(extras.helpers)] if extras.helpers else []
+    return tools.DEFINITIONS + [EXPLORE_DEFINITION] + custom + extras.definitions()
 
 
 def planning_definitions(gate) -> list[dict]:
@@ -103,24 +116,42 @@ class Helpers:
         with self.lock:
             return permissions.NO if self.stopped.is_set() else self.gate.ask(question, preview)
 
+    def helper_gate(self, mode: str):
+        found = permissions.Gate(self.workspace, self.ask, mode=mode)
+        found.always = self.gate.always
+        found.rules = self.gate.rules
+        found.approved_servers = self.gate.approved_servers
+        return found
+
     def explore(self, task: str) -> str:
-        helper_gate = permissions.Gate(self.workspace, self.ask, mode=permissions.PLAN)
-        helper_gate.always = self.gate.always
-        helper_gate.rules = self.gate.rules
-        helper_gate.approved_servers = self.gate.approved_servers
-        messages = [{"role": "system", "content": EXPLORER_PROMPT}, {"role": "user", "content": task}]
-        offered = explorer_definitions() + self.extras.definitions()
+        return self.helped(EXPLORE_NAME, EXPLORER_PROMPT, task, explorer_definitions() + self.extras.definitions(),
+                           permissions.PLAN)
+
+    def custom(self, found: dict, arguments: dict) -> str:
+        name = str(arguments.get("name") or "")
+        helper = found.get(name)
+        if helper is None:
+            return f"Error: there is no helper called {name}. Helpers: {', '.join(found) or 'none'}"
+        offered = [definition for definition in tools.DEFINITIONS + self.extras.definitions()
+                   if definition["function"]["name"] in helper.tools]
+        planning = self.gate.mode == permissions.PLAN or not helper.changes_things()
+        return self.helped(helper.name, f"{HELPER_ROLE}\n\n{helper.prompt}", str(arguments.get("task") or ""),
+                           offered, permissions.PLAN if planning else self.gate.mode)
+
+    def helped(self, kind: str, prompt: str, task: str, offered: list[dict], mode: str) -> str:
+        gate = self.helper_gate(mode)
+        messages = [{"role": "system", "content": prompt}, {"role": "user", "content": task}]
         continued = 0
         while True:
-            answer = run_turn(messages, self.brain, self.workspace, helper_gate, Quiet(self.screen, self.lock),
+            answer = run_turn(messages, self.brain, self.workspace, gate, Quiet(self.screen, self.lock),
                               offered=offered, can_explore=False, extras=self.extras, stop_hooks=False,
                               stopped=self.stopped)
-            if self.stopped.is_set() or not self.sent_back(task, answer, messages, continued):
+            if self.stopped.is_set() or not self.sent_back(kind, task, answer, messages, continued):
                 return answer[:MAX_EXPLORE_ANSWER_CHARS] or "The helper found nothing to report."
             continued += 1
 
-    def sent_back(self, task: str, answer: str, messages: list[dict], continued: int) -> bool:
-        outcome = self.extras.hook("SubagentStop", {"stop_hook_active": continued > 0, "agent_type": EXPLORE_NAME,
+    def sent_back(self, kind: str, task: str, answer: str, messages: list[dict], continued: int) -> bool:
+        outcome = self.extras.hook("SubagentStop", {"stop_hook_active": continued > 0, "agent_type": kind,
                                                     "task": task, "last_message": answer})
         show_problems(self.screen, outcome)
         if not outcome.blocked or continued >= MAX_STOP_CONTINUES:
@@ -194,6 +225,8 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
         if not can_explore:
             return "Error: a helper can't start another helper; look for it yourself"
         result = helpers.explore(str(arguments.get("task", "")))
+    elif name == HELPER_TOOL and can_explore and extras.helpers:
+        result = helpers.custom(extras.helpers, arguments)
     elif name == permissions.PLAN_TOOL and can_explore:
         result = helpers.gate.review_plan(str(arguments.get("plan") or ""))
     else:
@@ -210,7 +243,7 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
 
 
 def is_explore(call: dict) -> bool:
-    return (call.get("function") or {}).get("name") == "explore"
+    return (call.get("function") or {}).get("name") in (EXPLORE_NAME, HELPER_TOOL)
 
 
 def results_of_helpers(calls: list[dict], exploring: list[int], helpers: Helpers, done: list, extras,

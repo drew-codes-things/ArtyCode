@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from arty_cli import agent, brain, extras, hooks, permissions, skills, tools
+from arty_cli import agent, brain, extras, helpers, hooks, permissions, skills, tools
 
 
 def call(name, call_id="c1", **arguments):
@@ -624,3 +624,71 @@ def test_the_plan_tool_is_only_offered_in_plan_mode(tmp_path):
     agent.run_turn([{"role": "user", "content": "hi"}], scripted, workspace,
                    permissions.Gate(workspace, permissions.refuse), Screen())
     assert "present_plan" not in [d["function"]["name"] for d in scripted.sent[0]["tools"]]
+
+
+class CustomHelperBrain:
+    def __init__(self, main_replies, helper_replies):
+        self.main_replies, self.helper_replies = list(main_replies), list(helper_replies)
+        self.main, self.helper = [], []
+
+    def reply(self, messages, tools, on_text):
+        if "You review changes." in messages[0]["content"]:
+            self.helper.append({"messages": [dict(m) for m in messages], "tools": tools})
+            content, calls = self.helper_replies.pop(0)
+        else:
+            self.main.append({"messages": [dict(m) for m in messages], "tools": tools})
+            content, calls = self.main_replies.pop(0)
+        return {"role": "assistant", "content": content, "tool_calls": calls}
+
+
+def helper_call(helper_name, task):
+    return {"id": "h1", "type": "function",
+            "function": {"name": "helper", "arguments": json.dumps({"name": helper_name, "task": task})}}
+
+
+def reviewer(*allowed):
+    return helpers.Helper("reviewer", "Reviews a diff for bugs", "You review changes.", tuple(allowed), "yours")
+
+
+def test_a_custom_helper_runs_with_its_own_prompt_and_only_its_tools(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    workspace = tools.Workspace(tmp_path)
+    scripted = CustomHelperBrain(
+        [("", [helper_call("reviewer", "review a.py")]), ("Reviewed.", [])],
+        [("", [call("read_file", path="a.py")]), ("No bugs in a.py.", [])])
+    agent.run_turn([{"role": "user", "content": "review"}], scripted, workspace,
+                   permissions.Gate(workspace, permissions.refuse), Screen(),
+                   extras=extras.Extras(helpers={"reviewer": reviewer("read_file", "search")}))
+    offered = {d["function"]["name"]: d for d in scripted.main[0]["tools"]}
+    assert "reviewer" in offered["helper"]["function"]["description"]
+    assert offered["helper"]["function"]["parameters"]["properties"]["name"]["enum"] == ["reviewer"]
+    assert sorted(d["function"]["name"] for d in scripted.helper[0]["tools"]) == ["read_file", "search"]
+    assert scripted.helper[0]["messages"][1]["content"] == "review a.py"
+    assert [m["content"] for m in scripted.main[1]["messages"] if m["role"] == "tool"] == ["No bugs in a.py."]
+
+
+def test_a_helper_allowed_to_edit_asks_like_the_main_agent_and_a_looking_one_cannot_edit(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    workspace = tools.Workspace(tmp_path)
+    edit = [("", [call("read_file", path="a.py")]),
+            ("", [call("edit_file", "e1", path="a.py", old_text="x = 1", new_text="x = 2")]), ("Edited.", [])]
+    for allowed, expected in ((("read_file", "edit_file"), "x = 2\n"), (("read_file",), "x = 1\n")):
+        (tmp_path / "a.py").write_text("x = 1\n")
+        asked = []
+        scripted = CustomHelperBrain([("", [helper_call("reviewer", "fix a.py")]), ("OK.", [])],
+                                     list(edit))
+        agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
+                       permissions.Gate(workspace, lambda q, p="": asked.append(q) or "y"), Screen(),
+                       extras=extras.Extras(helpers={"reviewer": reviewer(*allowed)}))
+        assert (tmp_path / "a.py").read_text() == expected
+
+
+def test_an_unknown_helper_name_is_an_error_and_no_helpers_means_no_tool(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    scripted = CustomHelperBrain([("", [helper_call("nobody", "x")]), ("OK.", [])], [])
+    agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
+                   permissions.Gate(workspace, permissions.refuse), Screen(),
+                   extras=extras.Extras(helpers={"reviewer": reviewer("read_file")}))
+    result = [m["content"] for m in scripted.main[1]["messages"] if m["role"] == "tool"][0]
+    assert result.startswith("Error") and "reviewer" in result
+    assert "helper" not in [d["function"]["name"] for d in agent.offered_definitions(extras.NONE)]

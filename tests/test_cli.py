@@ -715,3 +715,14 @@ def test_a_file_changed_by_hand_after_arty_is_not_overwritten_by_a_rewind(ready,
     cli.main(["--permission-mode", "auto-edit"])
     assert (ready / "a.py").read_text() == "x = 99\n"
     assert "changed again" in capsys.readouterr().err
+
+
+def test_helpers_from_the_config_folder_are_offered_and_listed(ready, monkeypatch, capsys):
+    folder = cli.settings.config_dir() / "helpers"
+    folder.mkdir(parents=True)
+    (folder / "reviewer.md").write_text("---\ndescription: Reviews a diff\n---\nYou review changes.\n")
+    monkeypatch.setattr(cli.brain, "Brain", ToolSeeingBrain)
+    ToolSeeingBrain.offered = []
+    chat_with(monkeypatch, "/helpers", "hello", "/exit")
+    assert "helper" in ToolSeeingBrain.offered[0]
+    assert "reviewer (yours): Reviews a diff" in capsys.readouterr().err

@@ -13,8 +13,9 @@ from urllib.parse import urlparse
 
 from arty_cli import extras as extras_module
 
-from arty_cli import (__version__, agent, authorise, brain, commands, context, hooks, mcp, memory, mentions, models,
-                       permissions, prompt_line, prompts, providers, sessions, settings, skills, tools, webfetch)
+from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, mcp, memory, mentions,
+                       models, permissions, prompt_line, prompts, providers, sessions, settings, skills, tools,
+                       webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -28,8 +29,8 @@ SUMMARY_LEAD = "Summary of our conversation so far:"
 SUMMARY_ACK = "Got it, carrying on from there."
 CARRY_ON = "Carry on with the work from there."
 STOPPED = "That request stopped before it finished."
-TRUST_QUESTION = ("This folder has its own Arty setup: notes Arty would follow (ARTY.md), /commands, skills, or hooks "
-                  "and MCP servers that run programs on this computer. Only say yes if you trust whoever wrote them. "
+TRUST_QUESTION = ("This folder has its own Arty setup: notes Arty would follow (ARTY.md), /commands, skills, helpers, "
+                  "or hooks and MCP servers that run programs on this computer. Only say yes if you trust whoever wrote them. "
                   "Trust this folder? [y/n]: ")
 CHANGED_QUESTION = ("This folder's hooks, MCP servers or permission rules (.arty/settings.json, .arty/mcp.json) "
                     "changed since you trusted it, so they may run different programs now. Trust it again? [y/n]: ")
@@ -59,6 +60,7 @@ COMMANDS = {
     "/memory": "show which ARTY.md notes are loaded",
     "/mcp": "MCP servers and the tools they add",
     "/skills": "skills the model can load",
+    "/helpers": "your own helpers the model can hand jobs to",
     "/hooks": "hooks that run on events",
     "/compact": "replace the conversation with a summary to free up room",
     "/undo": "put back the last file change Arty made (again for the one before)",
@@ -297,7 +299,8 @@ def stopped_note(done: list[str]) -> str:
 def has_project_setup(workspace) -> bool:
     root = workspace.root
     return ((root / memory.MEMORY_FILE).is_file() or (root / commands.PROJECT_COMMANDS).is_dir()
-            or (root / skills.PROJECT_SKILLS).is_dir() or (root / hooks.PROJECT_FOLDER / hooks.SETTINGS_FILE).is_file()
+            or (root / skills.PROJECT_SKILLS).is_dir() or (root / helpers.PROJECT_HELPERS).is_dir()
+            or (root / hooks.PROJECT_FOLDER / hooks.SETTINGS_FILE).is_file()
             or (root / mcp.PROJECT_FILE).is_file())
 
 
@@ -320,7 +323,7 @@ def project_notes_allowed(workspace, personal: Path, terminal: Terminal) -> bool
         return True
     if not is_interactive():
         reason = "its hooks or MCP servers changed since it was trusted" if state == memory.CHANGED else "this folder isn't trusted yet"
-        terminal.note(f"Not following this project's ARTY.md, /commands, skills, hooks or MCP servers: {reason}. "
+        terminal.note(f"Not following this project's ARTY.md, /commands, skills, helpers, hooks or MCP servers: {reason}. "
                       "Start arty-cli here in a terminal to trust it.", "error")
         return False
     if state == memory.CHANGED:
@@ -332,7 +335,7 @@ def project_notes_allowed(workspace, personal: Path, terminal: Terminal) -> bool
     if answer in ("y", "yes"):
         memory.trust(personal, workspace.root, fingerprint)
         return True
-    terminal.note("Leaving this folder's notes, /commands, skills, hooks and MCP servers out.")
+    terminal.note("Leaving this folder's notes, /commands, skills, helpers, hooks and MCP servers out.")
     return False
 
 
@@ -602,6 +605,13 @@ class Session:
         for skill in self.extras.skills.values():
             self.terminal.note(f"{skill.name} ({skill.source}): {skill.description}")
 
+    def show_helpers(self) -> None:
+        if not self.extras.helpers:
+            self.terminal.note(f"No helpers. Add a <name>.md under {self.personal / helpers.HELPERS_FOLDER} "
+                               f"or {helpers.PROJECT_HELPERS} in a trusted project.")
+        for helper in self.extras.helpers.values():
+            self.terminal.note(f"{helper.name} ({helper.source}): {helper.description} [{', '.join(helper.tools)}]")
+
     def show_hooks(self) -> None:
         listed = self.extras.hooks.listed() if self.extras.hooks else []
         if not listed:
@@ -641,6 +651,7 @@ class Session:
             "/resume": self.show_resumable,
             "/mcp": self.show_mcp,
             "/skills": self.show_skills,
+            "/helpers": self.show_helpers,
             "/hooks": self.show_hooks,
             "/help": lambda: self.show_help({k: v for k, v in custom.items() if k not in commands.BUILT_IN}),
         }
@@ -884,6 +895,8 @@ def session_extras(workspace, trusted: bool, terminal: Terminal, search):
     found_hooks, problems = hooks.load(personal, workspace, trusted)
     wanted, trouble = mcp.configs(personal, workspace, trusted)
     problems += trouble
+    found_helpers, trouble = helpers.find(personal, workspace, trusted)
+    problems += trouble
     hub = mcp.Hub(workspace)
     if wanted:
         terminal.note(f"Starting MCP servers: {', '.join(config.name for config in wanted)}")
@@ -891,7 +904,7 @@ def session_extras(workspace, trusted: bool, terminal: Terminal, search):
     for problem in problems:
         terminal.note(problem, "error")
     return extras_module.Extras(hooks=found_hooks, skills=skills.find(personal, workspace, trusted), hub=hub,
-                                search=search)
+                                search=search, helpers=found_helpers)
 
 
 if __name__ == "__main__":

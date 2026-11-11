@@ -29,11 +29,12 @@ def search_count(arguments: dict) -> int:
 
 
 class Extras:
-    def __init__(self, hooks=None, skills=None, hub=None, search=None):
+    def __init__(self, hooks=None, skills=None, hub=None, search=None, helpers=None):
         self.hooks = hooks
         self.skills = skills or {}
         self.hub = hub
         self.search = search
+        self.helpers = helpers or {}
 
     def definitions(self) -> list[dict]:
         found = [skills.DEFINITION] if self.skills else []

@@ -34,6 +34,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `web_fetch` | Read a public web page (documentation, an issue), marked as information rather than instructions | Yes, once per site with **a** |
 | `web_search` | Search the web through your Arty brain's own search (its `research__web_search` tool, so no other search key is needed); titles, links and snippets, marked as information rather than instructions. Helpers can search too | Yes, once per session with **a** (also in plan mode, since it changes nothing) |
 | `explore` | A helper with its own fresh conversation that looks through the project and reports back; up to four run at once | It can only look |
+| `helper` | Hands a job to one of your own helpers (below) | Depends on the helper's tools |
 | `skill` | Loads one of your skills (below) when the job matches it | No |
 | `mcp__<server>__<tool>` | Tools from your MCP servers (below) | The first use of each server asks; after that, tools the server marks read-only don't, the others do |
 
@@ -197,7 +198,7 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |
 | `/review` | Review the uncommitted changes |
 | `/compact` | Swap the conversation for a summary (also done automatically when it gets long) |
-| `/mcp`, `/skills`, `/hooks` | What's set up of each (below) |
+| `/mcp`, `/skills`, `/helpers`, `/hooks` | What's set up of each (below) |
 | `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/help`, `/exit` | The rest |
 
 `ARTY.md` in the project and in the config folder (notes for every project) are added to what the model is told. The
@@ -242,6 +243,32 @@ description: Write release notes from the git log since the last tag
 
 The model is told each skill's name and description and loads the full instructions with the `skill` tool when a job
 matches. `/skills` lists them.
+
+## Helpers
+
+Besides the built-in `explore` helper, you can write your own: a Markdown file with a short header and the helper's
+instructions.
+
+```
+~/.config/arty-cli/helpers/reviewer.md     (yours, every project; %APPDATA%\arty-cli on Windows)
+my-project/.arty/helpers/reviewer.md        (this project, once trusted; wins over yours with the same name)
+```
+
+```markdown
+---
+name: reviewer
+description: Reviews the uncommitted changes for real bugs
+tools: read_file, search, list_files, run_command
+---
+Run git diff, read each changed file around the change, and list only real bugs with file and line.
+```
+
+The model is told each helper's name and description and hands it a job with the `helper` tool; the helper works in its
+own fresh conversation with only the tools listed (any of the built-in tools and `web_search`; without a `tools` line
+it gets the look-only set `explore` has) and reports back. Up to four helpers, `explore` included, run at once. A
+helper that only looks runs as in plan mode; one given `edit_file`, `write_file` or another changing tool asks for
+permission just as the main agent does, and in plan mode it still can't change anything. `/helpers` lists them, and a
+helper file with an unknown tool or no instructions is reported and skipped.
 
 ## Hooks
 
