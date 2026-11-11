@@ -57,7 +57,7 @@ def test_slash_model_lists_arty_models_and_marks_the_current_one(arty_set_up, mo
     shown = capsys.readouterr().err
     for model, _about in LISTED:
         assert model in shown
-    assert "● 2. arty/qwen2.5-coder:14b" in shown
+    assert "● 1. arty/qwen3:14b" in shown and "  2. arty/qwen2.5-coder:14b" in shown
     assert "/model <number or name>" in shown
     assert "not set up" not in shown
 

@@ -71,7 +71,7 @@ def test_the_old_command_line_switches_are_gone(flags):
 def test_a_json_answer_names_the_model(connected, capsys):
     assert cli.main(["-p", "hello", "--output-format", "json"]) == 0
     printed = capsys.readouterr().out
-    assert '"model": "arty/qwen2.5-coder:14b"' in printed and '"provider"' not in printed
+    assert '"model": "arty/qwen3:14b"' in printed and '"provider"' not in printed
 
 
 CONNECTION_VARIABLES = ("ARTY_API_KEY", "ARTY_URL", "ARTY_REMOTE_URL", "ARTY_ACCESS_CLIENT_ID", "ARTY_ACCESS_CLIENT_SECRET")

@@ -8,7 +8,7 @@ import pytest
 from arty_cli import settings
 
 
-def test_a_fresh_install_uses_the_coder_model_and_is_not_ready(tmp_path):
+def test_a_fresh_install_uses_the_default_model_and_is_not_ready(tmp_path):
     loaded = settings.load(tmp_path / "missing.json", environ={})
     assert loaded.model == settings.DEFAULT_MODEL
     assert not loaded.is_ready()
@@ -63,3 +63,16 @@ def test_unknown_keys_in_a_saved_config_are_ignored_and_dropped_on_the_next_save
     assert all(secret not in repr(loaded) for secret in ("old-a", "env-a"))
     settings.remember(path, model="arty/qwen3:14b")
     assert set(json.loads(path.read_text())) == ARTY_ONLY_FIELDS
+
+
+def test_the_default_model_is_the_one_that_writes_real_tool_calls():
+    assert settings.DEFAULT_MODEL == "arty/qwen3:14b"
+
+
+def test_a_saved_old_default_moves_to_the_new_default_but_a_chosen_model_stays(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"base_url": "http://brain.lan:8081/v1", "model": "arty/qwen2.5-coder:14b"}))
+    assert settings.load(path, environ={}).model == settings.DEFAULT_MODEL
+    assert settings.load(path, environ={"ARTY_CLI_MODEL": "arty/qwen2.5-coder:14b"}).model == "arty/qwen2.5-coder:14b"
+    path.write_text(json.dumps({"base_url": "http://brain.lan:8081/v1", "model": "arty/qwen2.5:72b"}))
+    assert settings.load(path, environ={}).model == "arty/qwen2.5:72b"

@@ -206,7 +206,7 @@ def parse_arguments(argv):
     parser.add_argument("-c", "--continue", dest="carry_on", action="store_true",
                         help="carry on with the last conversation in this project")
     parser.add_argument("-r", "--resume", metavar="ID", help="carry on with an earlier conversation (see /resume)")
-    parser.add_argument("--model", help="model for this session, e.g. arty/qwen2.5-coder:14b")
+    parser.add_argument("--model", help="model for this session, e.g. arty/qwen3:14b")
     parser.add_argument("--project", type=Path, default=None, help="project folder (default: here)")
     parser.add_argument("--permission-mode", choices=permissions.MODES, default=permissions.DEFAULT,
                         help="how much to ask first (allow-all asks nothing: only in a throwaway folder)")

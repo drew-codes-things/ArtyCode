@@ -6,7 +6,8 @@ from pathlib import Path
 
 APP_FOLDER = "arty-cli"
 CONFIG_NAME = "config.json"
-DEFAULT_MODEL = "arty/qwen2.5-coder:14b"
+DEFAULT_MODEL = "arty/qwen3:14b"
+RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
 ENVIRONMENT_NAMES = {
     "base_url": "ARTY_URL",
@@ -58,8 +59,13 @@ def read_file(path: Path) -> dict:
     return {name: str(value) for name, value in stored.items() if name in known and value is not None}
 
 
+def without_retired_default(stored: dict) -> dict:
+    return {name: value for name, value in stored.items()
+            if not (name == "model" and value in RETIRED_DEFAULT_MODELS)}
+
+
 def load(path: Path | None = None, environ=os.environ) -> Settings:
-    loaded = Settings(**read_file(path or config_path(environ)))
+    loaded = Settings(**without_retired_default(read_file(path or config_path(environ))))
     overrides = {name: environ[variable] for name, variable in ENVIRONMENT_NAMES.items() if environ.get(variable)}
     return replace(loaded, **overrides)
 
