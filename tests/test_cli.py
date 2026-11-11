@@ -555,3 +555,42 @@ def test_saving_an_answer_as_a_rule_keeps_the_folder_trusted(ready, monkeypatch,
     (ready / "made.txt").unlink()
     assert cli.main(["-p", "make it again"]) == 0
     assert (ready / "made.txt").exists()
+
+
+class ReadingBrain(FakeBrain):
+    def reply(self, messages, tools, on_text):
+        self.calls.append([dict(m) for m in messages])
+        if len(self.calls) == 1:
+            on_text("Looking. ")
+            found = {"id": "r1", "type": "function",
+                     "function": {"name": "read_file", "arguments": json.dumps({"path": "a.py"})}}
+            return {"role": "assistant", "content": "Looking. ", "tool_calls": [found]}
+        return super().reply(messages, tools, on_text)
+
+
+def streamed_lines(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_stream_json_prints_one_event_per_line_as_the_work_happens(ready, monkeypatch, capsys):
+    (ready / "a.py").write_text("x = 1\n")
+    monkeypatch.setattr(cli.brain, "Brain", ReadingBrain)
+    assert cli.main(["-p", "what is in a.py?", "--output-format", "stream-json"]) == 0
+    events = streamed_lines(capsys)
+    assert [event["type"] for event in events] == ["system", "text", "tool_use", "tool_result", "text", "result"]
+    start, first_text, call, result, second_text, final = events
+    assert start["subtype"] == "init" and start["session_id"] == final["session_id"] and "read_file" in start["tools"]
+    assert first_text["text"] == "Looking. " and second_text["text"] == "Hi there."
+    assert call == {"type": "tool_use", "id": "r1", "name": "read_file", "input": {"path": "a.py"}}
+    assert result["tool_use_id"] == "r1" and result["is_error"] is False and "x = 1" in result["content"]
+    assert final["is_error"] is False and final["result"] == "Hi there."
+
+
+def test_stream_json_marks_a_failed_tool_and_a_failed_request(ready, monkeypatch, capsys):
+    monkeypatch.setattr(cli.brain, "Brain", ReadingBrain)
+    cli.main(["-p", "what is in a.py?", "--output-format", "stream-json"])
+    results = [event for event in streamed_lines(capsys) if event["type"] == "tool_result"]
+    assert results[0]["is_error"] is True
+    monkeypatch.setattr(cli.brain, "Brain", FlakyBrain)
+    assert cli.main(["-p", "hello", "--output-format", "stream-json"]) == cli.FAILED
+    assert streamed_lines(capsys)[-1]["is_error"] is True

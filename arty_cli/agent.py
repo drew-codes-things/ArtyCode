@@ -220,6 +220,12 @@ def results_of(calls: list[dict], helpers: Helpers, can_explore: bool, done: lis
     return results
 
 
+def tell(screen, event: str, *details) -> None:
+    shown = getattr(screen, event, None)
+    if shown is not None:
+        shown(*details)
+
+
 def signature_of(calls: list[dict]) -> str:
     return json.dumps([(call.get("function") or {}).get("name") for call in calls]
                       + [(call.get("function") or {}).get("arguments") for call in calls])
@@ -265,8 +271,11 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
                 continue
             return content
         messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
+        for call in calls:
+            tell(screen, "show_tool_call", call)
         for call, result in zip(calls, results_of(calls, helpers, can_explore, done, extras)):
             messages.append({"role": "tool", "tool_call_id": call.get("id") or "", "content": result})
+            tell(screen, "show_tool_result", call, result)
         if squeeze:
             squeeze(messages)
         signature = signature_of(calls)

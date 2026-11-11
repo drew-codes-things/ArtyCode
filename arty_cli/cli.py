@@ -77,18 +77,29 @@ SAVE_ANSWERS = {"s": permissions.SAVE, "save": permissions.SAVE}
 CHOICES = "[y]es / [n]o / [a]lways"
 SAVE_CHOICE = "[s]ave as a project rule"
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
-TEXT_OUTPUT, JSON_OUTPUT = "text", "json"
-OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT)
+TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT = "text", "json", "stream-json"
+OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT)
+ERROR_MARK = "Error"
 
 
 def is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
+class JsonLines:
+    def __init__(self, out):
+        self.out = out
+
+    def write(self, event: dict) -> None:
+        self.out.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self.out.flush()
+
+
 class Terminal:
     def __init__(self, out=None, err=None):
         self.out = out or sys.stdout
         self.err = err or sys.stderr
+        self.events = None
         self.mid_line = False
         self.offers_rules = False
         self.colour = self.err.isatty() and not os.environ.get("NO_COLOR")
@@ -108,6 +119,22 @@ class Terminal:
         self.out.write(text)
         self.out.flush()
         self.mid_line = not text.endswith("\n")
+        if self.events and text:
+            self.events.write({"type": "text", "text": text})
+
+    def show_tool_call(self, call: dict) -> None:
+        if not self.events:
+            return
+        name, arguments, _problem = agent.call_parts(call)
+        given = (call.get("function") or {}).get("arguments")
+        self.events.write({"type": "tool_use", "id": call.get("id") or "", "name": name,
+                           "input": given if arguments is None else arguments})
+
+    def show_tool_result(self, call: dict, result: str) -> None:
+        if self.events:
+            self.events.write({"type": "tool_result", "tool_use_id": call.get("id") or "",
+                               "name": (call.get("function") or {}).get("name", ""), "content": result,
+                               "is_error": result.startswith(ERROR_MARK)})
 
     def show_activity(self, line: str) -> None:
         self.end_line()
@@ -145,7 +172,8 @@ def parse_arguments(argv):
     parser.add_argument("words", nargs="*", help="`login` to connect to Arty, or a question to ask once")
     parser.add_argument("-p", "--print", dest="once", help="ask once, print the answer and exit")
     parser.add_argument("--output-format", choices=OUTPUT_FORMATS, default=TEXT_OUTPUT,
-                        help="with -p: text (streamed) or json (one object with the answer at the end)")
+                        help="with -p: text (streamed), json (one object with the answer at the end) or "
+                             "stream-json (one JSON object per line as the work happens)")
     parser.add_argument("-c", "--continue", dest="carry_on", action="store_true",
                         help="carry on with the last conversation in this project")
     parser.add_argument("-r", "--resume", metavar="ID", help="carry on with an earlier conversation (see /resume)")
@@ -645,6 +673,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         once = arguments.once or " ".join(arguments.words)
         if once and arguments.output_format == JSON_OUTPUT:
             return answered_as_json(session, once)
+        if once and arguments.output_format == STREAM_JSON_OUTPUT:
+            return answered_as_stream(session, once)
         if once:
             return 0 if handle(session, once) is not False and session.messages[-1]["role"] == "assistant" else FAILED
         chat(session)
@@ -662,17 +692,37 @@ def project_rule_file(workspace, terminal: Terminal) -> permissions.RuleFile:
     return permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, tell)
 
 
-def answered_as_json(session: Session, request: str) -> int:
+def answered_quietly(session: Session, request: str) -> bool:
     shown, session.terminal.out = session.terminal.out, io.StringIO()
     try:
-        answered = handle(session, request) is not False and session.messages[-1]["role"] == "assistant"
+        return handle(session, request) is not False and session.messages[-1]["role"] == "assistant"
     finally:
         session.terminal.out = shown
+
+
+def result_event(session: Session, answered: bool) -> dict:
     result = str(session.messages[-1].get("content") or "") if answered else ""
-    printed = {"type": "result", "is_error": not answered, "result": result, "session_id": session.saved.id,
-               "model": session.client.model}
-    shown.write(json.dumps(printed, ensure_ascii=False) + "\n")
-    shown.flush()
+    return {"type": "result", "is_error": not answered, "result": result, "session_id": session.saved.id,
+            "model": session.client.model}
+
+
+def answered_as_json(session: Session, request: str) -> int:
+    answered = answered_quietly(session, request)
+    JsonLines(session.terminal.out).write(result_event(session, answered))
+    return 0 if answered else FAILED
+
+
+def answered_as_stream(session: Session, request: str) -> int:
+    events = JsonLines(session.terminal.out)
+    offered = [definition["function"]["name"] for definition in agent.offered_definitions(session.extras)]
+    events.write({"type": "system", "subtype": "init", "session_id": session.saved.id, "model": session.client.model,
+                  "cwd": str(session.workspace.root), "permission_mode": session.gate.mode, "tools": offered})
+    session.terminal.events = events
+    try:
+        answered = answered_quietly(session, request)
+    finally:
+        session.terminal.events = None
+    events.write(result_event(session, answered))
     return 0 if answered else FAILED
 
 

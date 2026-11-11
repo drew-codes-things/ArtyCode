@@ -155,6 +155,7 @@ cd my-project
 arty                                         # chat (arty-cli works too)
 arty -p "what does main.py do?"              # ask once and exit
 arty -p "list the TODOs" --output-format json  # ask once, one JSON object back
+arty -p "fix the build" --output-format stream-json  # one JSON line per step as it works
 arty --continue                              # carry on with the last conversation here
 arty --resume <id>                           # an earlier one (/resume lists them)
 ```
@@ -162,6 +163,19 @@ arty --resume <id>                           # an earlier one (/resume lists the
 `--output-format json` prints nothing while it works and then one line:
 `{"type": "result", "is_error": false, "result": "...", "session_id": "...", "model": "..."}`.
 The exit code is 1 when the request failed.
+
+`--output-format stream-json` prints one JSON object per line as the work happens, for scripts that want to follow
+along:
+
+| `type` | When | Fields |
+|---|---|---|
+| `system` | first, once | `subtype: "init"`, `session_id`, `model`, `cwd`, `permission_mode`, `tools` |
+| `text` | each piece of the model's answer as it arrives | `text` |
+| `tool_use` | the model calls a tool | `id`, `name`, `input` |
+| `tool_result` | the tool has finished | `tool_use_id`, `name`, `content`, `is_error` |
+| `result` | last, once | the same fields as `json` above |
+
+Notes and questions still go to standard error, so standard output is only the JSON lines.
 
 | In the chat | What it does |
 |---|---|
@@ -292,8 +306,8 @@ and red. `NO_COLOR`, or output that isn't a terminal, gives plain text.
 - Beta: tested on Debian; the Windows build and `install.ps1` have not been run on Windows yet.
 - `web_fetch` checks that an address is public before connecting; a name whose address changes in between could
   still reach a local one.
-- Not yet: editor (IDE) integration; MCP servers reached over HTTP rather than started as a local program; streaming
-  JSON output; hook events beyond the four above.
+- Not yet: editor (IDE) integration; MCP servers reached over HTTP rather than started as a local program; hook events
+  beyond the four above.
 
 ## Tests
 
