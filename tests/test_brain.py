@@ -171,3 +171,61 @@ def test_a_device_key_is_proved_with_its_sha256_hex_as_the_hmac_key(home_brain):
     client.reply([{"role": "user", "content": "hi"}], tools=[], on_text=lambda text: None)
     assert FakeBrain.seen[0]["headers"]["Authorization"] == f"Bearer {device_key}"
     assert brain.identity_secret("shared-key") == "shared-key"
+
+
+OFFERED = [{"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+           for name in ("run_command", "read_file")]
+OFFERED_NAMES = {"run_command", "read_file"}
+
+
+def test_a_tool_call_written_as_a_fenced_json_block_becomes_a_real_call():
+    written = 'Running them now.\n```json\n{"name": "run_command", "arguments": {"command": "pytest -q"}}\n```'
+    calls = brain.written_tool_calls(written, OFFERED_NAMES)
+    assert [(call["function"]["name"], json.loads(call["function"]["arguments"])) for call in calls] == \
+        [("run_command", {"command": "pytest -q"})]
+    assert calls[0]["type"] == "function" and calls[0]["id"]
+
+
+def test_a_tool_call_in_tool_call_tags_or_bare_json_is_recognised():
+    tagged = '<tool_call>\n{"name": "read_file", "arguments": "{\\"path\\": \\"a.py\\"}"}\n</tool_call>'
+    bare = '{"name": "read_file", "parameters": {"path": "b.py"}}'
+    assert json.loads(brain.written_tool_calls(tagged, OFFERED_NAMES)[0]["function"]["arguments"]) == {"path": "a.py"}
+    assert json.loads(brain.written_tool_calls(bare, OFFERED_NAMES)[0]["function"]["arguments"]) == {"path": "b.py"}
+
+
+def test_several_written_calls_keep_their_order_and_get_distinct_ids():
+    written = '```json\n[{"name": "read_file", "arguments": {"path": "a"}}, {"name": "read_file", "arguments": {"path": "b"}}]\n```'
+    calls = brain.written_tool_calls(written, OFFERED_NAMES)
+    assert [json.loads(call["function"]["arguments"])["path"] for call in calls] == ["a", "b"]
+    assert len({call["id"] for call in calls}) == 2
+
+
+@pytest.mark.parametrize("text", [
+    "The answer is 42.",
+    '```json\n{"name": "delete_everything", "arguments": {}}\n```',
+    'Here is a config example:\n```json\n{"name": "my-app", "version": "1.0"}\n```',
+    '```json\n{"name": "read_file", "arguments": {"path": "a"}}\n```\nand an example:\n```json\n{"debug": true}\n```',
+    "",
+])
+def test_ordinary_text_and_unknown_tools_are_never_turned_into_calls(text):
+    assert brain.written_tool_calls(text, OFFERED_NAMES) == []
+
+
+def test_a_reply_that_only_writes_its_call_is_run_as_a_call(monkeypatch):
+    written = '```json\n{"name": "run_command", "arguments": {"command": "pytest -q"}}\n```'
+    arty = brain.Brain(settings.Settings(base_url="http://brain.lan:8081/v1", api_key="k"))
+    monkeypatch.setattr(arty, "pick_route", lambda: brain.Route("http://brain.lan:8081/v1", {}))
+    monkeypatch.setattr(arty, "streamed_reply",
+                        lambda route, body, on_text: {"role": "assistant", "content": written, "tool_calls": []})
+    reply = arty.reply([{"role": "user", "content": "run the tests"}], OFFERED, lambda text: None)
+    assert reply["content"] == ""
+    assert [call["function"]["name"] for call in reply["tool_calls"]] == ["run_command"]
+
+
+def test_a_reply_without_offered_tools_is_left_as_text(monkeypatch):
+    written = '{"name": "run_command", "arguments": {"command": "ls"}}'
+    arty = brain.Brain(settings.Settings(base_url="http://brain.lan:8081/v1", api_key="k"))
+    monkeypatch.setattr(arty, "pick_route", lambda: brain.Route("http://brain.lan:8081/v1", {}))
+    monkeypatch.setattr(arty, "streamed_reply",
+                        lambda route, body, on_text: {"role": "assistant", "content": written, "tool_calls": []})
+    assert arty.reply([{"role": "user", "content": "hi"}], [], lambda text: None)["content"] == written

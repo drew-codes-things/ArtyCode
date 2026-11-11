@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import socket
 import urllib.error
@@ -27,6 +28,9 @@ PLAIN_HTTP = "http"
 
 
 SHARED_TURN_KEYS = ("role", "content", "tool_calls", "tool_call_id")
+FENCED_BLOCK = re.compile(r"```[a-zA-Z]*\s*\n?(.*?)```", re.S)
+TAGGED_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S)
+WRITTEN_CALL_ID = "written_call_{}"
 
 
 class BrainError(Exception):
@@ -93,6 +97,57 @@ def is_arty_model(name: str) -> bool:
 
 def shared_messages(messages: list[dict]) -> list[dict]:
     return [{key: value for key, value in message.items() if key in SHARED_TURN_KEYS} for message in messages]
+
+
+def written_blocks(content: str) -> list[str]:
+    blocks = FENCED_BLOCK.findall(content) + TAGGED_CALL.findall(content)
+    stripped = content.strip()
+    if not blocks and stripped.startswith(("{", "[")):
+        blocks = [stripped]
+    return blocks
+
+
+def written_call(entry, offered_names: set[str]) -> dict | None:
+    if not isinstance(entry, dict) or entry.get("name") not in offered_names:
+        return None
+    arguments = entry.get("arguments", entry.get("parameters", {}))
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return None
+    if not isinstance(arguments, dict):
+        return None
+    return {"name": entry["name"], "arguments": json.dumps(arguments)}
+
+
+def calls_in_block(block: str, offered_names: set[str]) -> list[dict] | None:
+    try:
+        parsed = json.loads(block)
+    except ValueError:
+        return None
+    entries = parsed if isinstance(parsed, list) else [parsed]
+    found = [written_call(entry, offered_names) for entry in entries]
+    return found if entries and all(found) else None
+
+
+def written_tool_calls(content: str, offered_names: set[str]) -> list[dict]:
+    found = []
+    for block in written_blocks(content or ""):
+        calls = calls_in_block(block, offered_names)
+        if calls is None:
+            return []
+        found += calls
+    return [{"id": WRITTEN_CALL_ID.format(number), "type": "function", "function": call}
+            for number, call in enumerate(found, 1)]
+
+
+def with_written_calls(reply: dict, tools: list[dict]) -> dict:
+    if reply.get("tool_calls") or not tools:
+        return reply
+    offered_names = {tool.get("function", {}).get("name") for tool in tools}
+    calls = written_tool_calls(reply.get("content") or "", offered_names)
+    return {**reply, "content": "", "tool_calls": calls} if calls else reply
 
 
 def read_reply(lines, on_text) -> dict:
@@ -210,7 +265,7 @@ class Brain:
         if tools:
             body["tools"] = tools
         try:
-            return retry.with_retries(lambda: self.streamed_reply(route, body, on_text), busy_of)
+            reply = retry.with_retries(lambda: self.streamed_reply(route, body, on_text), busy_of)
         except urllib.error.HTTPError as error:
             if error.code == 401:
                 raise BrainError("Arty's brain refused the API key. Run `arty-cli login` to change it.") from None
@@ -221,3 +276,4 @@ class Brain:
         except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
             self.route = None
             raise BrainError(f"Lost the connection to Arty's brain at {route.url}: {error}") from None
+        return with_written_calls(reply, tools)
