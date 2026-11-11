@@ -597,3 +597,52 @@ def test_stream_json_marks_a_failed_tool_and_a_failed_request(ready, monkeypatch
     monkeypatch.setattr(cli.brain, "Brain", FlakyBrain)
     assert cli.main(["-p", "hello", "--output-format", "stream-json"]) == cli.FAILED
     assert streamed_lines(capsys)[-1]["is_error"] is True
+
+
+def recording_hook(ready, name, extra=""):
+    seen = ready.parent / f"{name}.jsonl"
+    body = (f"import json, sys\npayload = json.load(sys.stdin)\nopen({str(seen)!r}, 'a').write(json.dumps(payload) + '\\n')\n"
+            + extra)
+    return hook_command(ready, name, body), seen
+
+
+def payloads_in(seen):
+    return [json.loads(line) for line in seen.read_text().splitlines()] if seen.exists() else []
+
+
+def test_a_session_start_hook_runs_once_and_its_output_reaches_the_model(ready, monkeypatch):
+    command, seen = recording_hook(ready, "start", "print('The staging server is down today.')\n")
+    personal_settings({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": command}]}]}})
+    chat_with(monkeypatch, "hello", "/clear", "again", "/exit")
+    assert [p["source"] for p in payloads_in(seen)] == ["startup", "clear"]
+    first, second = FakeBrain.made[0].calls
+    assert any("The staging server is down today." in text for text in user_texts(first))
+    assert any("The staging server is down today." in text for text in user_texts(second))
+    cli.main(["--continue", "-p", "more"])
+    assert payloads_in(seen)[-1]["source"] == "resume"
+
+
+def test_a_pre_compact_hook_can_stop_a_summary_or_add_to_its_instructions(ready, monkeypatch, capsys):
+    command, seen = recording_hook(ready, "compact", "print('Keep every file path.')\n")
+    personal_settings({"hooks": {"PreCompact": [{"hooks": [{"type": "command", "command": command}]}]}})
+    chat_with(monkeypatch, "hello", "/compact", "/exit")
+    assert payloads_in(seen)[0]["trigger"] == "manual"
+    assert "Keep every file path." in FakeBrain.made[0].calls[-1][-1]["content"]
+    block, _seen = recording_hook(ready, "nocompact", "print('not now', file=sys.stderr)\nsys.exit(2)\n")
+    personal_settings({"hooks": {"PreCompact": [{"hooks": [{"type": "command", "command": block}]}]}})
+    chat_with(monkeypatch, "hello", "/compact", "/exit")
+    assert len(FakeBrain.made[-1].calls) == 1
+    err = capsys.readouterr().err
+    assert "not now" in err and "Summarised." not in err.split("not now")[-1]
+
+
+def test_a_notification_hook_runs_when_arty_waits_for_an_answer(ready, monkeypatch):
+    command, seen = recording_hook(ready, "notify")
+    personal_settings({"hooks": {"Notification": [{"hooks": [{"type": "command", "command": command}]}]}})
+    monkeypatch.setattr(cli.brain, "Brain", CommandBrain)
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    cli.main(["-p", "make the file"])
+    found = payloads_in(seen)
+    assert found and found[0]["notification_type"] == "permission_prompt"
+    assert "touch made.txt" in found[0]["message"]

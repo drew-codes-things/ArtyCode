@@ -258,7 +258,16 @@ Hooks run your own commands when something happens, set in `settings.json` in th
 
 Each hook gets a JSON description on standard input (`session_id`, `hook_event_name`, `cwd`, and `tool_name`,
 `tool_input`, `tool_response`, `prompt` or `stop_hook_active` depending on the event) and runs in the project folder.
-`matcher` is a regular expression for the tool name; empty or `*` means every tool. A hook that runs past its timeout
+`matcher` is a regular expression for the tool name; empty or `*` means every tool.
+
+Four more events:
+
+| Event | When | Extra fields | What it can do |
+|---|---|---|---|
+| `SessionStart` | a chat or `-p` request starts, `--continue`/`--resume` picks one up, or `/clear` | `source`: `startup`, `resume` or `clear` (`matcher` matches it) | Anything printed (or `additionalContext`) is added to the conversation |
+| `PreCompact` | before the conversation is summarised | `trigger`: `manual` (`/compact`) or `auto` (`matcher` matches it) | Exit code 2 or `{"decision": "block"}` skips the summary; anything printed is added to the summary instructions |
+| `Notification` | arty-cli is waiting for your answer to a question | `message`, `notification_type`: `permission_prompt` | Tell you somewhere else (a desktop notice, a phone); its output is ignored |
+| `SubagentStop` | an `explore` helper has finished | `agent_type`, `task`, `last_message`, `stop_hook_active` | Exit code 2 or `{"decision": "block", "reason": "..."}` sends the helper back to work with the reason (at most 3 times) | A hook that runs past its timeout
 (60 seconds unless set) is stopped together with everything it started.
 
 | Exit code | PreToolUse | PostToolUse | Stop | UserPromptSubmit |
@@ -311,8 +320,7 @@ and red. `NO_COLOR`, or output that isn't a terminal, gives plain text.
 - Beta: tested on Debian; the Windows build and `install.ps1` have not been run on Windows yet.
 - `web_fetch` checks that an address is public before connecting; a name whose address changes in between could
   still reach a local one.
-- Not yet: editor (IDE) integration; MCP servers reached over HTTP rather than started as a local program; hook events
-  beyond the four above.
+- Not yet: editor (IDE) integration; MCP servers reached over HTTP rather than started as a local program.
 
 ## Tests
 

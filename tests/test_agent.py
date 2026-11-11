@@ -568,3 +568,34 @@ def test_a_failed_search_is_an_error_result(tmp_path):
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                    permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=extras.Extras(search=search))
     assert scripted.sent[-1]["messages"][-1]["content"] == "Error: This Arty brain has no web search"
+
+
+class OneHelperBrain:
+    def __init__(self):
+        self.helper_turns = []
+        self.main_replies = [("", [call("explore", "e1", task="find A")]), ("Done.", [])]
+        self.sent = []
+
+    def reply(self, messages, tools, on_text):
+        if messages[0].get("content") == agent.EXPLORER_PROMPT:
+            self.helper_turns.append([dict(m) for m in messages])
+            return {"role": "assistant", "content": f"answer {len(self.helper_turns)}", "tool_calls": []}
+        self.sent.append([dict(m) for m in messages])
+        content, calls = self.main_replies.pop(0)
+        return {"role": "assistant", "content": content, "tool_calls": calls}
+
+
+def test_a_subagent_stop_hook_sees_the_helper_finish_and_can_send_it_back(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    seen = tmp_path / "seen.jsonl"
+    body = (f"import json, sys\npayload = json.load(sys.stdin)\nopen({str(seen)!r}, 'a').write(json.dumps(payload) + '\\n')\n"
+            "if not payload['stop_hook_active']:\n    print('check the tests folder too', file=sys.stderr)\n    sys.exit(2)\n")
+    brain = OneHelperBrain()
+    agent.run_turn([{"role": "user", "content": "go"}], brain, workspace, permissions.Gate(workspace, permissions.refuse),
+                   Screen(), extras=with_hooks(workspace, ("SubagentStop", "", hook_script(tmp_path, "sub", body))))
+    payloads = [json.loads(line) for line in seen.read_text().splitlines()]
+    assert [p["stop_hook_active"] for p in payloads] == [False, True]
+    assert payloads[0]["hook_event_name"] == "SubagentStop" and payloads[0]["agent_type"] == "explore"
+    assert payloads[0]["task"] == "find A" and payloads[0]["last_message"] == "answer 1"
+    assert "check the tests folder too" in brain.helper_turns[1][-1]["content"]
+    assert [m["content"] for m in brain.sent[1] if m["role"] == "tool"] == ["answer 2"]

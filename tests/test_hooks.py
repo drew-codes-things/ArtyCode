@@ -167,3 +167,20 @@ def test_json_additional_context_for_a_prompt_is_used_and_plain_text_still_works
     loaded = json_hook(places, "UserPromptSubmit", {"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit", "additionalContext": "branch is main"}})
     assert loaded.run("UserPromptSubmit", {"prompt": "hi"}).context == "branch is main"
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "PreCompact", "Notification", "SubagentStop"])
+def test_the_newer_events_can_be_set_up(places, event):
+    personal, workspace, _tmp_path = places
+    write_settings(personal, {event: [entry("true")]})
+    loaded, problems = hooks.load(personal, workspace, include_project=False)
+    assert problems == []
+    assert [hook.event for hook in loaded.listed()] == [event]
+
+
+def test_a_session_start_matcher_picks_how_the_session_began(places):
+    personal, workspace, tmp_path = places
+    write_settings(personal, {"SessionStart": [entry(script(tmp_path, "hi", "print('resumed')"), "resume")]})
+    loaded, _problems = hooks.load(personal, workspace, include_project=False)
+    assert loaded.run("SessionStart", {"source": "resume"}, "resume").context == "resumed"
+    assert loaded.run("SessionStart", {"source": "startup"}, "startup").context == ""

@@ -24,6 +24,8 @@ HOOK_FEEDBACK = "Hook feedback:"
 HOOK_CONTEXT = "Note from a hook:"
 STOP_HOOK_LEAD = "A Stop hook asked you to carry on:"
 MAX_STOP_CONTINUES = 3
+SUBAGENT_STOP_LEAD = "A SubagentStop hook asked you to carry on:"
+EXPLORE_NAME = "explore"
 MAX_HELPERS = 4
 HELPER_STOPPED = "The helper was stopped."
 HELPER_JOIN_SECONDS = 0.2
@@ -97,10 +99,24 @@ class Helpers:
         helper_gate.rules = self.gate.rules
         helper_gate.approved_servers = self.gate.approved_servers
         messages = [{"role": "system", "content": EXPLORER_PROMPT}, {"role": "user", "content": task}]
-        answer = run_turn(messages, self.brain, self.workspace, helper_gate, Quiet(self.screen, self.lock),
-                          offered=explorer_definitions() + self.extras.definitions(), can_explore=False, extras=self.extras, stop_hooks=False,
-                          stopped=self.stopped)
-        return answer[:MAX_EXPLORE_ANSWER_CHARS] or "The helper found nothing to report."
+        offered = explorer_definitions() + self.extras.definitions()
+        continued = 0
+        while True:
+            answer = run_turn(messages, self.brain, self.workspace, helper_gate, Quiet(self.screen, self.lock),
+                              offered=offered, can_explore=False, extras=self.extras, stop_hooks=False,
+                              stopped=self.stopped)
+            if self.stopped.is_set() or not self.sent_back(task, answer, messages, continued):
+                return answer[:MAX_EXPLORE_ANSWER_CHARS] or "The helper found nothing to report."
+            continued += 1
+
+    def sent_back(self, task: str, answer: str, messages: list[dict], continued: int) -> bool:
+        outcome = self.extras.hook("SubagentStop", {"stop_hook_active": continued > 0, "agent_type": EXPLORE_NAME,
+                                                    "task": task, "last_message": answer})
+        show_problems(self.screen, outcome)
+        if not outcome.blocked or continued >= MAX_STOP_CONTINUES:
+            return False
+        messages.append({"role": "user", "content": f"{SUBAGENT_STOP_LEAD} {outcome.feedback}".strip()})
+        return True
 
 
 def show_problems(screen, outcome) -> None:

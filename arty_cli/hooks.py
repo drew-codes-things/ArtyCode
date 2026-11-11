@@ -9,8 +9,10 @@ from arty_cli import tools
 
 SETTINGS_FILE = "settings.json"
 PROJECT_FOLDER = Path(".arty")
-EVENTS = ("PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit")
+EVENTS = ("PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "SessionStart", "PreCompact", "Notification",
+          "SubagentStop")
 TOOL_EVENTS = ("PreToolUse", "PostToolUse")
+MATCHED_EVENTS = TOOL_EVENTS + ("SessionStart", "PreCompact")
 BLOCKING_EXIT = 2
 DEFAULT_SECONDS = 60
 MATCH_EVERYTHING = ("", "*")
@@ -29,7 +31,7 @@ class Hook:
     source: str
 
     def matches(self, tool_name: str) -> bool:
-        if self.event not in TOOL_EVENTS or self.matcher in MATCH_EVERYTHING:
+        if self.event not in MATCHED_EVENTS or self.matcher in MATCH_EVERYTHING:
             return True
         try:
             return re.fullmatch(self.matcher, tool_name) is not None

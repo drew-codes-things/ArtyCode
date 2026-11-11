@@ -35,6 +35,10 @@ CHANGED_QUESTION = ("This folder's hooks, MCP servers or permission rules (.arty
                     "changed since you trusted it, so they may run different programs now. Trust it again? [y/n]: ")
 FINGERPRINTED_FILES = (hooks.PROJECT_FOLDER / hooks.SETTINGS_FILE, mcp.PROJECT_FILE)
 HOOK_CONTEXT_LEAD = "(Added by a hook:)"
+START_CONTEXT_LEAD = "(Added by a SessionStart hook:)"
+MANUAL, AUTOMATIC = "manual", "auto"
+STARTUP, RESUME, CLEAR = "startup", "resume", "clear"
+PERMISSION_PROMPT = "permission_prompt"
 NOTE_LEAD = "(I added this note to the project's ARTY.md; follow it from now on:)"
 NOTE_ACK = "Noted."
 UNDO_LEAD = "(I undid your last file change with /undo:)"
@@ -349,7 +353,7 @@ class Session:
             return
         self.terminal.note("The conversation is long, so it's being summarised first.")
         try:
-            self.compact()
+            self.compact(AUTOMATIC)
         except providers.ERRORS as error:
             self.terminal.note(f"{error} The conversation wasn't summarised; carrying on as it is.", "error")
 
@@ -384,8 +388,34 @@ class Session:
         self.remember()
         self.terminal.note(f"{reason} What already ran is noted in the conversation.", "error")
 
-    def summary_of(self, messages: list[dict]) -> str:
-        request = messages + [{"role": "user", "content": SUMMARY_REQUEST}]
+    def start_hook(self, source: str) -> None:
+        outcome = self.extras.hook("SessionStart", {"source": source}, source)
+        for problem in outcome.problems:
+            self.terminal.note(f"hook: {problem}", "error")
+        if outcome.blocked and outcome.feedback:
+            self.terminal.note(f"SessionStart hook: {outcome.feedback}", "error")
+        if outcome.context:
+            self.messages.append({"role": "user", "content": f"{START_CONTEXT_LEAD}\n{outcome.context}"})
+            self.messages.append({"role": "assistant", "content": NOTE_ACK})
+
+    def clear(self) -> None:
+        self.messages = self.fresh()
+        self.start_hook(CLEAR)
+        self.terminal.note("Fresh conversation.")
+
+    def compact_instructions(self, trigger: str) -> str | None:
+        outcome = self.extras.hook("PreCompact", {"trigger": trigger, "custom_instructions": ""}, trigger)
+        for problem in outcome.problems:
+            self.terminal.note(f"hook: {problem}", "error")
+        if outcome.blocked:
+            self.terminal.note(f"A PreCompact hook stopped the summary: {outcome.feedback or 'no reason given'}",
+                               "error")
+            return None
+        return outcome.context
+
+    def summary_of(self, messages: list[dict], instructions: str = "") -> str:
+        asked = f"{SUMMARY_REQUEST}\n\n{instructions}" if instructions else SUMMARY_REQUEST
+        request = messages + [{"role": "user", "content": asked}]
         offered = agent.offered_definitions(self.extras)
         summary = (self.client.reply(request, tools=offered, on_text=lambda text: None).get("content") or "").strip()
         if not summary:
@@ -395,17 +425,24 @@ class Session:
     def squeeze(self, messages: list[dict]) -> None:
         if not self.is_too_long(messages):
             return
+        instructions = self.compact_instructions(AUTOMATIC)
+        if instructions is None:
+            return
         self.terminal.note("The conversation is long, so it's being summarised before the next step.")
-        summary = self.summary_of(messages)
+        summary = self.summary_of(messages, instructions)
         messages[:] = self.fresh() + [{"role": "user", "content": f"{SUMMARY_LEAD}\n{summary}\n\n{CARRY_ON}"}]
         self.turn_start, self.compacted_in_turn = len(messages) - 1, True
         self.remember()
 
-    def compact(self) -> None:
-        summary = self.summary_of(self.messages)
+    def compact(self, trigger: str = MANUAL) -> bool:
+        instructions = self.compact_instructions(trigger)
+        if instructions is None:
+            return False
+        summary = self.summary_of(self.messages, instructions)
         self.messages = self.fresh() + [{"role": "user", "content": f"{SUMMARY_LEAD}\n{summary}"},
                                         {"role": "assistant", "content": SUMMARY_ACK}]
         self.remember()
+        return True
 
     def run_shell(self, command: str) -> None:
         output = tools.run("run_command", {"command": command}, self.workspace)
@@ -506,14 +543,14 @@ class Session:
         name, _, rest = line.partition(" ")
         custom = commands.find(self.workspace, self.personal, self.project_trusted)
         actions = {
-            "/clear": lambda: (setattr(self, "messages", self.fresh()), self.terminal.note("Fresh conversation.")),
+            "/clear": self.clear,
             "/model": lambda: self.change_model(rest.strip()),
             "/mode": lambda: self.set_mode(rest.strip()) if rest.strip() else self.terminal.note(f"Mode: {self.gate.mode}"),
             "/plan": lambda: self.set_mode(permissions.DEFAULT if self.gate.mode == permissions.PLAN else permissions.PLAN),
             "/status": self.show_status,
             "/todos": self.show_todos,
             "/memory": self.show_memory,
-            "/compact": lambda: (self.compact(), self.terminal.note("Summarised.")),
+            "/compact": lambda: self.compact() and self.terminal.note("Summarised."),
             "/undo": self.undo,
             "/resume": self.show_resumable,
             "/mcp": self.show_mcp,
@@ -682,8 +719,10 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     for problem in problems:
         terminal.note(problem, "error")
     loaded = session_extras(workspace, trusted, terminal, client.search_web)
+    gate.ask = notifying(terminal.ask, loaded, terminal)
     try:
         session = Session(client, workspace, gate, terminal, saved, project_trusted=trusted, extras=loaded)
+        session.start_hook(RESUME if saved.messages else STARTUP)
         once = arguments.once or " ".join(arguments.words)
         if once and arguments.output_format == JSON_OUTPUT:
             return answered_as_json(session, once)
@@ -695,6 +734,18 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         return 0
     finally:
         loaded.close()
+
+
+def notifying(ask, extras, terminal: Terminal):
+    def asked(question: str, preview: str = "") -> str:
+        if is_interactive():
+            outcome = extras.hook("Notification", {"message": f"Arty CLI needs your permission: {question}",
+                                                   "notification_type": PERMISSION_PROMPT})
+            for problem in outcome.problems:
+                terminal.note(f"hook: {problem}", "error")
+        return ask(question, preview)
+
+    return asked
 
 
 def project_rule_file(workspace, terminal: Terminal) -> permissions.RuleFile:
