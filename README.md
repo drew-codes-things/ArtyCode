@@ -291,16 +291,23 @@ With exit code 0, a hook can print a JSON object instead:
 
 ## MCP servers
 
-Local (stdio) MCP servers add their tools to the model's list. Put them under `mcpServers` in `settings.json` in the
-config folder, or in `.arty/mcp.json` in a trusted project:
+MCP servers add their tools to the model's list: local ones that arty-cli starts as a program (stdio), and ones
+already running somewhere that it reaches over HTTP (the streamable HTTP transport). Put them under `mcpServers` in
+`settings.json` in the config folder, or in `.arty/mcp.json` in a trusted project:
 
 ```json
 {
   "mcpServers": {
-    "notes": {"command": "npx", "args": ["-y", "some-notes-mcp-server"], "env": {"NOTES_DIR": "/home/me/notes"}}
+    "notes": {"command": "npx", "args": ["-y", "some-notes-mcp-server"], "env": {"NOTES_DIR": "/home/me/notes"}},
+    "tickets": {"type": "http", "url": "https://tickets.example/mcp", "headers": {"Authorization": "Bearer ${TICKETS_TOKEN}"}}
   }
 }
 ```
+
+A server with a `url` (http or https) is reached over HTTP, with its `headers` sent on every request; `${NAME}` in a
+header is filled from that environment variable, so a token can stay out of the file (a missing one is reported and
+that server is skipped). arty-cli keeps the session the server gives it, answers its pings, and ends the session when
+it quits.
 
 They start with the session and stop when it ends; one that fails to start is reported and the rest carry on. A bare
 program name is looked up on your PATH, never in the project or the current folder. Their tools appear as
@@ -322,7 +329,7 @@ and red. `NO_COLOR`, or output that isn't a terminal, gives plain text.
 - Beta: tested on Debian; the Windows build and `install.ps1` have not been run on Windows yet.
 - `web_fetch` checks that an address is public before connecting; a name whose address changes in between could
   still reach a local one.
-- Not yet: editor (IDE) integration; MCP servers reached over HTTP rather than started as a local program.
+- Not yet: editor (IDE) integration.
 
 ## Tests
 

@@ -7,6 +7,8 @@ import pytest
 
 from arty_cli import mcp, tools
 
+from tests import fake_http_mcp
+
 FAKE_SERVER = str(Path(__file__).with_name("fake_mcp_server.py"))
 
 
@@ -98,12 +100,78 @@ def test_configs_come_from_personal_settings_and_trusted_project_mcp_json(tmp_pa
     assert [(c.name, c.env, c.source) for c in trusted[1:]] == [("db", {"A": "1"}, "this project")]
 
 
-def test_bad_server_entries_are_reported(tmp_path):
+def test_bad_server_entries_are_reported(tmp_path, monkeypatch):
+    monkeypatch.delenv("NOT_SET_ANYWHERE", raising=False)
     personal = tmp_path / "personal"
-    write(personal / "settings.json", {"mcpServers": {"broken": {"args": []}, "remote": {"url": "https://x"}}})
+    write(personal / "settings.json", {"mcpServers": {
+        "broken": {"args": []}, "odd": {"url": "ftp://x"}, "badheaders": {"url": "https://x", "headers": ["a"]},
+        "missing": {"url": "https://x", "headers": {"Authorization": "Bearer ${NOT_SET_ANYWHERE}"}}}})
     found, problems = mcp.configs(personal, tools.Workspace(tmp_path), include_project=False)
-    assert found == [] and len(problems) == 2
-    assert any("only local" in problem for problem in problems)
+    assert found == [] and len(problems) == 4
+    assert any("http" in problem and "odd" in problem for problem in problems)
+    assert any("NOT_SET_ANYWHERE" in problem for problem in problems)
+
+
+def test_an_http_server_config_keeps_its_url_and_fills_headers_from_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOTES_TOKEN", "secret-token")
+    personal = tmp_path / "personal"
+    write(personal / "settings.json", {"mcpServers": {"notes": {
+        "type": "http", "url": "https://notes.example/mcp", "headers": {"Authorization": "Bearer ${NOTES_TOKEN}"}}}})
+    found, problems = mcp.configs(personal, tools.Workspace(tmp_path), include_project=False)
+    assert problems == []
+    assert (found[0].url, found[0].headers) == ("https://notes.example/mcp", {"Authorization": "Bearer secret-token"})
+
+
+@pytest.fixture
+def http_hub(tmp_path):
+    recorded = fake_http_mcp.Recorded()
+    server, url = fake_http_mcp.serving(recorded)
+    config = mcp.ServerConfig("notes", "", [], {}, "yours", url=url, headers={"Authorization": "Bearer secret-token"})
+    started = mcp.Hub(tools.Workspace(tmp_path), call_seconds=5)
+    problems = started.start([config])
+    yield started, problems, recorded, url
+    started.close()
+    server.shutdown()
+
+
+def test_an_http_server_is_started_with_a_session_and_its_tools_listed(http_hub):
+    started, problems, recorded, _url = http_hub
+    assert problems == []
+    assert [d["function"]["name"] for d in started.definitions()] == ["mcp__notes__lookup", "mcp__notes__save"]
+    assert started.tool("mcp__notes__lookup").read_only
+    methods = [r["message"].get("method") for r in recorded.requests if "method" in r["message"]]
+    assert methods == ["initialize", "notifications/initialized", "tools/list"]
+    later = [r["headers"] for r in recorded.requests[1:] if "method" in r["message"]]
+    assert all(h.get("Mcp-Session-Id") == fake_http_mcp.SESSION for h in later)
+    assert all(h.get("Mcp-Protocol-Version") == mcp.PROTOCOL_VERSION for h in later)
+    assert "text/event-stream" in recorded.requests[0]["headers"]["Accept"]
+    assert recorded.client_answers == [{"jsonrpc": "2.0", "id": "server-ping", "result": {}}]
+
+
+def test_an_http_tool_call_returns_text_or_an_error_and_closing_ends_the_session(http_hub):
+    started, _problems, recorded, _url = http_hub
+    assert started.run("mcp__notes__lookup", {"q": "milk"}) == "found milk"
+    assert started.run("mcp__notes__save", {}) == "Error: disk full"
+    started.close()
+    assert recorded.deleted == [fake_http_mcp.SESSION]
+
+
+def test_an_http_server_that_refuses_the_headers_is_a_problem(tmp_path):
+    recorded = fake_http_mcp.Recorded()
+    server, url = fake_http_mcp.serving(recorded)
+    try:
+        hub = mcp.Hub(tools.Workspace(tmp_path))
+        problems = hub.start([mcp.ServerConfig("notes", "", [], {}, "yours", url=url, headers={})])
+        assert len(problems) == 1 and "401" in problems[0]
+        assert hub.definitions() == []
+    finally:
+        server.shutdown()
+
+
+def test_an_unreachable_http_server_is_a_problem(tmp_path):
+    hub = mcp.Hub(tools.Workspace(tmp_path), start_seconds=2)
+    problems = hub.start([mcp.ServerConfig("notes", "", [], {}, "yours", url="http://127.0.0.1:9/mcp", headers={})])
+    assert len(problems) == 1 and "notes" in problems[0]
 
 
 def test_a_bare_program_name_is_never_found_in_the_project_or_the_current_folder(tmp_path, monkeypatch):

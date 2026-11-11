@@ -5,8 +5,11 @@ import re
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from arty_cli import __version__
 
@@ -25,6 +28,12 @@ MAX_PAGES = 50
 METHOD_NOT_FOUND = -32601
 ENDED = object()
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
+WEB_SCHEMES = ("http", "https")
+ENVIRONMENT_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+SESSION_HEADER = "Mcp-Session-Id"
+VERSION_HEADER = "Mcp-Protocol-Version"
+DATA_PREFIX = "data:"
+EVENT_STREAM = "text/event-stream"
 
 
 class McpError(Exception):
@@ -38,6 +47,8 @@ class ServerConfig:
     args: list
     env: dict
     source: str
+    url: str = ""
+    headers: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -71,11 +82,31 @@ def read_table(path: Path) -> tuple[dict, list[str]]:
     return servers, []
 
 
+def with_environment(text: str) -> tuple[str, list[str]]:
+    missing = [name for name in ENVIRONMENT_REFERENCE.findall(text) if name not in os.environ]
+    return ENVIRONMENT_REFERENCE.sub(lambda found: os.environ.get(found.group(1), ""), text), missing
+
+
+def web_config_from(name: str, entry: dict, source: str, path: Path) -> tuple[ServerConfig | None, str]:
+    url, headers = entry.get("url"), entry.get("headers") or {}
+    if not isinstance(url, str) or urlparse(url).scheme not in WEB_SCHEMES or not urlparse(url).netloc:
+        return None, f"MCP server {name} in {path}: url should be an http:// or https:// address"
+    if not isinstance(headers, dict):
+        return None, f"MCP server {name} in {path}: headers should be an object"
+    filled = {}
+    for header, value in headers.items():
+        filled[str(header)], missing = with_environment(str(value))
+        if missing:
+            return None, (f"MCP server {name} in {path}: the header {header} uses "
+                          f"{', '.join('${' + variable + '}' for variable in missing)}, which isn't set")
+    return ServerConfig(name, "", [], {}, source, url=url, headers=filled), ""
+
+
 def config_from(name: str, entry, source: str, path: Path) -> tuple[ServerConfig | None, str]:
     if not isinstance(entry, dict):
         return None, f"MCP server {name} in {path} should be an object"
-    if entry.get("url") and not entry.get("command"):
-        return None, f"MCP server {name} in {path} uses a URL; only local (stdio) servers with a command are supported"
+    if "url" in entry and not entry.get("command"):
+        return web_config_from(name, entry, source, path)
     command = entry.get("command")
     args, env = entry.get("args") or [], entry.get("env") or {}
     if not isinstance(command, str) or not command:
@@ -144,6 +175,130 @@ def program_path(command: str, workspace) -> str | None:
     return None
 
 
+def tools_listed(request, server_name: str, seconds: float) -> list[Tool]:
+    found, cursor = [], None
+    for _page in range(MAX_PAGES):
+        page = request("tools/list", {"cursor": cursor} if cursor else {}, seconds)
+        for tool in page.get("tools") or []:
+            if isinstance(tool, dict) and tool.get("name"):
+                annotations = tool.get("annotations") if isinstance(tool.get("annotations"), dict) else {}
+                schema = tool.get("inputSchema") if isinstance(tool.get("inputSchema"), dict) else EMPTY_SCHEMA
+                found.append(Tool(server_name, str(tool["name"]), exposed_name(server_name, str(tool["name"])),
+                                  str(tool.get("description") or ""), schema, annotations.get("readOnlyHint") is True))
+        cursor = page.get("nextCursor")
+        if not cursor:
+            break
+    return found
+
+
+def call_text(result: dict) -> str:
+    text = content_text(result.get("content"))
+    return f"Error: {text}" if result.get("isError") else text
+
+
+def answer_to(server_message: dict) -> dict:
+    if server_message.get("method") == "ping":
+        return {"jsonrpc": "2.0", "id": server_message["id"], "result": {}}
+    return {"jsonrpc": "2.0", "id": server_message["id"],
+            "error": {"code": METHOD_NOT_FOUND, "message": "arty-cli doesn't offer that"}}
+
+
+def initialize_params() -> dict:
+    return {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+            "clientInfo": {"name": "arty-cli", "version": __version__}}
+
+
+def streamed_messages(response):
+    data = []
+    for raw in response:
+        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        if line.startswith(DATA_PREFIX):
+            data.append(line[len(DATA_PREFIX):].lstrip())
+        elif not line and data:
+            yield "\n".join(data)
+            data = []
+    if data:
+        yield "\n".join(data)
+
+
+class WebServer:
+    def __init__(self, config: ServerConfig, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS):
+        self.config = config
+        self.start_seconds = start_seconds
+        self.call_seconds = call_seconds
+        self.lock = threading.Lock()
+        self.session = ""
+        self.next_id = 0
+
+    def start(self) -> list[Tool]:
+        self.request("initialize", initialize_params(), self.start_seconds)
+        self.post({"jsonrpc": "2.0", "method": "notifications/initialized"}, self.start_seconds).close()
+        return tools_listed(self.request, self.config.name, self.start_seconds)
+
+    def headers(self) -> dict:
+        found = {"Content-Type": "application/json", "Accept": f"application/json, {EVENT_STREAM}",
+                 "User-Agent": f"arty-cli/{__version__}", **self.config.headers}
+        if self.session:
+            found.update({SESSION_HEADER: self.session, VERSION_HEADER: PROTOCOL_VERSION})
+        return found
+
+    def post(self, message: dict, seconds: float):
+        request = urllib.request.Request(self.config.url, data=json.dumps(message).encode(), headers=self.headers(),
+                                         method="POST")
+        try:
+            return urllib.request.urlopen(request, timeout=seconds)
+        except urllib.error.HTTPError as error:
+            raise McpError(f"the MCP server {self.config.name} answered {error.code} {error.reason}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            raise McpError(f"couldn't reach the MCP server {self.config.name} at {self.config.url}: {error}") from None
+
+    def request(self, method: str, params: dict, seconds: float) -> dict:
+        with self.lock:
+            self.next_id += 1
+            wanted = self.next_id
+            with self.post({"jsonrpc": "2.0", "id": wanted, "method": method, "params": params}, seconds) as response:
+                self.session = response.headers.get(SESSION_HEADER) or self.session
+                return self.answer_in(response, wanted, method, seconds)
+
+    def answer_in(self, response, wanted: int, method: str, seconds: float) -> dict:
+        streamed = EVENT_STREAM in (response.headers.get("Content-Type") or "")
+        try:
+            texts = streamed_messages(response) if streamed else [response.read().decode("utf-8", errors="replace")]
+            for text in texts:
+                message = json.loads(text) if text.strip() else None
+                if not isinstance(message, dict):
+                    continue
+                if "method" in message and "id" in message:
+                    self.post(answer_to(message), seconds).close()
+                    continue
+                if message.get("id") == wanted:
+                    return self.result_of(message, method)
+        except (OSError, ValueError) as error:
+            raise McpError(f"the MCP server {self.config.name} sent an unreadable answer to {method}: {error}") from None
+        raise McpError(f"the MCP server {self.config.name} didn't answer {method}")
+
+    def result_of(self, message: dict, method: str) -> dict:
+        if "error" in message:
+            error = message["error"] if isinstance(message["error"], dict) else {}
+            raise McpError(f"{self.config.name} refused {method}: {error.get('message', 'no details')}")
+        result = message.get("result")
+        return result if isinstance(result, dict) else {}
+
+    def call(self, tool: str, arguments: dict) -> str:
+        return call_text(self.request("tools/call", {"name": tool, "arguments": arguments}, self.call_seconds))
+
+    def close(self) -> str:
+        if not self.session:
+            return ""
+        request = urllib.request.Request(self.config.url, headers=self.headers(), method="DELETE")
+        self.session = ""
+        try:
+            urllib.request.urlopen(request, timeout=CLOSE_SECONDS).close()
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            return f"Couldn't end the session with the MCP server {self.config.name}: {error}"
+        return ""
+
+
 class Server:
     def __init__(self, config: ServerConfig, workspace, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS):
         self.config = config
@@ -166,10 +321,9 @@ class Server:
                                         errors="replace", env={**os.environ, **self.config.env})
         threading.Thread(target=self.read_answers, daemon=True).start()
         threading.Thread(target=self.read_errors, daemon=True).start()
-        self.request("initialize", {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-                                    "clientInfo": {"name": "arty-cli", "version": __version__}}, self.start_seconds)
+        self.request("initialize", initialize_params(), self.start_seconds)
         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        return self.listed_tools()
+        return tools_listed(self.request, self.config.name, self.start_seconds)
 
     def read_answers(self) -> None:
         for line in self.process.stdout:
@@ -200,11 +354,7 @@ class Server:
         return f"the MCP server {self.config.name} has stopped{detail}{tail}"
 
     def answer_server(self, message: dict) -> None:
-        if message.get("method") == "ping":
-            self.send({"jsonrpc": "2.0", "id": message["id"], "result": {}})
-        else:
-            self.send({"jsonrpc": "2.0", "id": message["id"],
-                       "error": {"code": METHOD_NOT_FOUND, "message": "arty-cli doesn't offer that"}})
+        self.send(answer_to(message))
 
     def request(self, method: str, params: dict, seconds: float) -> dict:
         if self.ended:
@@ -235,35 +385,19 @@ class Server:
             result = message.get("result")
             return result if isinstance(result, dict) else {}
 
-    def listed_tools(self) -> list[Tool]:
-        found, cursor = [], None
-        for _page in range(MAX_PAGES):
-            page = self.request("tools/list", {"cursor": cursor} if cursor else {}, self.start_seconds)
-            for tool in page.get("tools") or []:
-                if isinstance(tool, dict) and tool.get("name"):
-                    annotations = tool.get("annotations") if isinstance(tool.get("annotations"), dict) else {}
-                    schema = tool.get("inputSchema") if isinstance(tool.get("inputSchema"), dict) else EMPTY_SCHEMA
-                    found.append(Tool(self.config.name, str(tool["name"]), exposed_name(self.config.name, str(tool["name"])),
-                                      str(tool.get("description") or ""), schema, annotations.get("readOnlyHint") is True))
-            cursor = page.get("nextCursor")
-            if not cursor:
-                break
-        return found
-
     def call(self, tool: str, arguments: dict) -> str:
-        result = self.request("tools/call", {"name": tool, "arguments": arguments}, self.call_seconds)
-        text = content_text(result.get("content"))
-        return f"Error: {text}" if result.get("isError") else text
+        return call_text(self.request("tools/call", {"name": tool, "arguments": arguments}, self.call_seconds))
 
-    def close(self) -> None:
+    def close(self) -> str:
         if self.process is None or self.process.poll() is not None:
-            return
+            return ""
         try:
             self.process.stdin.close()
             self.process.wait(timeout=CLOSE_SECONDS)
         except (OSError, subprocess.TimeoutExpired):
             self.process.kill()
             self.process.wait()
+        return ""
 
 
 class Hub:
@@ -277,7 +411,8 @@ class Hub:
     def start(self, wanted: list[ServerConfig]) -> list[str]:
         problems = []
         for config in wanted:
-            server = Server(config, self.workspace, self.start_seconds, self.call_seconds)
+            server = (WebServer(config, self.start_seconds, self.call_seconds) if config.url
+                      else Server(config, self.workspace, self.start_seconds, self.call_seconds))
             try:
                 listed = server.start()
             except (McpError, OSError) as error:
@@ -309,6 +444,5 @@ class Hub:
         except McpError as error:
             return f"Error: {error}"
 
-    def close(self) -> None:
-        for server in self.servers.values():
-            server.close()
+    def close(self) -> list[str]:
+        return [problem for problem in (server.close() for server in self.servers.values()) if problem]

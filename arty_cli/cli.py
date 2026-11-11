@@ -759,7 +759,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         chat(session)
         return 0
     finally:
-        loaded.close()
+        for problem in loaded.close():
+            terminal.note(problem, "error")
 
 
 def notifying(ask, extras, terminal: Terminal, kind: str = PERMISSION_PROMPT):

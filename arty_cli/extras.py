@@ -86,9 +86,8 @@ class Extras:
             kept.session_id = self.hooks.session_id
         return Extras(hooks=kept, search=self.search)
 
-    def close(self) -> None:
-        if self.hub is not None:
-            self.hub.close()
+    def close(self) -> list[str]:
+        return self.hub.close() if self.hub is not None else []
 
 
 NONE = Extras()
