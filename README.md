@@ -36,7 +36,9 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `mcp__<server>__<tool>` | Tools from your MCP servers (below) | The first use of each server asks; after that, tools the server marks read-only don't, the others do |
 
 Answer **y** (yes), **n** (no) or **a** (always). "Always" lasts until you quit: for edits it covers every edit, for a
-command only that exact command. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
+command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
+written to `.arty/settings.json` as an allow rule (below) for that exact command, that file, that site or that tool, so
+later sessions don't ask either. When no rule fits (a chained command, say), **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
 Every tool result the model sees is cut to 60,000 characters at most.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project

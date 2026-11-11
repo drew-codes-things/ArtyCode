@@ -73,6 +73,9 @@ COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green
 WORDMARK = "◆ Arty"
 ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO,
            "a": permissions.ALWAYS, "always": permissions.ALWAYS}
+SAVE_ANSWERS = {"s": permissions.SAVE, "save": permissions.SAVE}
+CHOICES = "[y]es / [n]o / [a]lways"
+SAVE_CHOICE = "[s]ave as a project rule"
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 TEXT_OUTPUT, JSON_OUTPUT = "text", "json"
 OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT)
@@ -87,6 +90,7 @@ class Terminal:
         self.out = out or sys.stdout
         self.err = err or sys.stderr
         self.mid_line = False
+        self.offers_rules = False
         self.colour = self.err.isatty() and not os.environ.get("NO_COLOR")
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
@@ -127,10 +131,12 @@ class Terminal:
         self.end_line()
         if preview:
             self.show_diff(preview)
+        answers = {**ANSWERS, **SAVE_ANSWERS} if self.offers_rules else ANSWERS
+        choices = f"{CHOICES} / {SAVE_CHOICE}" if self.offers_rules else CHOICES
         while True:
-            answer = input(self.paint(f"{question} [y]es / [n]o / [a]lways: ", "accent")).strip().lower()
-            if answer in ANSWERS:
-                return ANSWERS[answer]
+            answer = input(self.paint(f"{question} {choices}: ", "accent")).strip().lower()
+            if answer in answers:
+                return answers[answer]
 
 
 def parse_arguments(argv):
@@ -629,6 +635,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         client.model = saved.model
     trusted = project_notes_allowed(workspace, settings.config_dir(), terminal)
     gate.rules, problems = permissions.load_rules(settings.config_dir(), workspace, trusted)
+    if trusted:
+        gate.rule_file = project_rule_file(workspace, terminal)
     for problem in problems:
         terminal.note(problem, "error")
     loaded = session_extras(workspace, trusted, terminal)
@@ -643,6 +651,15 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         return 0
     finally:
         loaded.close()
+
+
+def project_rule_file(workspace, terminal: Terminal) -> permissions.RuleFile:
+    def tell(line: str) -> None:
+        terminal.note(line)
+        memory.trust(settings.config_dir(), workspace.root, setup_fingerprint(workspace))
+
+    terminal.offers_rules = True
+    return permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, tell)
 
 
 def answered_as_json(session: Session, request: str) -> int:

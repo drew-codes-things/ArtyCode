@@ -527,3 +527,31 @@ def test_the_banner_starts_with_a_small_arty_wordmark(ready, monkeypatch, capsys
     chat_with(monkeypatch, "/exit")
     first = capsys.readouterr().err.splitlines()[0]
     assert first.startswith(cli.WORDMARK)
+
+
+class CommandBrain(FakeBrain):
+    def reply(self, messages, tools, on_text):
+        self.calls.append([dict(m) for m in messages])
+        if len(self.calls) == 1:
+            found = {"id": "c1", "type": "function",
+                     "function": {"name": "run_command", "arguments": json.dumps({"command": "touch made.txt"})}}
+            return {"role": "assistant", "content": "", "tool_calls": [found]}
+        return super().reply(messages, tools, on_text)
+
+
+def test_saving_an_answer_as_a_rule_keeps_the_folder_trusted(ready, monkeypatch, capsys):
+    (ready / "ARTY.md").write_text("Always use tabs.\n")
+    monkeypatch.setattr(cli.brain, "Brain", CommandBrain)
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    prompts_seen = []
+    answers = iter(["y", "s"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts_seen.append(prompt) or next(answers))
+    assert cli.main(["-p", "make the file"]) == 0
+    assert "[s]ave" in prompts_seen[-1]
+    table = json.loads((ready / ".arty" / "settings.json").read_text())
+    assert table["permissions"]["allow"] == ["run_command(touch made.txt)"]
+    assert "run_command(touch made.txt)" in capsys.readouterr().err
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail(f"asked {prompt!r}"))
+    (ready / "made.txt").unlink()
+    assert cli.main(["-p", "make it again"]) == 0
+    assert (ready / "made.txt").exists()

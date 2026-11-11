@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from arty_cli import permissions, tools
@@ -335,3 +337,78 @@ def test_rules_load_from_personal_and_trusted_project_settings(tmp_path):
     assert problems and "7" in problems[0]
     untrusted, _ = permissions.load_rules(personal, workspace, include_project=False)
     assert untrusted.deny == []
+
+
+def saving_gate(workspace, *answers):
+    told = []
+    gate = permissions.Gate(workspace, Asker(*answers))
+    gate.rule_file = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, told.append)
+    return gate, told
+
+
+def saved_allow_rules(workspace):
+    return json.loads((workspace.root / permissions.PROJECT_SETTINGS).read_text())["permissions"]["allow"]
+
+
+def test_saving_a_command_writes_an_allow_rule_that_later_sessions_follow(workspace):
+    gate, told = saving_gate(workspace, permissions.SAVE)
+    assert gate.allows("run_command", {"command": "pytest -q"})
+    assert saved_allow_rules(workspace) == ["run_command(pytest -q)"]
+    assert "run_command(pytest -q)" in told[0]
+    later = permissions.Gate(workspace, Asker("n", "n"))
+    later.rules, problems = permissions.load_rules(workspace.root / "nobody", workspace, include_project=True)
+    assert problems == []
+    assert later.allows("run_command", {"command": "pytest -q"})
+    assert not later.allows("run_command", {"command": "pytest -q -x"})
+
+
+def test_a_saved_rule_keeps_the_rest_of_the_settings_file(workspace):
+    settings_file = workspace.root / permissions.PROJECT_SETTINGS
+    settings_file.parent.mkdir()
+    settings_file.write_text(json.dumps({"hooks": {"Stop": []}, "permissions": {"allow": ["read_file"], "deny": ["x"]}}))
+    gate, _told = saving_gate(workspace, permissions.SAVE)
+    assert gate.allows("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"})
+    table = json.loads(settings_file.read_text())
+    assert table["hooks"] == {"Stop": []}
+    assert table["permissions"] == {"allow": ["read_file", "edit_file(a.py)"], "deny": ["x"]}
+
+
+def test_wildcards_in_a_saved_command_only_match_themselves(workspace):
+    gate, _told = saving_gate(workspace, permissions.SAVE, "n")
+    assert gate.allows("run_command", {"command": "touch build*"})
+    assert saved_allow_rules(workspace) == ["run_command(touch build[*])"]
+    assert gate.allows("run_command", {"command": "touch build*"})
+    assert not gate.allows("run_command", {"command": "touch buildx"})
+
+
+def test_saving_a_fetch_allows_that_site(workspace):
+    gate, _told = saving_gate(workspace, permissions.SAVE)
+    assert gate.allows("web_fetch", {"url": "https://docs.python.org/3/library/json.html"})
+    assert saved_allow_rules(workspace) == ["web_fetch(https://docs.python.org/*)"]
+
+
+def test_a_chained_command_cannot_become_a_rule_so_it_is_allowed_for_the_session(workspace):
+    gate, told = saving_gate(workspace, permissions.SAVE)
+    assert gate.allows("run_command", {"command": "make && make install"})
+    assert gate.allows("run_command", {"command": "make && make install"})
+    assert not (workspace.root / permissions.PROJECT_SETTINGS).exists()
+    assert "session" in told[0]
+
+
+def test_an_unreadable_settings_file_is_left_alone_and_the_answer_lasts_the_session(workspace):
+    settings_file = workspace.root / permissions.PROJECT_SETTINGS
+    settings_file.parent.mkdir()
+    settings_file.write_text("{not json")
+    gate, told = saving_gate(workspace, permissions.SAVE)
+    assert gate.allows("run_command", {"command": "pytest -q"})
+    assert gate.allows("run_command", {"command": "pytest -q"})
+    assert settings_file.read_text() == "{not json"
+    assert "Couldn't save" in told[0]
+
+
+def test_without_a_rule_file_saving_is_the_same_as_always(workspace):
+    ask = Asker(permissions.SAVE)
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("run_command", {"command": "pytest -q"})
+    assert gate.allows("run_command", {"command": "pytest -q"})
+    assert len(ask.questions) == 1

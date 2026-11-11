@@ -6,13 +6,16 @@ import os
 import re
 import shlex
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
 from arty_cli import tools
 
-YES, NO, ALWAYS = "y", "n", "a"
+YES, NO, ALWAYS, SAVE = "y", "n", "a", "s"
+AGREEING = (YES, ALWAYS, SAVE)
+RULE_WILDCARDS = re.compile(r"([*?\[])")
 MAX_PREVIEW_CHARS = 6_000
 READ_ONLY_PROGRAMS = {"ls", "pwd", "cat", "head", "tail", "wc", "grep", "rg", "find", "tree", "which", "file", "stat",
                       "du", "diff", "dir", "type", "get-childitem", "get-content", "select-string", "get-location"}
@@ -273,6 +276,47 @@ def load_rules(personal_folder: Path, workspace, include_project: bool) -> tuple
     return rules, problems
 
 
+def literal_pattern(text: str) -> str:
+    return RULE_WILDCARDS.sub(r"[\1]", text)
+
+
+def site_rule(url: str) -> str:
+    parts = urlparse(url)
+    return f"web_fetch({literal_pattern(f'{parts.scheme}://{parts.netloc}')}/*)" if parts.scheme and parts.netloc else ""
+
+
+def saved_settings(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    table = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(table, dict) or not isinstance(table.get("permissions", {}), dict):
+        raise ValueError("it isn't a JSON object with a permissions object")
+    return table
+
+
+@dataclass
+class RuleFile:
+    path: Path
+    tell: Callable[[str], None]
+
+    def add_allow(self, rule: str) -> bool:
+        try:
+            table = saved_settings(self.path)
+            rules = table.setdefault("permissions", {})
+            allowed = rules.setdefault("allow", [])
+            if not isinstance(allowed, list):
+                raise ValueError("its allow rules aren't a list")
+            if rule not in allowed:
+                allowed.append(rule)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(table, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError) as error:
+            self.tell(f"Couldn't save the rule {rule} to {self.path} ({error}); allowed for this session only.")
+            return False
+        self.tell(f"Saved the rule {rule} to {self.path}.")
+        return True
+
+
 def diff_preview(workspace, name: str, arguments: dict) -> str:
     try:
         path, before, after = tools.planned_change(name, arguments, workspace)
@@ -294,6 +338,7 @@ class Gate:
         self.always = set()
         self.rules = Rules()
         self.approved_servers = set()
+        self.rule_file = None
 
     def rule_refusal(self, name: str, arguments: dict) -> str | None:
         return RULE_DENIED if self.rules.denies(name, call_target(self.workspace, name, arguments)) else None
@@ -340,11 +385,31 @@ class Gate:
             return False
         return not folder.is_relative_to(self.workspace.root)
 
-    def confirm(self, question: str, preview: str = "", remember: str = "") -> str | None:
+    def rule_for(self, name: str, arguments: dict) -> str:
+        if name == "web_fetch":
+            return site_rule(str(arguments.get("url") or ""))
+        target = call_target(self.workspace, name, arguments)
+        rule = f"{name}({literal_pattern(target)})" if target else name
+        return rule if self.rules.from_lists([rule], []).allows(name, target) else ""
+
+    def saved_as_rule(self, rule: str) -> bool:
+        if self.rule_file is None:
+            return False
+        if not rule:
+            self.rule_file.tell("No rule fits this one, so it's allowed for this session only.")
+            return False
+        if not self.rule_file.add_allow(rule):
+            return False
+        self.rules.allow.append(rule)
+        return True
+
+    def confirm(self, question: str, preview: str = "", remember: str = "", rule: str = "") -> str | None:
         answer = self.ask(question, preview)
-        if answer == ALWAYS and remember:
+        if answer == SAVE and self.saved_as_rule(rule):
+            return None
+        if answer in (ALWAYS, SAVE) and remember:
             self.always.add(remember)
-        return None if answer in (YES, ALWAYS) else REFUSED
+        return None if answer in AGREEING else REFUSED
 
     def check(self, name: str, arguments: dict) -> str | None:
         denied = self.rule_refusal(name, arguments)
@@ -378,7 +443,7 @@ class Gate:
             return None
         if self.mode == PLAN and not read_only:
             return PLAN_REFUSAL
-        return self.confirm(f"Use {name}?", preview, remember=name)
+        return self.confirm(f"Use {name}?", preview, remember=name, rule=self.rule_for(name, arguments or {}))
 
     def check_server(self, server: str, name: str, read_only: bool, preview: str, arguments: dict) -> str | None:
         denied = self.rule_refusal(name, arguments)
@@ -391,7 +456,7 @@ class Gate:
         if server in self.approved_servers or self.rule_allows(name, arguments) or name in self.always:
             return self.check_other(name, read_only, preview, arguments)
         refusal = self.confirm(f"First use of the MCP server {server} this session: let it run {name}?", preview,
-                               remember=name)
+                               remember=name, rule=self.rule_for(name, arguments))
         if refusal is None:
             self.approved_servers.add(server)
         return refusal
@@ -399,11 +464,14 @@ class Gate:
     def allows(self, name: str, arguments: dict) -> bool:
         return self.check(name, arguments) is None
 
+    def command_rule(self, command: str) -> str:
+        return self.rule_for("run_command", {"command": command})
+
     def check_fetch(self, url: str) -> str | None:
         site = urlparse(url).netloc
         if site and f"site:{site}" in self.always:
             return None
-        return self.confirm(f"Fetch {url}?", remember=f"site:{site}" if site else "")
+        return self.confirm(f"Fetch {url}?", remember=f"site:{site}" if site else "", rule=site_rule(url))
 
     def check_change(self, name: str, arguments: dict) -> str | None:
         preview = diff_preview(self.workspace, name, arguments)
@@ -412,7 +480,8 @@ class Gate:
         if self.mode == AUTO_EDIT or EDITS in self.always:
             return None
         verb = "Write" if name == "write_file" else "Edit"
-        return self.confirm(f"{verb} {arguments.get('path')}?", preview, remember=EDITS)
+        return self.confirm(f"{verb} {arguments.get('path')}?", preview, remember=EDITS,
+                            rule=self.rule_for(name, arguments))
 
     def check_command(self, command: str, background: bool) -> str | None:
         if is_read_only_command(command) and not background:
@@ -422,14 +491,15 @@ class Gate:
         if command in self.always:
             return None
         label = "Start in the background" if background else "Run"
-        return self.confirm(f"{label}: {command}", remember=command)
+        return self.confirm(f"{label}: {command}", remember=command, rule=self.command_rule(command))
 
     def check_looking(self, command: str) -> str | None:
         if command in self.always:
             return None
         if any(self.reaches_outside(path) for path in named_paths(command)):
-            return self.confirm(f"Look outside the project: {command}?", remember=command)
+            return self.confirm(f"Look outside the project: {command}?", remember=command,
+                                rule=self.command_rule(command))
         if words_of(command)[0].lower() == "git" and git_settings_run_programs(self.workspace.root):
             return self.confirm(f"This repository's git settings name a program that git would run. Run: {command}?",
-                                remember=command)
+                                remember=command, rule=self.command_rule(command))
         return None
