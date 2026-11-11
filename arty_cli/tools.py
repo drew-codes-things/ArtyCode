@@ -430,6 +430,18 @@ def list_files(workspace, pattern="**/*", path="."):
     return listed + (f"\n... and {extra} more" if extra > 0 else "")
 
 
+ANY_FOLDERS_PREFIX = ANY_FOLDERS + "/"
+ANY_FOLDERS_BETWEEN = "/" + ANY_FOLDERS + "/"
+
+
+def glob_spellings(glob: str) -> set[str]:
+    return {glob, glob.removeprefix(ANY_FOLDERS_PREFIX), glob.replace(ANY_FOLDERS_BETWEEN, "/")}
+
+
+def matches_glob(name: str, relative: str, glob: str) -> bool:
+    return any(fnmatch.fnmatch(name, spelling) or fnmatch.fnmatch(relative, spelling) for spelling in glob_spellings(glob))
+
+
 def search(workspace, pattern, path=".", glob="*"):
     try:
         expression = re.compile(pattern)
@@ -437,7 +449,7 @@ def search(workspace, pattern, path=".", glob="*"):
         raise ToolError(f"bad pattern: {error}") from None
     matches, used = [], 0
     for candidate in project_files(workspace, workspace.resolve(path), [ANY_FOLDERS, "*"]):
-        if not fnmatch.fnmatch(candidate.name, glob) or candidate.stat().st_size > MAX_SEARCHED_FILE_BYTES:
+        if not matches_glob(candidate.name, workspace.shown(candidate), glob) or candidate.stat().st_size > MAX_SEARCHED_FILE_BYTES:
             continue
         try:
             lines = candidate.read_text(encoding="utf-8").splitlines()

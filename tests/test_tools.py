@@ -410,3 +410,13 @@ def test_undo_refuses_when_the_file_changed_after_arty_changed_it(tmp_path):
     (tmp_path / "made.py").write_text("edited by hand\n")
     assert "changed" in workspace.undo_last()
     assert (tmp_path / "made.py").read_text() == "edited by hand\n"
+
+
+@pytest.mark.parametrize("glob", ["*.py", "**/*.py", "src/*.py", "src/**/*.py", "app.py"])
+def test_search_globs_match_by_name_or_by_path_in_the_project(workspace, glob):
+    assert tools.run("search", {"pattern": r"return a", "glob": glob}, workspace) == "src/app.py:2:    return a - b"
+
+
+@pytest.mark.parametrize("glob", ["*.js", "docs/*.py", "**/*.txt"])
+def test_search_globs_that_match_nothing_find_nothing(workspace, glob):
+    assert tools.run("search", {"pattern": r"return a", "glob": glob}, workspace).startswith("No matches")
