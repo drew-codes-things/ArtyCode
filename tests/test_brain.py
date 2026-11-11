@@ -88,6 +88,15 @@ def test_falls_back_to_the_remote_address_with_access_headers(remote):
     assert client.address() == remote
 
 
+def test_every_chat_asks_the_brain_for_agent_mode(home_brain):
+    client = brain.Brain(settings.Settings(base_url=home_brain, api_key="key"))
+    client.reply([{"role": "user", "content": "hi"}], tools=[{"type": "function", "function": {"name": "x"}}],
+                 on_text=lambda text: None)
+    headers = FakeBrain.seen[-1]["headers"]
+    assert headers["X-Arty-Agent"] == "1"
+    assert headers["X-Arty-Client-Tools"] == "1"
+
+
 def test_the_local_address_gets_no_access_headers(home_brain):
     client = brain.Brain(settings.Settings(base_url=home_brain, api_key="key", access_client_id="id",
                                            access_client_secret="s"))

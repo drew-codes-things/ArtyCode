@@ -233,7 +233,7 @@ class Brain:
     def request(self, route: Route, body: dict) -> urllib.request.Request:
         headers = {"Authorization": f"Bearer {self.settings.api_key}", "Content-Type": "application/json",
                    "Accept": "text/event-stream", "User-Agent": f"arty-cli/{__version__}",
-                   "X-Arty-Client-Tools": "1", "X-Arty-Any-Model": "1", "X-Arty-Skip-Groups": SKIPPED_GROUPS,
+                   "X-Arty-Client-Tools": "1", "X-Arty-Agent": "1", "X-Arty-Any-Model": "1", "X-Arty-Skip-Groups": SKIPPED_GROUPS,
                    **route.headers}
         return urllib.request.Request(f"{route.url}/chat/completions", data=json.dumps(body).encode(),
                                       headers=headers, method="POST")
