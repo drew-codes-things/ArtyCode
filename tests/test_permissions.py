@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -440,3 +441,49 @@ def test_a_deny_rule_can_forbid_some_searches(workspace):
     gate.rules = permissions.Rules(deny=["web_search(*password*)"])
     assert not gate.allows("web_search", {"query": "my password"})
     assert gate.allows("web_search", {"query": "python json"})
+
+
+PLAN = "1. Add a --dry-run flag to cli.py\n2. Test it"
+
+
+def test_approving_a_plan_leaves_plan_mode():
+    gate = permissions.Gate(tools.Workspace(Path.cwd()), Asker(), mode=permissions.PLAN)
+    seen = []
+    gate.review = lambda plan: seen.append(plan) or (permissions.YES, "")
+    result = gate.review_plan(PLAN)
+    assert seen == [PLAN]
+    assert gate.mode == permissions.DEFAULT
+    assert "approved" in result and "default" in result
+
+
+def test_approving_with_auto_accept_switches_to_auto_edit():
+    gate = permissions.Gate(tools.Workspace(Path.cwd()), Asker(), mode=permissions.PLAN)
+    gate.review = lambda plan: (permissions.ALWAYS, "")
+    gate.review_plan(PLAN)
+    assert gate.mode == permissions.AUTO_EDIT
+
+
+def test_rejecting_a_plan_keeps_plan_mode_and_passes_on_the_feedback():
+    gate = permissions.Gate(tools.Workspace(Path.cwd()), Asker(), mode=permissions.PLAN)
+    gate.review = lambda plan: (permissions.NO, "write the test first")
+    result = gate.review_plan(PLAN)
+    assert gate.mode == permissions.PLAN
+    assert "rejected" in result and "write the test first" in result
+
+
+def test_without_a_reviewer_the_plain_question_is_asked():
+    ask = Asker("y")
+    gate = permissions.Gate(tools.Workspace(Path.cwd()), ask, mode=permissions.PLAN)
+    gate.review_plan(PLAN)
+    assert PLAN in ask.questions[0][0]
+    assert gate.mode == permissions.DEFAULT
+
+
+@pytest.mark.parametrize("mode, plan, problem", [(permissions.DEFAULT, PLAN, "isn't on"),
+                                                 (permissions.PLAN, "  ", "empty")])
+def test_a_plan_outside_plan_mode_or_without_steps_is_an_error(mode, plan, problem):
+    ask = Asker()
+    gate = permissions.Gate(tools.Workspace(Path.cwd()), ask, mode=mode)
+    result = gate.review_plan(plan)
+    assert result.startswith("Error") and problem in result
+    assert ask.questions == [] and gate.mode == mode

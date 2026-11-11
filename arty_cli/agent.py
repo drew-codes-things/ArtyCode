@@ -39,6 +39,12 @@ EXPLORE_DEFINITION = tools.function(
 EXPLORER_PROMPT = ("You are a helper inside arty-cli. Answer the one question you are given by looking through the "
                    "project with your tools. Only look; never try to change anything. Reply briefly with what you "
                    "found, naming files and line numbers.")
+PLAN_DEFINITION = tools.function(
+    permissions.PLAN_TOOL,
+    "Plan mode is on. When you have looked enough, present your plan here: the steps, the files you will change "
+    "and how you will check it works. The user approves it (plan mode ends and you carry it out) or rejects it "
+    "with feedback (revise the plan and present it again).",
+    {"plan": tools.TEXT}, ["plan"])
 
 
 def parsed_arguments(raw) -> dict:
@@ -58,6 +64,10 @@ def activity_line(name: str, arguments: dict) -> str:
 
 def offered_definitions(extras) -> list[dict]:
     return tools.DEFINITIONS + [EXPLORE_DEFINITION] + extras.definitions()
+
+
+def planning_definitions(gate) -> list[dict]:
+    return [PLAN_DEFINITION] if gate.mode == permissions.PLAN else []
 
 
 def explorer_definitions() -> list[dict]:
@@ -184,6 +194,8 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
         if not can_explore:
             return "Error: a helper can't start another helper; look for it yourself"
         result = helpers.explore(str(arguments.get("task", "")))
+    elif name == permissions.PLAN_TOOL and can_explore:
+        result = helpers.gate.review_plan(str(arguments.get("plan") or ""))
     else:
         result = performed(name, arguments, helpers.workspace, helpers.gate, extras, done, before.decision,
                            before.feedback)
@@ -264,7 +276,7 @@ def announces_a_next_step(content: str) -> bool:
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
              squeeze=None, extras=None, stop_hooks=True, stopped=None) -> str:
     extras = extras or extra_tools.NONE
-    offered = offered_definitions(extras) if offered is None else offered
+    offered = offered_definitions(extras) + planning_definitions(gate) if offered is None else offered
     done = [] if done is None else done
     helpers = Helpers(brain, workspace, gate, screen, extras)
     recent, continued, steered_from, nudged = [], 0, None, False

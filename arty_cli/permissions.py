@@ -59,7 +59,15 @@ SETTINGS_FILE = "settings.json"
 PROJECT_SETTINGS = Path(".arty") / SETTINGS_FILE
 PATH_TOOLS = ("read_file", "write_file", "edit_file", "multi_edit", "notebook_edit", "search")
 PLAN_REFUSAL = ("Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan "
-                "step by step and ask the user to switch plan mode off (/mode default) to carry it out.")
+                "step by step with present_plan so the user can approve it and switch plan mode off.")
+PLAN_TOOL = "present_plan"
+PLAN_APPROVED = ("The user approved the plan. Plan mode is off (mode: {mode}), so carry it out now, step by step, "
+                 "and say what you changed.")
+PLAN_REJECTED = "The user rejected the plan and plan mode is still on: change nothing yet."
+PLAN_FEEDBACK = " Their feedback: {feedback}. Look again if you need to, then present a new plan."
+PLAN_NO_FEEDBACK = " They didn't say why; ask what they'd like changed."
+NOT_PLANNING = "Error: plan mode isn't on, so there is nothing to approve; carry on with the work."
+EMPTY_PLAN = "Error: the plan is empty; write it out step by step."
 
 
 def refuse(question: str, preview: str = "") -> str:
@@ -342,6 +350,7 @@ class Gate:
         self.rules = Rules()
         self.approved_servers = set()
         self.rule_file = None
+        self.review = None
 
     def rule_refusal(self, name: str, arguments: dict) -> str | None:
         return RULE_DENIED if self.rules.denies(name, call_target(self.workspace, name, arguments)) else None
@@ -477,6 +486,20 @@ class Gate:
         if site and f"site:{site}" in self.always:
             return None
         return self.confirm(f"Fetch {url}?", remember=f"site:{site}" if site else "", rule=site_rule(url))
+
+    def review_plan(self, plan: str) -> str:
+        if self.mode != PLAN:
+            return NOT_PLANNING
+        if not plan.strip():
+            return EMPTY_PLAN
+        if self.review is None:
+            decision, feedback = self.ask(f"Approve this plan and leave plan mode?\n{plan}", ""), ""
+        else:
+            decision, feedback = self.review(plan)
+        if decision not in AGREEING:
+            return PLAN_REJECTED + (PLAN_FEEDBACK.format(feedback=feedback) if feedback else PLAN_NO_FEEDBACK)
+        self.mode = AUTO_EDIT if decision == ALWAYS else DEFAULT
+        return PLAN_APPROVED.format(mode=self.mode)
 
     def check_search(self, query: str) -> str | None:
         if WEB_SEARCH in self.always:

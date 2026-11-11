@@ -599,3 +599,28 @@ def test_a_subagent_stop_hook_sees_the_helper_finish_and_can_send_it_back(tmp_pa
     assert payloads[0]["task"] == "find A" and payloads[0]["last_message"] == "answer 1"
     assert "check the tests folder too" in brain.helper_turns[1][-1]["content"]
     assert [m["content"] for m in brain.sent[1] if m["role"] == "tool"] == ["answer 2"]
+
+
+def test_in_plan_mode_the_model_presents_a_plan_and_carries_on_once_it_is_approved(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(
+        ("", [call("read_file", path="a.py")]),
+        ("", [call("present_plan", "p1", plan="1. Change x to 2")]),
+        ("", [call("edit_file", "e1", path="a.py", old_text="x = 1", new_text="x = 2")]),
+        ("Done.", []),
+    )
+    gate = permissions.Gate(workspace, lambda q, p="": "y", mode=permissions.PLAN)
+    gate.review = lambda plan: (permissions.YES, "")
+    agent.run_turn([{"role": "user", "content": "plan it"}], scripted, workspace, gate, Screen())
+    assert "present_plan" in [d["function"]["name"] for d in scripted.sent[0]["tools"]]
+    assert gate.mode == permissions.DEFAULT
+    assert (tmp_path / "a.py").read_text() == "x = 2\n"
+
+
+def test_the_plan_tool_is_only_offered_in_plan_mode(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(("OK.", []))
+    agent.run_turn([{"role": "user", "content": "hi"}], scripted, workspace,
+                   permissions.Gate(workspace, permissions.refuse), Screen())
+    assert "present_plan" not in [d["function"]["name"] for d in scripted.sent[0]["tools"]]

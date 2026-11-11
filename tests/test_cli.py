@@ -646,3 +646,16 @@ def test_a_notification_hook_runs_when_arty_waits_for_an_answer(ready, monkeypat
     found = payloads_in(seen)
     assert found and found[0]["notification_type"] == "permission_prompt"
     assert "touch made.txt" in found[0]["message"]
+
+
+def test_the_terminal_shows_the_plan_and_asks_for_approval_or_feedback(monkeypatch):
+    terminal = cli.Terminal(out=io.StringIO(), err=io.StringIO())
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    answers = iter(["maybe", "n", "add tests first"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert terminal.review_plan("1. Do the thing") == (cli.permissions.NO, "add tests first")
+    assert "1. Do the thing" in terminal.err.getvalue()
+    answers = iter(["a"])
+    assert terminal.review_plan("1. Do the thing") == (cli.permissions.ALWAYS, "")
+    monkeypatch.setattr(cli, "is_interactive", lambda: False)
+    assert terminal.review_plan("1. Do the thing")[0] == cli.permissions.NO

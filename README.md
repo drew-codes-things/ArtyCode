@@ -44,7 +44,9 @@ later sessions don't ask either. When no rule fits (a chained command, say), **s
 Every tool result the model sees is cut to 60,000 characters at most.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project
-without asking); `plan` (look and plan only, nothing changed or run; `/plan` switches it); `allow-all` (nothing asked,
+without asking); `plan` (look and plan only, nothing changed or run; `/plan` switches it; when the model has a plan it
+presents it with the `present_plan` tool and you answer **y** to approve it, so plan mode ends and the work carries on
+in `default`, **a** to approve it and carry on in `auto-edit`, or **n** to keep planning, with what should change); `allow-all` (nothing asked,
 only for a folder you can throw away). The chat prompt starts with the current mode (`plan ›`), and **Shift+Tab** at
 the prompt moves on to the next one, keeping what you have typed: default, auto-edit, plan, then default again.
 allow-all is never reached that way, only with `/mode allow-all` or the flag. On Linux the prompt uses readline (so

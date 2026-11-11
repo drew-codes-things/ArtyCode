@@ -38,7 +38,9 @@ HOOK_CONTEXT_LEAD = "(Added by a hook:)"
 START_CONTEXT_LEAD = "(Added by a SessionStart hook:)"
 MANUAL, AUTOMATIC = "manual", "auto"
 STARTUP, RESUME, CLEAR = "startup", "resume", "clear"
-PERMISSION_PROMPT = "permission_prompt"
+PERMISSION_PROMPT, PLAN_APPROVAL = "permission_prompt", "plan_approval"
+NOTIFICATION_LEADS = {PERMISSION_PROMPT: "Arty CLI needs your permission",
+                      PLAN_APPROVAL: "Arty CLI has a plan for you to approve"}
 NOTE_LEAD = "(I added this note to the project's ARTY.md; follow it from now on:)"
 NOTE_ACK = "Noted."
 UNDO_LEAD = "(I undid your last file change with /undo:)"
@@ -78,6 +80,10 @@ WORDMARK = "◆ Arty"
 ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO,
            "a": permissions.ALWAYS, "always": permissions.ALWAYS}
 SAVE_ANSWERS = {"s": permissions.SAVE, "save": permissions.SAVE}
+PLAN_ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "a": permissions.ALWAYS, "auto": permissions.ALWAYS,
+                "n": permissions.NO, "no": permissions.NO}
+PLAN_QUESTION = "Approve the plan? [y]es / [a]pprove and auto-accept edits / [n]o, keep planning: "
+PLAN_FEEDBACK_QUESTION = "What should change? (Enter to skip) "
 CHOICES = "[y]es / [n]o / [a]lways"
 SAVE_CHOICE = "[s]ave as a project rule"
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
@@ -168,6 +174,25 @@ class Terminal:
             answer = input(self.paint(f"{question} {choices}: ", "accent")).strip().lower()
             if answer in answers:
                 return answers[answer]
+
+    def review_plan(self, plan: str) -> tuple[str, str]:
+        return plan_review(self, plan)
+
+
+def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
+    if not is_interactive():
+        terminal.note("Can't approve a plan without a terminal to ask in; staying in plan mode.", "error")
+        return permissions.NO, ""
+    terminal.end_line()
+    terminal.note("Arty's plan:", "accent")
+    terminal.err.write(plan.rstrip() + "\n")
+    while True:
+        answer = input(terminal.paint(PLAN_QUESTION, "accent")).strip().lower()
+        if answer in PLAN_ANSWERS:
+            break
+    if PLAN_ANSWERS[answer] != permissions.NO:
+        return PLAN_ANSWERS[answer], ""
+    return permissions.NO, input(terminal.paint(PLAN_FEEDBACK_QUESTION, "accent")).strip()
 
 
 def parse_arguments(argv):
@@ -720,6 +745,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         terminal.note(problem, "error")
     loaded = session_extras(workspace, trusted, terminal, client.search_web)
     gate.ask = notifying(terminal.ask, loaded, terminal)
+    gate.review = notifying(terminal.review_plan, loaded, terminal, PLAN_APPROVAL)
     try:
         session = Session(client, workspace, gate, terminal, saved, project_trusted=trusted, extras=loaded)
         session.start_hook(RESUME if saved.messages else STARTUP)
@@ -736,14 +762,14 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         loaded.close()
 
 
-def notifying(ask, extras, terminal: Terminal):
-    def asked(question: str, preview: str = "") -> str:
+def notifying(ask, extras, terminal: Terminal, kind: str = PERMISSION_PROMPT):
+    def asked(question: str, *rest):
         if is_interactive():
-            outcome = extras.hook("Notification", {"message": f"Arty CLI needs your permission: {question}",
-                                                   "notification_type": PERMISSION_PROMPT})
+            outcome = extras.hook("Notification", {"message": f"{NOTIFICATION_LEADS[kind]}: {question}",
+                                                   "notification_type": kind})
             for problem in outcome.problems:
                 terminal.note(f"hook: {problem}", "error")
-        return ask(question, preview)
+        return ask(question, *rest)
 
     return asked
 
