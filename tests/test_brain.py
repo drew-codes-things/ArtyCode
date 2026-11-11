@@ -285,3 +285,31 @@ def test_a_search_the_brain_cannot_do_says_why(searching, monkeypatch, answer, p
     monkeypatch.setattr(SearchingBrain, "answer", answer)
     with pytest.raises(brain.BrainError, match=problem):
         searching.search_web("python json", 4)
+
+
+def written_names_and_arguments(text):
+    return [(call["function"]["name"], json.loads(call["function"]["arguments"]))
+            for call in brain.written_tool_calls(text, OFFERED_NAMES)]
+
+
+def test_a_written_call_after_a_sentence_is_recognised():
+    written = 'I will read the file first.\n\n{"name": "read_file", "arguments": {"path":"calc/ops.py"}}'
+    assert written_names_and_arguments(written) == [("read_file", {"path": "calc/ops.py"})]
+
+
+def test_written_calls_one_per_line_are_all_recognised_in_order():
+    written = ('{"name": "read_file", "arguments": {"path":"shop/prices.py"}}\n'
+               '{"name": "run_command", "arguments": {"command":"pytest -q"}}\n')
+    assert written_names_and_arguments(written) == [("read_file", {"path": "shop/prices.py"}),
+                                                    ("run_command", {"command": "pytest -q"})]
+    fenced = f"```json\n{written}```"
+    assert written_names_and_arguments(fenced) == written_names_and_arguments(written)
+
+
+@pytest.mark.parametrize("text", [
+    'Here is the payload you asked about:\n{"debug": true}',
+    'First:\n{"name": "read_file", "arguments": {"path": "a"}}\nthen this example:\n{"debug": true}',
+    'Use it like this: {"name": "read_file", "arguments": {"path": "a"}} in your config.',
+])
+def test_json_that_is_not_only_calls_on_their_own_lines_stays_text(text):
+    assert brain.written_tool_calls(text, OFFERED_NAMES) == []

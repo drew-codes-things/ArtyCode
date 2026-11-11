@@ -33,6 +33,7 @@ NOT_FOUND = 404
 SHARED_TURN_KEYS = ("role", "content", "tool_calls", "tool_call_id")
 FENCED_BLOCK = re.compile(r"```[a-zA-Z]*\s*\n?(.*?)```", re.S)
 TAGGED_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S)
+LINE_START_JSON = re.compile(r"^[ \t]*([\[{])", re.M)
 WRITTEN_CALL_ID = "written_call_{}"
 
 
@@ -102,12 +103,42 @@ def shared_messages(messages: list[dict]) -> list[dict]:
     return [{key: value for key, value in message.items() if key in SHARED_TURN_KEYS} for message in messages]
 
 
+def json_values(text: str) -> list | None:
+    decoder, values, position, text = json.JSONDecoder(), [], 0, text.strip()
+    while position < len(text):
+        try:
+            value, position = decoder.raw_decode(text, position)
+        except ValueError:
+            return None
+        values.append(value)
+        while position < len(text) and text[position].isspace():
+            position += 1
+    return values
+
+
+def ends_its_line(content: str, position: int) -> bool:
+    line_end = content.find("\n", position)
+    return not content[position:line_end if line_end >= 0 else len(content)].strip()
+
+
+def json_on_own_lines(content: str) -> list[str]:
+    decoder, found, position = json.JSONDecoder(), [], 0
+    for opening in LINE_START_JSON.finditer(content):
+        start = opening.start(1)
+        if start < position:
+            continue
+        try:
+            _value, end = decoder.raw_decode(content, start)
+        except ValueError:
+            continue
+        if ends_its_line(content, end):
+            found.append(content[start:end])
+            position = end
+    return found
+
+
 def written_blocks(content: str) -> list[str]:
-    blocks = FENCED_BLOCK.findall(content) + TAGGED_CALL.findall(content)
-    stripped = content.strip()
-    if not blocks and stripped.startswith(("{", "[")):
-        blocks = [stripped]
-    return blocks
+    return FENCED_BLOCK.findall(content) + TAGGED_CALL.findall(content) or json_on_own_lines(content)
 
 
 def written_call(entry, offered_names: set[str]) -> dict | None:
@@ -125,11 +156,10 @@ def written_call(entry, offered_names: set[str]) -> dict | None:
 
 
 def calls_in_block(block: str, offered_names: set[str]) -> list[dict] | None:
-    try:
-        parsed = json.loads(block)
-    except ValueError:
+    values = json_values(block)
+    if not values:
         return None
-    entries = parsed if isinstance(parsed, list) else [parsed]
+    entries = [entry for value in values for entry in (value if isinstance(value, list) else [value])]
     found = [written_call(entry, offered_names) for entry in entries]
     return found if entries and all(found) else None
 
