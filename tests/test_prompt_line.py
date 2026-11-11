@@ -171,3 +171,10 @@ def ready_session(tmp_path, monkeypatch):
     terminal.colour = False
     gate = permissions.Gate(workspace, permissions.refuse)
     return cli.Session(Client(), workspace, gate, terminal, Saved())
+
+
+def test_on_windows_keys_are_polled_so_a_message_from_afar_can_wake_the_prompt():
+    ready, slept = [False, False, True], []
+    next_key = prompt_line.polled_keys(lambda: ready.pop(0), lambda: "x", slept.append)
+    assert next_key() == "x"
+    assert slept == [prompt_line.KEY_POLL_SECONDS] * 2

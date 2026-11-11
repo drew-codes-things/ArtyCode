@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import getpass
 import hashlib
 import io
@@ -14,8 +15,8 @@ from urllib.parse import urlparse
 from arty_cli import extras as extras_module
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, mcp, memory, mentions,
-                       models, permissions, prompt_line, prompts, providers, sessions, settings, skills, tools,
-                       webfetch)
+                       models, permissions, prompt_line, prompts, providers, remote, sessions, settings, skills,
+                       tools, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -67,6 +68,7 @@ COMMANDS = {
     "/rewind [number]": "list your requests, or go back to before one, putting back the files changed since",
     "/clear": "start a fresh conversation",
     "/resume": "list this project's earlier conversations",
+    "/remote [off]": "share this session with Arty on your phone or starfire.ai to follow and steer (off to stop)",
     "/exit": "leave (Ctrl-D works too)",
 }
 SHORTCUTS = {
@@ -94,6 +96,12 @@ TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT = "text", "json", "stream-json"
 OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT)
 ERROR_MARK = "Error"
+REMOTE_ON = ("Remote control is on: Arty on your phone or starfire.ai can follow this session, send requests, answer "
+             "questions and stop a request. It can't change the mode. /remote off stops sharing.")
+REMOTE_OFF = "Remote control is off; this session is no longer shared."
+REMOTE_ALREADY_ON = "Remote control is already on. /remote off stops it."
+REMOTE_USAGE = "Use /remote to share this session, or /remote off to stop."
+REMOTE_ONLY_IN_CHAT = "--remote works in the chat, not with a single question."
 
 
 def is_interactive() -> bool:
@@ -116,6 +124,7 @@ class Terminal:
         self.events = None
         self.mid_line = False
         self.offers_rules = False
+        self.remote = None
         self.colour = self.err.isatty() and not os.environ.get("NO_COLOR")
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
@@ -166,7 +175,7 @@ class Terminal:
             self.err.write(self.paint(line, colour) + "\n")
 
     def ask(self, question: str, preview: str = "") -> str:
-        if not is_interactive():
+        if not is_interactive() and not self.remote:
             self.note(f"Refused without asking (no terminal to ask in): {question}", "error")
             return permissions.NO
         self.end_line()
@@ -174,28 +183,33 @@ class Terminal:
             self.show_diff(preview)
         answers = {**ANSWERS, **SAVE_ANSWERS} if self.offers_rules else ANSWERS
         choices = f"{CHOICES} / {SAVE_CHOICE}" if self.offers_rules else CHOICES
+        return self.answer(f"{question} {choices}: ", answers, question, preview)[0]
+
+    def answer(self, prompt: str, answers: dict, question: str, details: str = "") -> tuple[str, str]:
+        if self.remote:
+            choice, by = self.remote.answer(self.paint(prompt, "accent"), answers, question, details)
+            if by:
+                self.note(f"{by} {'refused' if choice == permissions.NO else 'allowed'} that from another device.")
+            return choice, by
         while True:
-            answer = input(self.paint(f"{question} {choices}: ", "accent")).strip().lower()
+            answer = input(self.paint(prompt, "accent")).strip().lower()
             if answer in answers:
-                return answers[answer]
+                return answers[answer], ""
 
     def review_plan(self, plan: str) -> tuple[str, str]:
         return plan_review(self, plan)
 
 
 def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
-    if not is_interactive():
+    if not is_interactive() and not terminal.remote:
         terminal.note("Can't approve a plan without a terminal to ask in; staying in plan mode.", "error")
         return permissions.NO, ""
     terminal.end_line()
     terminal.note("Arty's plan:", "accent")
     terminal.err.write(plan.rstrip() + "\n")
-    while True:
-        answer = input(terminal.paint(PLAN_QUESTION, "accent")).strip().lower()
-        if answer in PLAN_ANSWERS:
-            break
-    if PLAN_ANSWERS[answer] != permissions.NO:
-        return PLAN_ANSWERS[answer], ""
+    choice, by = terminal.answer(PLAN_QUESTION, PLAN_ANSWERS, "Approve the plan?", plan)
+    if choice != permissions.NO or by or not is_interactive():
+        return choice, ""
     return permissions.NO, input(terminal.paint(PLAN_FEEDBACK_QUESTION, "accent")).strip()
 
 
@@ -215,6 +229,8 @@ def parse_arguments(argv):
     parser.add_argument("--permission-mode", choices=permissions.MODES, default=permissions.DEFAULT,
                         help="how much to ask first (allow-all asks nothing: only in a throwaway folder)")
     parser.add_argument("--auto-edit", action="store_true", help="same as --permission-mode auto-edit")
+    parser.add_argument("--remote", action="store_true",
+                        help="share the chat with Arty on your phone or starfire.ai from the start (same as /remote)")
     parser.add_argument("--version", action="version", version=f"arty-cli {__version__}")
     return parser.parse_args(argv)
 
@@ -365,6 +381,7 @@ class Session:
         self.compacted_in_turn = False
         self.choices = None
         self.turns = []
+        self.remote = None
         self.messages = saved.messages or self.fresh()
 
     def fresh(self) -> list[dict]:
@@ -411,19 +428,23 @@ class Session:
         self.turns.append(Turn(self.turn_start, len(self.workspace.checkpoints), text, content))
         done = []
         try:
-            agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=done,
-                           squeeze=self.squeeze, extras=self.extras)
+            with self.running(remote.IN_TURN):
+                agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=done,
+                               squeeze=self.squeeze, extras=self.extras)
         except KeyboardInterrupt:
-            self.abandon_turn(done, "Stopped.")
+            self.abandon_turn(done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
             return False
         except providers.ERRORS as error:
             self.abandon_turn(done, f"{error} Ask again when it's back.")
             return False
+        finally:
+            self.tell_mode()
         self.terminal.end_line()
         self.remember()
         return True
 
     def abandon_turn(self, done: list[str], reason: str) -> None:
+        self.tell_remote({"type": "error", "text": reason})
         if not done and not self.compacted_in_turn:
             del self.messages[self.turn_start:]
             self.terminal.note(f"{reason} That request was dropped from the conversation.", "error")
@@ -627,6 +648,69 @@ class Session:
             return
         self.gate.mode = mode
         self.terminal.note(f"Mode: {mode}")
+        self.tell_mode()
+
+    def running(self, state: str):
+        return self.remote.waker.during(state) if self.remote else contextlib.nullcontext()
+
+    def tell_remote(self, event: dict) -> None:
+        if self.remote:
+            self.remote.send(event)
+
+    def tell_mode(self) -> None:
+        if self.remote:
+            self.remote.tell_mode(self.gate.mode)
+
+    def switch_remote(self, choice: str) -> None:
+        if not choice:
+            self.start_remote()
+        elif choice == "off":
+            self.stop_remote()
+        else:
+            self.terminal.note(REMOTE_USAGE, "error")
+
+    def start_remote(self) -> None:
+        if self.remote:
+            self.terminal.note(REMOTE_ALREADY_ON)
+            return
+        details = {"name": socket.gethostname(), "folder": self.workspace.root.name, "model": self.client.model,
+                   "mode": self.gate.mode}
+        try:
+            bridge = remote.connect(self.client, details, remote.answer_lines(is_interactive))
+        except (remote.RelayError, *providers.ERRORS) as error:
+            self.terminal.note(f"{error} Remote control stays off.", "error")
+            return
+        self.remote = self.terminal.remote = self.terminal.events = bridge
+        self.terminal.note(REMOTE_ON, "accent")
+
+    def stop_remote(self) -> None:
+        if not self.remote:
+            self.terminal.note(REMOTE_OFF)
+            return
+        bridge, self.remote = self.remote, None
+        self.terminal.remote = self.terminal.events = None
+        bridge.stop()
+        self.show_remote_notices(bridge)
+        self.terminal.note(REMOTE_OFF)
+
+    def show_remote_notices(self, bridge) -> None:
+        for notice in bridge.take_notices():
+            self.terminal.note(notice, "error")
+
+    def run_remote_requests(self) -> None:
+        if not self.remote:
+            return
+        self.show_remote_notices(self.remote)
+        if self.remote.ended:
+            self.stop_remote()
+            return
+        message = self.remote.next_message()
+        while message:
+            self.terminal.note(f"From {message.by}: {message.text}", "accent")
+            self.ask(message.text)
+            if not self.remote:
+                return
+            message = self.remote.next_message()
 
     def show_help(self, custom: dict) -> None:
         for usage, meaning in {**COMMANDS, **SHORTCUTS}.items():
@@ -649,6 +733,7 @@ class Session:
             "/undo": self.undo,
             "/rewind": lambda: self.rewind(rest.strip()),
             "/resume": self.show_resumable,
+            "/remote": lambda: self.switch_remote(rest.strip()),
             "/mcp": self.show_mcp,
             "/skills": self.show_skills,
             "/helpers": self.show_helpers,
@@ -714,6 +799,7 @@ def first_line(session, reader) -> str:
         if not wants_next_mode:
             return kept
         session.gate.mode = prompt_line.next_mode(session.gate.mode)
+        session.tell_mode()
 
 
 def read_request(session, reader) -> str:
@@ -732,11 +818,12 @@ def handle(session: Session, line: str) -> bool:
     elif line.startswith(NOTE_MARK) and len(line) > 1:
         session.add_note(line[1:].strip())
     else:
+        session.tell_remote({"type": "user", "text": line})
         session.ask(line)
     return True
 
 
-def chat(session: Session) -> None:
+def chat(session: Session, share: bool = False) -> None:
     terminal = session.terminal
     terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(f'CLI {__version__}', 'dim')}", "reset")
     terminal.note(f"{session.client.model} · {session.gate.mode} · "
@@ -746,14 +833,26 @@ def chat(session: Session) -> None:
     terminal.note("Ask for anything in this project. /help for commands and shortcuts, Shift+Tab to change mode, "
                   "Ctrl-D to leave.")
     reader = prompt_line.line_reader(is_interactive)
+    if share:
+        session.start_remote()
+    try:
+        talk(session, reader)
+    finally:
+        if session.remote:
+            session.stop_remote()
+
+
+def talk(session: Session, reader) -> None:
     while True:
         try:
-            line = read_request(session, reader)
+            session.run_remote_requests()
+            with session.running(remote.AT_PROMPT):
+                line = read_request(session, reader)
         except EOFError:
-            terminal.end_line()
+            session.terminal.end_line()
             return
         except KeyboardInterrupt:
-            terminal.note("")
+            session.terminal.note("")
             continue
         if line and not handle(session, line):
             return
@@ -822,13 +921,16 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         session = Session(client, workspace, gate, terminal, saved, project_trusted=trusted, extras=loaded)
         session.start_hook(RESUME if saved.messages else STARTUP)
         once = arguments.once or " ".join(arguments.words)
+        if once and arguments.remote:
+            terminal.note(REMOTE_ONLY_IN_CHAT, "error")
+            return FAILED
         if once and arguments.output_format == JSON_OUTPUT:
             return answered_as_json(session, once)
         if once and arguments.output_format == STREAM_JSON_OUTPUT:
             return answered_as_stream(session, once)
         if once:
             return 0 if handle(session, once) is not False and session.messages[-1]["role"] == "assistant" else FAILED
-        chat(session)
+        chat(session, share=arguments.remote)
         return 0
     finally:
         for problem in loaded.close():

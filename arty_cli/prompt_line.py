@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import sys
+import time
 
 from arty_cli import permissions
 
@@ -23,6 +24,7 @@ END_OF_INPUT_KEYS = ("\x1a", "\x04")
 BACKSPACE = "\x08"
 NEW_LINE = "\r\n"
 MAX_HISTORY = 200
+KEY_POLL_SECONDS = 0.03
 
 
 def shown_at_once(text: str) -> None:
@@ -167,9 +169,18 @@ class ConsoleLine:
         self.typed, self.cursor = list(text), len(text)
 
 
+def polled_keys(has_key, key, sleep=time.sleep):
+    def next_key() -> str:
+        while not has_key():
+            sleep(KEY_POLL_SECONDS)
+        return key()
+
+    return next_key
+
+
 def console_keys():
     import msvcrt
-    return msvcrt.getwch
+    return polled_keys(msvcrt.kbhit, msvcrt.getwch)
 
 
 def line_reader(is_interactive):

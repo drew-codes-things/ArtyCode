@@ -90,8 +90,8 @@ These three projects are made to work together, and each one links to the other 
 | Project | What it is | What it does for the other two |
 |---|---|---|
 | [Arty](https://github.com/drew-codes-things/Arty) | The assistant: the brain and its API, tools, memory and voice, plus the desktop, Android, iPhone and Quest apps | Answers for both. Arty CLI and starfire.ai send their chats to Arty's API and use its models and tools. Arty's approve page sends a browser that has no Arty key to starfire.ai |
-| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) (ArtyCode) | Arty in your terminal: a coding agent that reads, edits and runs code in a project, asking first | Talks only to Arty. Logs in with an Arty API key, or by approving the computer in the browser |
-| [starfire.ai](https://github.com/drew-codes-things/starfire.ai) | A web chat dashboard for local and hosted models | Lets you chat with Arty in the browser. Its admin-only **Arty devices** page approves a computer that is logging in (Arty CLI's browser login), lists and turns off approved devices, and makes a new key with a QR code for a phone |
+| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) (ArtyCode) | Arty in your terminal: a coding agent that reads, edits and runs code in a project, asking first | Talks only to Arty. Logs in with an Arty API key, or by approving the computer in the browser. `/remote` shares a chat through Arty's brain so the Arty apps and starfire.ai can follow and steer it |
+| [starfire.ai](https://github.com/drew-codes-things/starfire.ai) | A web chat dashboard for local and hosted models | Lets you chat with Arty in the browser. Its admin-only **Arty devices** page approves a computer that is logging in (Arty CLI's browser login), lists and turns off approved devices, and makes a new key with a QR code for a phone. Its admin-only **Arty CLI** page follows and steers a shared Arty CLI chat |
 
 How to link them:
 
@@ -166,6 +166,7 @@ arty -p "list the TODOs" --output-format json  # ask once, one JSON object back
 arty -p "fix the build" --output-format stream-json  # one JSON line per step as it works
 arty --continue                              # carry on with the last conversation here
 arty --resume <id>                           # an earlier one (/resume lists them)
+arty --remote                                # chat, shared with your phone and starfire.ai (see Remote control)
 ```
 
 `--output-format json` prints nothing while it works and then one line:
@@ -199,6 +200,7 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/review` | Review the uncommitted changes |
 | `/compact` | Swap the conversation for a summary (also done automatically when it gets long) |
 | `/mcp`, `/skills`, `/helpers`, `/hooks` | What's set up of each (below) |
+| `/remote`, `/remote off` | Share this chat with the Arty apps and starfire.ai, or stop sharing (below) |
 | `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/help`, `/exit` | The rest |
 
 `ARTY.md` in the project and in the config folder (notes for every project) are added to what the model is told. The
@@ -222,6 +224,28 @@ on unsummarised.
 When Arty's brain answers 429 or 503 (all its jobs are taken), arty-cli waits and tries again, up to four tries, about
 1, 2 and 4 seconds apart with a little randomness, or as long as the brain's Retry-After asks (up to a minute), showing
 `busy, retrying in N s`.
+
+### Remote control
+
+`/remote` (or starting with `arty --remote`) shares the chat through your Arty brain, so the Arty app on Android or
+iPhone (**More > Computers**) and starfire.ai's admin **Arty CLI** page can follow it and steer it. The computer opens
+no port: it sends what happens to the brain and asks the brain for anything sent back. `/remote off` stops sharing,
+and so does leaving arty-cli.
+
+From another device you can:
+
+- follow the chat as it happens: your requests, Arty's answers, its tool calls and their results;
+- send a request. It runs once the current one is finished, always as a plain request: a `/command`, `!command` or
+  `# note` sent from afar goes to the model as text and is never run here;
+- answer a question with Allow or Deny. The question still shows here as well, the first answer wins, and the other
+  side is told who answered. Allow from afar means yes once: never always, never a saved rule. For a plan it approves
+  the plan and goes back to the default mode, which asks before changes;
+- stop the current request, the same as Ctrl-C here.
+
+The mode can't be changed from afar; the other devices see it when you change it here. Only Arty's own key, or a
+device key whose **Arty CLI** switch is on (off by default; switched on starfire's Arty devices page or the iPhone
+app's device list), can see or steer a shared chat. The brain forgets a shared chat it hasn't heard from for 10
+minutes.
 
 ## Skills
 
@@ -357,6 +381,7 @@ and red. `NO_COLOR`, or output that isn't a terminal, gives plain text.
 - Beta: tested on Debian; the Windows build and `install.ps1` have not been run on Windows yet.
 - `web_fetch` checks that an address is public before connecting; a name whose address changes in between could
   still reach a local one.
+- A request sent from afar while you are typing at the prompt here clears the line you were typing.
 - Not yet: editor (IDE) integration.
 
 ## Tests
