@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from arty_cli import extras as extras_module
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, hooks, mcp, memory, mentions, models,
-                       permissions, prompts, providers, sessions, settings, skills, tools, webfetch)
+                       permissions, prompt_line, prompts, providers, sessions, settings, skills, tools, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -570,8 +570,20 @@ class Session:
         self.terminal.note(f"Model: {choice.model}, kept for next time.")
 
 
-def read_request() -> str:
-    lines = [input(PROMPT)]
+def first_line(session, reader) -> str:
+    if reader is None:
+        return input(PROMPT)
+    kept = ""
+    while True:
+        prompt, width = prompt_line.mode_prompt(session.terminal, session.gate.mode)
+        kept, wants_next_mode = reader.read(prompt, width, kept)
+        if not wants_next_mode:
+            return kept
+        session.gate.mode = prompt_line.next_mode(session.gate.mode)
+
+
+def read_request(session, reader) -> str:
+    lines = [first_line(session, reader)]
     while lines[-1].rstrip().endswith(LINE_CONTINUES):
         lines[-1] = lines[-1].rstrip()[:-1].rstrip()
         lines.append(input(CONTINUATION_PROMPT))
@@ -597,10 +609,12 @@ def chat(session: Session) -> None:
                   f"{session.workspace.root}", "accent")
     if session.gate.mode == permissions.ALLOW_ALL:
         terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
-    terminal.note("Ask for anything in this project. /help for commands and shortcuts, Ctrl-D to leave.")
+    terminal.note("Ask for anything in this project. /help for commands and shortcuts, Shift+Tab to change mode, "
+                  "Ctrl-D to leave.")
+    reader = prompt_line.line_reader(is_interactive)
     while True:
         try:
-            line = read_request()
+            line = read_request(session, reader)
         except EOFError:
             terminal.end_line()
             return

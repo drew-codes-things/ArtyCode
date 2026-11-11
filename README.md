@@ -45,7 +45,11 @@ Every tool result the model sees is cut to 60,000 characters at most.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project
 without asking); `plan` (look and plan only, nothing changed or run; `/plan` switches it); `allow-all` (nothing asked,
-only for a folder you can throw away).
+only for a folder you can throw away). The chat prompt starts with the current mode (`plan ›`), and **Shift+Tab** at
+the prompt moves on to the next one, keeping what you have typed: default, auto-edit, plan, then default again.
+allow-all is never reached that way, only with `/mode allow-all` or the flag. On Linux the prompt uses readline (so
+the arrow keys and history work too); on Windows it reads keys itself and handles typing, Backspace, Delete, the
+left and right arrows, Home, End, and up and down for earlier lines.
 
 ### Look-only commands
 
