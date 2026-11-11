@@ -1,0 +1,65 @@
+import json
+import os
+import stat
+import sys
+
+import pytest
+
+from arty_cli import settings
+
+
+def test_a_fresh_install_uses_the_coder_model_and_is_not_ready(tmp_path):
+    loaded = settings.load(tmp_path / "missing.json", environ={})
+    assert loaded.model == settings.DEFAULT_MODEL
+    assert not loaded.is_ready()
+
+
+def test_the_environment_overrides_the_config_file(tmp_path):
+    path = tmp_path / "config.json"
+    settings.save(settings.Settings(base_url="http://brain.lan:8081/v1", api_key="from-file"), path)
+    loaded = settings.load(path, environ={"ARTY_API_KEY": "from-env", "ARTY_CLI_MODEL": "arty/other"})
+    assert (loaded.base_url, loaded.api_key, loaded.model) == ("http://brain.lan:8081/v1", "from-env", "arty/other")
+    assert loaded.is_ready()
+
+
+def test_a_remote_address_alone_is_enough(tmp_path):
+    loaded = settings.load(tmp_path / "none.json", environ={"ARTY_REMOTE_URL": "https://arty.example/v1", "ARTY_API_KEY": "k"})
+    assert loaded.is_ready()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_the_saved_config_is_private(tmp_path):
+    path = settings.save(settings.Settings(api_key="secret"), tmp_path / "deep" / "config.json")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_windows_keeps_the_config_in_appdata():
+    folder = settings.config_dir(environ={"APPDATA": r"C:\Users\me\AppData\Roaming"}, platform="win32")
+    assert str(folder).endswith("arty-cli")
+    assert "Roaming" in str(folder)
+
+
+def test_linux_follows_xdg_config_home():
+    folder = settings.config_dir(environ={"XDG_CONFIG_HOME": "/tmp/cfg"}, platform="linux")
+    assert str(folder) == os.path.join("/tmp/cfg", "arty-cli")
+
+
+def test_a_broken_config_file_says_where_it_is(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("{not json")
+    with pytest.raises(settings.SettingsError, match=str(path).replace("\\", "\\\\")):
+        settings.load(path, environ={})
+
+
+ARTY_ONLY_FIELDS = {"base_url", "remote_url", "api_key", "access_client_id", "access_client_secret", "model"}
+
+
+def test_unknown_keys_in_a_saved_config_are_ignored_and_dropped_on_the_next_save(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"base_url": "http://brain.lan:8081/v1", "api_key": "k", "provider": "other",
+                                "other_api_key": "old-a", "other_model": "big-model", "web_search": "on"}))
+    loaded = settings.load(path, environ={"ARTY_CLI_PROVIDER": "other", "OTHER_API_KEY": "env-a"})
+    assert loaded.is_ready()
+    assert all(secret not in repr(loaded) for secret in ("old-a", "env-a"))
+    settings.remember(path, model="arty/qwen3:14b")
+    assert set(json.loads(path.read_text())) == ARTY_ONLY_FIELDS
