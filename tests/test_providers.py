@@ -158,3 +158,12 @@ def test_browser_login_over_plain_http_to_a_public_address_is_refused(monkeypatc
     monkeypatch.setattr(cli.authorise, "start", lambda url, headers, name="": started.append(url))
     login_with(monkeypatch, tmp_path, ["2"], [], expected=cli.FAILED, ARTY_URL="http://8.8.8.8:8081/v1")
     assert started == [] and "https" in capsys.readouterr().err
+
+
+def test_resume_lists_this_projects_conversations_and_how_to_carry_one_on(connected, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO("hello there\n/resume\n/exit\n"))
+    cli.main([])
+    shown = capsys.readouterr().err
+    listed = [line for line in shown.splitlines() if "hello there" in line and not line.startswith("›")]
+    assert listed
+    assert "Carry on with: arty-cli --resume <id>" in shown

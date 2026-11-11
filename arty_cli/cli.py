@@ -425,7 +425,7 @@ class Session:
         for entry in listed[:20]:
             self.terminal.note(f"{entry.id}  {entry.first_request}")
         if listed:
-            self.terminal.note("Carry one on with: arty-cli --resume <id>")
+            self.terminal.note("Carry on with: arty-cli --resume <id>")
 
     def show_mcp(self) -> None:
         hub = self.extras.hub
