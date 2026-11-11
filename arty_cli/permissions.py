@@ -61,8 +61,10 @@ PATH_TOOLS = ("read_file", "write_file", "edit_file", "multi_edit", "notebook_ed
 PLAN_REFUSAL = ("Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan "
                 "step by step with present_plan so the user can approve it and switch plan mode off.")
 PLAN_TOOL = "present_plan"
-PLAN_APPROVED = ("The user approved the plan. Plan mode is off (mode: {mode}), so carry it out now, step by step, "
-                 "and say what you changed.")
+PLAN_APPROVED_LEAD = "The user approved the plan."
+PLAN_APPROVED = (PLAN_APPROVED_LEAD + " Nothing has been changed yet: anything you tried while plan mode was on was "
+                 "refused. Plan mode is off now (mode: {mode}), so carry the plan out with your tools, step by step, "
+                 "and then say what you changed.")
 PLAN_REJECTED = "The user rejected the plan and plan mode is still on: change nothing yet."
 PLAN_FEEDBACK = " Their feedback: {feedback}. Look again if you need to, then present a new plan."
 PLAN_NO_FEEDBACK = " They didn't say why; ask what they'd like changed."

@@ -692,3 +692,25 @@ def test_an_unknown_helper_name_is_an_error_and_no_helpers_means_no_tool(tmp_pat
     result = [m["content"] for m in scripted.main[1]["messages"] if m["role"] == "tool"][0]
     assert result.startswith("Error") and "reviewer" in result
     assert "helper" not in [d["function"]["name"] for d in agent.offered_definitions(extras.NONE)]
+
+
+def test_a_model_that_claims_the_work_after_approval_without_changing_anything_is_sent_back_once(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(
+        ("", [call("read_file", path="a.py")]),
+        ("", [call("edit_file", "e0", path="a.py", old_text="x = 1", new_text="x = 2")]),
+        ("", [call("present_plan", "p1", plan="1. Change x to 2")]),
+        ("I changed a.py: x is now 2.", []),
+        ("", [call("edit_file", "e1", path="a.py", old_text="x = 1", new_text="x = 2")]),
+        ("Changed x to 2.", []),
+    )
+    gate = permissions.Gate(workspace, lambda q, p="": "y", mode=permissions.PLAN)
+    gate.review = lambda plan: (permissions.YES, "")
+    messages = [{"role": "user", "content": "plan it"}]
+    answer = agent.run_turn(messages, scripted, workspace, gate, Screen())
+    assert (tmp_path / "a.py").read_text() == "x = 2\n"
+    assert answer == "Changed x to 2."
+    approval = [m["content"] for m in messages if m["role"] == "tool"][2]
+    assert "Nothing has been changed yet" in approval
+    assert sum(m["content"] == agent.NOTHING_CHANGED_YET for m in messages if m["role"] == "user") == 1

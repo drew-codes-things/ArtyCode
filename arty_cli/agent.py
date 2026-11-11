@@ -26,6 +26,8 @@ STOP_HOOK_LEAD = "A Stop hook asked you to carry on:"
 MAX_STOP_CONTINUES = 3
 SUBAGENT_STOP_LEAD = "A SubagentStop hook asked you to carry on:"
 EXPLORE_NAME = "explore"
+NOTHING_CHANGED_YET = ("You haven't changed anything since the plan was approved; the earlier attempts were refused. "
+                       "Make the changes with your tools now, then say what you changed.")
 HELPER_TOOL = "helper"
 HELPER_ROLE = ("You are a helper inside arty-cli, called by the main agent for one job. Do it with your tools, then "
                "reply briefly with what you found or did, naming files and line numbers.")
@@ -281,6 +283,11 @@ def results_of(calls: list[dict], helpers: Helpers, can_explore: bool, done: lis
     return results
 
 
+def is_approval(call: dict, result: str) -> bool:
+    named = (call.get("function") or {}).get("name") == permissions.PLAN_TOOL
+    return named and result.startswith(permissions.PLAN_APPROVED_LEAD)
+
+
 def tell(screen, event: str, *details) -> None:
     shown = getattr(screen, event, None)
     if shown is not None:
@@ -313,6 +320,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
     done = [] if done is None else done
     helpers = Helpers(brain, workspace, gate, screen, extras)
     recent, continued, steered_from, nudged = [], 0, None, False
+    approved_with, reminded = None, False
     for _round in range(MAX_ROUNDS + 1):
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
@@ -323,6 +331,10 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         calls = reply.get("tool_calls") or []
         if not calls:
             messages.append({"role": "assistant", "content": content})
+            if approved_with is not None and not reminded and len(done) == approved_with:
+                reminded = True
+                messages.append({"role": "user", "content": NOTHING_CHANGED_YET})
+                continue
             if not nudged and offered and announces_a_next_step(content):
                 nudged = True
                 messages.append({"role": "user", "content": DO_IT_NOW})
@@ -337,6 +349,8 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         for call, result in zip(calls, results_of(calls, helpers, can_explore, done, extras)):
             messages.append({"role": "tool", "tool_call_id": call.get("id") or "", "content": result})
             tell(screen, "show_tool_result", call, result)
+            if is_approval(call, result):
+                approved_with = len(done)
         if squeeze:
             squeeze(messages)
         signature = signature_of(calls)
