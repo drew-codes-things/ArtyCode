@@ -7,7 +7,7 @@ import os
 import socket
 import sys
 import webbrowser
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -38,6 +38,7 @@ HOOK_CONTEXT_LEAD = "(Added by a hook:)"
 START_CONTEXT_LEAD = "(Added by a SessionStart hook:)"
 MANUAL, AUTOMATIC = "manual", "auto"
 STARTUP, RESUME, CLEAR = "startup", "resume", "clear"
+MAX_TURN_CHARS = 80
 PERMISSION_PROMPT, PLAN_APPROVAL = "permission_prompt", "plan_approval"
 NOTIFICATION_LEADS = {PERMISSION_PROMPT: "Arty CLI needs your permission",
                       PLAN_APPROVAL: "Arty CLI has a plan for you to approve"}
@@ -61,6 +62,7 @@ COMMANDS = {
     "/hooks": "hooks that run on events",
     "/compact": "replace the conversation with a summary to free up room",
     "/undo": "put back the last file change Arty made (again for the one before)",
+    "/rewind [number]": "list your requests, or go back to before one, putting back the files changed since",
     "/clear": "start a fresh conversation",
     "/resume": "list this project's earlier conversations",
     "/exit": "leave (Ctrl-D works too)",
@@ -334,6 +336,18 @@ def project_notes_allowed(workspace, personal: Path, terminal: Terminal) -> bool
     return False
 
 
+@dataclass(frozen=True)
+class Turn:
+    index: int
+    checkpoints: int
+    text: str
+    content: object
+
+
+def changes_after(count: int) -> str:
+    return f" ({count} file change{'' if count == 1 else 's'} after it)" if count else ""
+
+
 class Session:
     def __init__(self, client, workspace, gate, terminal, saved, project_trusted=True, extras=None):
         self.client = client
@@ -347,6 +361,7 @@ class Session:
         self.turn_start = 0
         self.compacted_in_turn = False
         self.choices = None
+        self.turns = []
         self.messages = saved.messages or self.fresh()
 
     def fresh(self) -> list[dict]:
@@ -388,7 +403,9 @@ class Session:
         if allowed is None:
             return False
         self.turn_start, self.compacted_in_turn = len(self.messages), False
-        self.messages.append({"role": "user", "content": mentions.expand(allowed, self.workspace)})
+        content = mentions.expand(allowed, self.workspace)
+        self.messages.append({"role": "user", "content": content})
+        self.turns.append(Turn(self.turn_start, len(self.workspace.checkpoints), text, content))
         done = []
         try:
             agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=done,
@@ -413,6 +430,46 @@ class Session:
         self.remember()
         self.terminal.note(f"{reason} What already ran is noted in the conversation.", "error")
 
+    def kept_turns(self) -> list[Turn]:
+        return [turn for turn in self.turns if turn.index < len(self.messages)
+                and self.messages[turn.index].get("role") == "user"
+                and self.messages[turn.index].get("content") == turn.content]
+
+    def rewind(self, choice: str) -> None:
+        turns = self.kept_turns()
+        if not choice:
+            self.list_turns(turns)
+            return
+        if not choice.isdigit() or not 1 <= int(choice) <= len(turns):
+            self.terminal.note(f"No request {choice}; /rewind lists them.", "error")
+            return
+        number = int(choice)
+        turn = turns[number - 1]
+        self.files_back_to(turn.checkpoints)
+        del self.messages[turn.index:]
+        self.turns = turns[:number - 1]
+        self.remember()
+        self.terminal.note(f"Went back to before request {number}. You asked: {turn.text}", "green")
+
+    def list_turns(self, turns: list[Turn]) -> None:
+        if not turns:
+            self.terminal.note("No requests to go back to since arty-cli started (or since /clear or a summary).")
+            return
+        for number, turn in enumerate(turns, 1):
+            first_line = turn.text.strip().splitlines()[0] if turn.text.strip() else ""
+            undone = len(self.workspace.checkpoints) - turn.checkpoints
+            self.terminal.note(f"{number}. {first_line[:MAX_TURN_CHARS]}{changes_after(undone)}")
+        self.terminal.note("Go back to before one with /rewind <number>.")
+
+    def files_back_to(self, checkpoints: int) -> None:
+        while len(self.workspace.checkpoints) > checkpoints:
+            outcome = self.workspace.undo_last()
+            undone = outcome.startswith("Undid")
+            self.terminal.note(outcome if undone else f"{outcome} Stopped putting files back there.",
+                               "green" if undone else "error")
+            if not undone:
+                return
+
     def start_hook(self, source: str) -> None:
         outcome = self.extras.hook("SessionStart", {"source": source}, source)
         for problem in outcome.problems:
@@ -425,6 +482,7 @@ class Session:
 
     def clear(self) -> None:
         self.messages = self.fresh()
+        self.turns = []
         self.start_hook(CLEAR)
         self.terminal.note("Fresh conversation.")
 
@@ -456,6 +514,7 @@ class Session:
         self.terminal.note("The conversation is long, so it's being summarised before the next step.")
         summary = self.summary_of(messages, instructions)
         messages[:] = self.fresh() + [{"role": "user", "content": f"{SUMMARY_LEAD}\n{summary}\n\n{CARRY_ON}"}]
+        self.turns = []
         self.turn_start, self.compacted_in_turn = len(messages) - 1, True
         self.remember()
 
@@ -466,6 +525,7 @@ class Session:
         summary = self.summary_of(self.messages, instructions)
         self.messages = self.fresh() + [{"role": "user", "content": f"{SUMMARY_LEAD}\n{summary}"},
                                         {"role": "assistant", "content": SUMMARY_ACK}]
+        self.turns = []
         self.remember()
         return True
 
@@ -577,6 +637,7 @@ class Session:
             "/memory": self.show_memory,
             "/compact": lambda: self.compact() and self.terminal.note("Summarised."),
             "/undo": self.undo,
+            "/rewind": lambda: self.rewind(rest.strip()),
             "/resume": self.show_resumable,
             "/mcp": self.show_mcp,
             "/skills": self.show_skills,

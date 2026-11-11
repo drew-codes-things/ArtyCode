@@ -191,6 +191,7 @@ Notes and questions still go to standard error, so standard output is only the J
 | `!command` | Run a command yourself; the model sees the output |
 | `line \` | Carry on typing on the next line |
 | `/undo` | Put back the last file change Arty made (again for the one before); a file Arty created is removed. Refused if the file changed again since |
+| `/rewind` | A numbered list of your requests since arty-cli started (or since `/clear` or a summary), with how many file changes going back would undo. `/rewind 2` drops request 2 and everything after it from the conversation and puts back the files Arty changed since, newest first, using `/undo`'s snapshots; a file you changed yourself since is left alone and the rewind of files stops there |
 | `/model` | A numbered list of every model downloaded on your Arty brain. The current one is marked with ● |
 | `/model <number or name>` | Switch to that model (`/model 3`, `/model arty/qwen2.5:72b`). Remembered for next time |
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |

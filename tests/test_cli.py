@@ -659,3 +659,59 @@ def test_the_terminal_shows_the_plan_and_asks_for_approval_or_feedback(monkeypat
     assert terminal.review_plan("1. Do the thing") == (cli.permissions.ALWAYS, "")
     monkeypatch.setattr(cli, "is_interactive", lambda: False)
     assert terminal.review_plan("1. Do the thing")[0] == cli.permissions.NO
+
+
+class TwoEditsBrain(FakeBrain):
+    steps = {}
+
+    def reply(self, messages, tools, on_text):
+        self.calls.append([dict(m) for m in messages])
+        latest = user_texts(messages)[-1]
+        planned = {"change it": ("x = 1", "x = 2"), "again": ("x = 2", "x = 3")}.get(latest)
+        if planned and messages[-1]["role"] == "user":
+            arguments = {"path": "a.py", "old_text": planned[0], "new_text": planned[1]}
+            calls = [{"id": "r", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}},
+                     {"id": "e", "type": "function", "function": {"name": "edit_file", "arguments": json.dumps(arguments)}}]
+            return {"role": "assistant", "content": "", "tool_calls": calls}
+        return super().reply(messages, tools, on_text)
+
+
+def test_slash_rewind_lists_requests_and_goes_back_to_before_one_with_its_files(ready, monkeypatch, capsys):
+    (ready / "a.py").write_text("x = 1\n")
+    monkeypatch.setattr(cli.brain, "Brain", TwoEditsBrain)
+    monkeypatch.setattr("sys.stdin", io.StringIO("change it\nagain\n/rewind\n/rewind 2\nnext\n/exit\n"))
+    assert cli.main(["--permission-mode", "auto-edit"]) == 0
+    err = capsys.readouterr().err
+    assert "1. change it" in err and "2. again (1 file change after it)" in err
+    assert (ready / "a.py").read_text() == "x = 2\n"
+    last = user_texts(FakeBrain.made[0].calls[-1])
+    assert "change it" in last and "again" not in last and last[-1] == "next"
+    assert "You asked: again" in err
+
+
+def test_rewinding_to_the_first_request_puts_every_file_back(ready, monkeypatch, capsys):
+    (ready / "a.py").write_text("x = 1\n")
+    monkeypatch.setattr(cli.brain, "Brain", TwoEditsBrain)
+    monkeypatch.setattr("sys.stdin", io.StringIO("change it\nagain\n/rewind 1\n/rewind 5\nhello\n/exit\n"))
+    cli.main(["--permission-mode", "auto-edit"])
+    assert (ready / "a.py").read_text() == "x = 1\n"
+    assert user_texts(FakeBrain.made[0].calls[-1]) == ["hello"]
+    err = capsys.readouterr().err
+    assert "You asked: change it" in err and "No request 5" in err
+
+
+def test_a_file_changed_by_hand_after_arty_is_not_overwritten_by_a_rewind(ready, monkeypatch, capsys):
+    (ready / "a.py").write_text("x = 1\n")
+    monkeypatch.setattr(cli.brain, "Brain", TwoEditsBrain)
+    lines = iter(["change it", "/rewind 1", "/exit"])
+
+    def typed(prompt=""):
+        line = next(lines)
+        if line == "/rewind 1":
+            (ready / "a.py").write_text("x = 99\n")
+        return line
+
+    monkeypatch.setattr(cli, "read_request", lambda session, reader: typed())
+    cli.main(["--permission-mode", "auto-edit"])
+    assert (ready / "a.py").read_text() == "x = 99\n"
+    assert "changed again" in capsys.readouterr().err
