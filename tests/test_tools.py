@@ -337,6 +337,25 @@ def test_reading_a_huge_file_stops_at_a_size_limit_and_says_where_to_go_on(tmp_p
     assert f"offset={last + 1}" in shown.splitlines()[-1]
 
 
+def test_a_zero_or_negative_limit_reads_the_default_amount(tmp_path):
+    (tmp_path / "three.txt").write_text("one\ntwo\nthree\n")
+    workspace = tools.Workspace(tmp_path)
+    assert tools.read_file(workspace, "three.txt", limit=0).splitlines() == ["1\tone", "2\ttwo", "3\tthree"]
+    assert len(tools.read_file(workspace, "three.txt", limit=-4).splitlines()) == 3
+
+
+def test_a_partial_read_says_how_many_lines_are_left(tmp_path):
+    (tmp_path / "three.txt").write_text("one\ntwo\nthree\n")
+    shown = tools.read_file(tools.Workspace(tmp_path), "three.txt", limit=1).splitlines()
+    assert shown[0] == "1\tone"
+    assert shown[-1] == "... 2 more lines; read on with offset=2"
+
+
+def test_a_whole_read_has_no_more_lines_note(tmp_path):
+    (tmp_path / "three.txt").write_text("one\ntwo\nthree\n")
+    assert "more lines" not in tools.read_file(tools.Workspace(tmp_path), "three.txt", offset=2, limit=5)
+
+
 def test_search_output_has_a_size_limit(tmp_path):
     for number in range(50):
         (tmp_path / f"f{number}.txt").write_text(("match " + "z" * 1990 + "\n") * 3)

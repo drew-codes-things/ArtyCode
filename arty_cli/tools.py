@@ -243,7 +243,7 @@ def read_file(workspace, path, offset=1, limit=DEFAULT_READ_LINES):
     workspace.note_seen(target, whole)
     lines = whole.splitlines()
     start = max(int(offset), 1)
-    chosen = lines[start - 1:start - 1 + max(int(limit), 1)]
+    chosen = lines[start - 1:start - 1 + line_count(limit)]
     if not chosen and lines:
         raise ToolError(f"{path} has only {len(lines)} lines")
     shown, used = [], 0
@@ -251,10 +251,19 @@ def read_file(workspace, path, offset=1, limit=DEFAULT_READ_LINES):
         entry = f"{number}\t{line[:MAX_LINE_CHARS]}"
         if shown and used + len(entry) > MAX_READ_CHARS:
             shown.append(f"... stopped at about {MAX_READ_CHARS} characters; read on with offset={number}")
-            break
+            return "\n".join(shown)
         shown.append(entry)
         used += len(entry) + 1
+    next_line = start + len(chosen)
+    lines_left = len(lines) - (next_line - 1)
+    if lines_left > 0:
+        shown.append(f"... {lines_left} more lines; read on with offset={next_line}")
     return "\n".join(shown)
+
+
+def line_count(limit) -> int:
+    asked = int(limit)
+    return asked if asked > 0 else DEFAULT_READ_LINES
 
 
 def edited_text(before: str, old_text: str, new_text: str, replace_all: bool) -> str:
