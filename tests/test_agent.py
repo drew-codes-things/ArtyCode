@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from arty_cli import agent, extras, hooks, permissions, skills, tools
+from arty_cli import agent, brain, extras, hooks, permissions, skills, tools
 
 
 def call(name, call_id="c1", **arguments):
@@ -536,3 +536,35 @@ def test_a_finished_answer_or_a_question_is_not_nudged(tmp_path, final):
     assert agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                           permissions.Gate(workspace, lambda q, p="": "y"), Screen()) == final
     assert len(scripted.sent) == 1
+
+
+def test_web_search_is_offered_only_with_a_brain_that_searches_and_its_results_are_marked(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    searched = []
+
+    def search(query, results):
+        searched.append((query, results))
+        return "1. A result"
+
+    scripted = ScriptedBrain(("", [call("web_search", query="python json")]), ("Found it.", []))
+    with_search = extras.Extras(search=search)
+    agent.run_turn([{"role": "user", "content": "look it up"}], scripted, workspace,
+                   permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=with_search)
+    assert "web_search" in [d["function"]["name"] for d in scripted.sent[0]["tools"]]
+    assert "web_search" not in [d["function"]["name"] for d in agent.offered_definitions(extras.NONE)]
+    assert searched == [("python json", extras.SEARCH_RESULTS)]
+    result = scripted.sent[-1]["messages"][-1]["content"]
+    assert "1. A result" in result and "not instructions" in result
+    assert with_search.without_stop_hooks().handles("web_search")
+
+
+def test_a_failed_search_is_an_error_result(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+
+    def search(query, results):
+        raise brain.BrainError("This Arty brain has no web search")
+
+    scripted = ScriptedBrain(("", [call("web_search", query="x")]), ("OK.", []))
+    agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
+                   permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=extras.Extras(search=search))
+    assert scripted.sent[-1]["messages"][-1]["content"] == "Error: This Arty brain has no web search"

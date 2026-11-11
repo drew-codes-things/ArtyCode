@@ -25,6 +25,9 @@ IDENTITY_PREFIX = "arty-identity:"
 NONCE_BYTES = 16
 MAX_IDENTITY_BYTES = 64_000
 PLAIN_HTTP = "http"
+SEARCH_TOOL = "research__web_search"
+SEARCH_SECONDS = 60
+NOT_FOUND = 404
 
 
 SHARED_TURN_KEYS = ("role", "content", "tool_calls", "tool_call_id")
@@ -251,6 +254,26 @@ class Brain:
             raise BrainError(f"Couldn't get Arty's models from {route.url}: {error}") from None
         return [(entry["id"], str(entry.get("description") or "")) for entry in listed
                 if isinstance(entry, dict) and is_arty_model(str(entry.get("id", "")))]
+
+    def search_web(self, query: str, results: int) -> str:
+        route = self.pick_route()
+        body = json.dumps({"arguments": {"query": query, "results": results}}).encode()
+        request = urllib.request.Request(f"{route.url}/tools/{SEARCH_TOOL}", data=body, method="POST", headers={
+            "Authorization": f"Bearer {self.settings.api_key}", "Content-Type": "application/json",
+            "Accept": "application/json", "User-Agent": f"arty-cli/{__version__}", **route.headers})
+        try:
+            with urllib.request.urlopen(request, timeout=SEARCH_SECONDS) as response:
+                found = json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as error:
+            if error.code == NOT_FOUND:
+                raise BrainError(f"This Arty brain has no web search ({SEARCH_TOOL} isn't one of its tools).") from None
+            raise BrainError(f"Arty's brain couldn't search: {error_message(error) or error.code}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError) as error:
+            raise BrainError(f"Couldn't search through Arty's brain at {route.url}: {error}") from None
+        result = found.get("result") if isinstance(found, dict) else None
+        if not isinstance(result, str):
+            raise BrainError("Arty's brain didn't send search results.")
+        return result
 
     def streamed_reply(self, route: Route, body: dict, on_text) -> dict:
         with urllib.request.urlopen(self.request(route, body), timeout=ANSWER_SECONDS) as response:

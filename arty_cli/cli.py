@@ -667,7 +667,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         gate.rule_file = project_rule_file(workspace, terminal)
     for problem in problems:
         terminal.note(problem, "error")
-    loaded = session_extras(workspace, trusted, terminal)
+    loaded = session_extras(workspace, trusted, terminal, client.search_web)
     try:
         session = Session(client, workspace, gate, terminal, saved, project_trusted=trusted, extras=loaded)
         once = arguments.once or " ".join(arguments.words)
@@ -726,7 +726,7 @@ def answered_as_stream(session: Session, request: str) -> int:
     return 0 if answered else FAILED
 
 
-def session_extras(workspace, trusted: bool, terminal: Terminal):
+def session_extras(workspace, trusted: bool, terminal: Terminal, search):
     personal = settings.config_dir()
     found_hooks, problems = hooks.load(personal, workspace, trusted)
     wanted, trouble = mcp.configs(personal, workspace, trusted)
@@ -737,7 +737,8 @@ def session_extras(workspace, trusted: bool, terminal: Terminal):
         problems += hub.start(wanted)
     for problem in problems:
         terminal.note(problem, "error")
-    return extras_module.Extras(hooks=found_hooks, skills=skills.find(personal, workspace, trusted), hub=hub)
+    return extras_module.Extras(hooks=found_hooks, skills=skills.find(personal, workspace, trusted), hub=hub,
+                                search=search)
 
 
 if __name__ == "__main__":

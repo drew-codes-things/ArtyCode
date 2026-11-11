@@ -238,3 +238,50 @@ def test_a_reply_without_offered_tools_is_left_as_text(monkeypatch):
     monkeypatch.setattr(arty, "streamed_reply",
                         lambda route, body, on_text: {"role": "assistant", "content": written, "tool_calls": []})
     assert arty.reply([{"role": "user", "content": "hi"}], [], lambda text: None)["content"] == written
+
+
+class SearchingBrain(BaseHTTPRequestHandler):
+    seen = []
+    answer = (200, {"result": "1. Python docs\n   https://docs.python.org\n   The docs"})
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        SearchingBrain.seen.append({"path": self.path, "headers": self.headers, "body": body})
+        status, answer = SearchingBrain.answer
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(answer).encode())
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def searching():
+    SearchingBrain.seen = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SearchingBrain)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield brain.Brain(settings.Settings(base_url=unused_port_url(), remote_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+                                        api_key="key", access_client_id="id.access", access_client_secret="secret"))
+    server.shutdown()
+
+
+def test_a_web_search_uses_the_brains_own_search_tool(searching):
+    assert searching.search_web("python json", 4) == SearchingBrain.answer[1]["result"]
+    request = SearchingBrain.seen[0]
+    assert request["path"] == "/v1/tools/research__web_search"
+    assert request["body"] == {"arguments": {"query": "python json", "results": 4}}
+    assert request["headers"]["Authorization"] == "Bearer key"
+    assert request["headers"]["CF-Access-Client-Id"] == "id.access"
+
+
+@pytest.mark.parametrize("answer, problem", [
+    ((404, {"error": {"message": "unknown tool research__web_search"}}), "no web search"),
+    ((500, {"error": {"message": "boom"}}), "boom"),
+    ((200, {"nothing": "here"}), "didn't send search results"),
+])
+def test_a_search_the_brain_cannot_do_says_why(searching, monkeypatch, answer, problem):
+    monkeypatch.setattr(SearchingBrain, "answer", answer)
+    with pytest.raises(brain.BrainError, match=problem):
+        searching.search_web("python json", 4)

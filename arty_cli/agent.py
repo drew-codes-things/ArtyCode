@@ -98,7 +98,7 @@ class Helpers:
         helper_gate.approved_servers = self.gate.approved_servers
         messages = [{"role": "system", "content": EXPLORER_PROMPT}, {"role": "user", "content": task}]
         answer = run_turn(messages, self.brain, self.workspace, helper_gate, Quiet(self.screen, self.lock),
-                          offered=explorer_definitions(), can_explore=False, extras=self.extras, stop_hooks=False,
+                          offered=explorer_definitions() + self.extras.definitions(), can_explore=False, extras=self.extras, stop_hooks=False,
                           stopped=self.stopped)
         return answer[:MAX_EXPLORE_ANSWER_CHARS] or "The helper found nothing to report."
 

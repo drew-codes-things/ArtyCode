@@ -32,6 +32,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a long build); background commands end when arty-cli does | No |
 | `todo_write` | A checklist for jobs with several steps, shown as it goes (`/todos`) | No |
 | `web_fetch` | Read a public web page (documentation, an issue), marked as information rather than instructions | Yes, once per site with **a** |
+| `web_search` | Search the web through your Arty brain's own search (its `research__web_search` tool, so no other search key is needed); titles, links and snippets, marked as information rather than instructions. Helpers can search too | Yes, once per session with **a** (also in plan mode, since it changes nothing) |
 | `explore` | A helper with its own fresh conversation that looks through the project and reports back; up to four run at once | It can only look |
 | `skill` | Loads one of your skills (below) when the job matches it | No |
 | `mcp__<server>__<tool>` | Tools from your MCP servers (below) | The first use of each server asks; after that, tools the server marks read-only don't, the others do |

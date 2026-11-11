@@ -16,6 +16,9 @@ class FakeBrain:
     def address(self):
         return "brain"
 
+    def search_web(self, query, results):
+        return f"Results for {query}"
+
     def reply(self, messages, tools, on_text):
         self.calls.append([dict(m) for m in messages])
         on_text("arty here.")

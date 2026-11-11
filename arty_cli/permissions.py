@@ -47,6 +47,7 @@ QUOTES = "'\""
 READING_TOOLS = ("read_file", "list_files", "search")
 FREE_TOOLS = ("command_output", "stop_command", "todo_write")
 EDITS = "edits"
+WEB_SEARCH = "web_search"
 DEFAULT, AUTO_EDIT, PLAN, ALLOW_ALL = "default", "auto-edit", "plan", "allow-all"
 MODES = (DEFAULT, AUTO_EDIT, PLAN, ALLOW_ALL)
 REFUSED = "The user didn't allow that, so it wasn't done. Don't try another way round it; say so and ask what they'd like."
@@ -218,6 +219,8 @@ def call_target(workspace, name: str, arguments: dict) -> str:
         return str(arguments.get("command") or "").strip()
     if name == "web_fetch":
         return str(arguments.get("url") or "")
+    if name == WEB_SEARCH:
+        return str(arguments.get("query") or "")
     return ""
 
 
@@ -347,7 +350,7 @@ class Gate:
         return self.rules.allows(name, call_target(self.workspace, name, arguments))
 
     def changes_things(self, name: str, arguments: dict) -> bool:
-        if name in READING_TOOLS or name in FREE_TOOLS or name == "web_fetch":
+        if name in READING_TOOLS or name in FREE_TOOLS or name in ("web_fetch", WEB_SEARCH):
             return False
         if name == "run_command":
             return not is_read_only_command(str(arguments.get("command", ""))) or bool(arguments.get("background"))
@@ -427,6 +430,8 @@ class Gate:
             return self.confirm(f"Read outside the project: {arguments.get('path')}?")
         if name == "web_fetch":
             return self.check_fetch(str(arguments.get("url", "")))
+        if name == WEB_SEARCH:
+            return self.check_search(str(arguments.get("query", "")))
         if name in tools.CHANGING_TOOLS:
             return PLAN_REFUSAL if self.mode == PLAN else self.check_change(name, arguments)
         if name == "run_command":
@@ -472,6 +477,11 @@ class Gate:
         if site and f"site:{site}" in self.always:
             return None
         return self.confirm(f"Fetch {url}?", remember=f"site:{site}" if site else "", rule=site_rule(url))
+
+    def check_search(self, query: str) -> str | None:
+        if WEB_SEARCH in self.always:
+            return None
+        return self.confirm(f"Search the web for: {query}?", remember=WEB_SEARCH, rule=WEB_SEARCH)
 
     def check_change(self, name: str, arguments: dict) -> str | None:
         preview = diff_preview(self.workspace, name, arguments)

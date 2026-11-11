@@ -425,3 +425,18 @@ def test_a_multi_edit_asks_once_and_shows_the_whole_diff(workspace):
     assert "+x = 2" in preview and "+y = 2" in preview
     assert not permissions.Gate(workspace, Asker(), mode=permissions.PLAN).allows("multi_edit", {"path": "a.py",
                                                                                                 "edits": edits})
+
+
+def test_a_web_search_asks_once_shows_the_query_and_is_fine_in_plan_mode(workspace):
+    ask = Asker("a")
+    gate = permissions.Gate(workspace, ask, mode=permissions.PLAN)
+    assert gate.allows("web_search", {"query": "python json"})
+    assert gate.allows("web_search", {"query": "something else"})
+    assert ask.questions == [("Search the web for: python json?", "")]
+
+
+def test_a_deny_rule_can_forbid_some_searches(workspace):
+    gate = permissions.Gate(workspace, Asker("y"))
+    gate.rules = permissions.Rules(deny=["web_search(*password*)"])
+    assert not gate.allows("web_search", {"query": "my password"})
+    assert gate.allows("web_search", {"query": "python json"})

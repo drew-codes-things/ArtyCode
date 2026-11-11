@@ -21,6 +21,9 @@ class ListingBrain:
     def address(self):
         return "brain"
 
+    def search_web(self, query, results):
+        return f"Results for {query}"
+
     def available_models(self):
         if ListingBrain.broken:
             raise providers.ProviderError("the brain is down")
