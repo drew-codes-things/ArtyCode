@@ -8,7 +8,7 @@ import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 from arty_cli import __version__, retry
 from arty_cli import settings as settings_module
@@ -27,6 +27,11 @@ UNREACHABLE_REASON = "can't reach it"
 DEVICE_KEY_PREFIX = "arty_dev_"
 LIST_SECONDS = 30
 MODEL_PREFIX = "arty/"
+OWN_MODEL_PREFIX = "own/"
+AGENT_MODEL_PREFIXES = (MODEL_PREFIX, OWN_MODEL_PREFIX)
+DOWNLOADED_MODELS = "/models?all=1"
+OFFERED_MODELS = "/models"
+CODING_MARK = "coding"
 SKIPPED_GROUPS = "browser,screen,windows,computer,documents"
 DATA_PREFIX = "data: "
 DONE = "data: [DONE]"
@@ -37,6 +42,9 @@ NONCE_BYTES = 16
 MAX_IDENTITY_BYTES = 64_000
 PLAIN_HTTP = "http"
 SEARCH_TOOL = "research__web_search"
+DESKTOP_BROWSER_TOOL = "workspace__browser_open"
+DESKTOP_SEARCH_PAGE = "https://html.duckduckgo.com/html/?q={query}"
+DESKTOP_TROUBLE = ("BLOCKED", "browser error", "unknown tool", "tool error")
 SEARCH_SECONDS = 60
 NOT_FOUND = 404
 REFUSED_KEY = 401
@@ -53,6 +61,10 @@ WRITTEN_CALL_ID = "written_call_{}"
 
 
 class BrainError(Exception):
+    pass
+
+
+class ToolMissing(BrainError):
     pass
 
 
@@ -161,7 +173,7 @@ def proves_identity(url: str, key: str) -> bool:
 
 
 def is_arty_model(name: str) -> bool:
-    return name.startswith(MODEL_PREFIX)
+    return name.startswith(AGENT_MODEL_PREFIXES)
 
 
 def shared_messages(messages: list[dict]) -> list[dict]:
@@ -361,8 +373,16 @@ class Brain:
                                       headers=headers, method="POST")
 
     def available_models(self) -> list[tuple[str, str]]:
+        entries = {}
+        for entry in self.model_entries(DOWNLOADED_MODELS) + self.model_entries(OFFERED_MODELS):
+            entries.setdefault(str(entry.get("id", "")), entry)
+        marks_coding = any(CODING_MARK in entry for entry in entries.values())
+        return [(model, str(entry.get("description") or "")) for model, entry in entries.items()
+                if is_arty_model(model) and (entry.get(CODING_MARK) is True or not marks_coding)]
+
+    def model_entries(self, path: str) -> list[dict]:
         route = self.pick_route()
-        request = urllib.request.Request(f"{route.url}/models?all=1", headers={
+        request = urllib.request.Request(f"{route.url}{path}", headers={
             "Authorization": f"Bearer {self.settings.api_key}", "User-Agent": f"arty-cli/{__version__}", **route.headers})
         try:
             with urllib.request.urlopen(request, timeout=LIST_SECONDS) as response:
@@ -371,13 +391,26 @@ class Brain:
             raise BrainError(f"Arty's brain couldn't list its models: {error_message(error) or error.code}") from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError) as error:
             raise BrainError(f"Couldn't get Arty's models from {route.url}: {error}") from None
-        return [(entry["id"], str(entry.get("description") or "")) for entry in listed
-                if isinstance(entry, dict) and is_arty_model(str(entry.get("id", "")))]
+        return [entry for entry in listed if isinstance(entry, dict)]
 
     def search_web(self, query: str, results: int) -> str:
+        page = self.desktop_search(query)
+        if page is not None:
+            return page
+        return self.brain_tool(SEARCH_TOOL, {"query": query, "results": results})
+
+    def desktop_search(self, query: str) -> str | None:
+        address = DESKTOP_SEARCH_PAGE.format(query=quote_plus(query))
+        try:
+            page = self.brain_tool(DESKTOP_BROWSER_TOOL, {"url": address})
+        except ToolMissing:
+            return None
+        return None if page.startswith(DESKTOP_TROUBLE) else page
+
+    def brain_tool(self, name: str, arguments: dict) -> str:
         route = self.pick_route()
-        body = json.dumps({"arguments": {"query": query, "results": results}}).encode()
-        request = urllib.request.Request(f"{route.url}/tools/{SEARCH_TOOL}", data=body, method="POST", headers={
+        body = json.dumps({"arguments": arguments}).encode()
+        request = urllib.request.Request(f"{route.url}/tools/{name}", data=body, method="POST", headers={
             "Authorization": f"Bearer {self.settings.api_key}", "Content-Type": "application/json",
             "Accept": "application/json", "User-Agent": f"arty-cli/{__version__}", **route.headers})
         try:
@@ -385,7 +418,7 @@ class Brain:
                 found = json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as error:
             if error.code == NOT_FOUND:
-                raise BrainError(f"This Arty brain has no web search ({SEARCH_TOOL} isn't one of its tools).") from None
+                raise ToolMissing(f"This Arty brain has no web search ({name} isn't one of its tools).") from None
             raise BrainError(f"Arty's brain couldn't search: {error_message(error) or error.code}") from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError) as error:
             raise BrainError(f"Couldn't search through Arty's brain at {route.url}: {error}") from None

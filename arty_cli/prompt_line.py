@@ -63,14 +63,15 @@ def terminal_columns() -> int:
 
 
 class ReadlineLine:
-    def __init__(self, module, read=None, write=None, columns=None, choices=None):
+    def __init__(self, module, read=None, write=None, columns=None, choices=None, models=None):
         self.module = module
         self.read_input = read or (lambda prompt: input(prompt))
         self.write = write or shown_at_once
         self.columns = columns or terminal_columns
         self.choices = choices
+        self.models = models
         self.prompt = ""
-        self.found = []
+        self.found, self.meanings = [], {}
         module.parse_and_bind(f'"{SHIFT_TAB_SEQUENCE}": "{MODE_MARK}\\n"')
         if choices:
             self.offer_commands()
@@ -84,11 +85,12 @@ class ReadlineLine:
 
     def complete(self, _text: str, state: int) -> str | None:
         if state == 0:
-            self.found = suggest.matching(self.module.get_line_buffer(), self.choices())
+            self.found, self.meanings, _partial = suggest.suggestions(self.module.get_line_buffer(), self.choices,
+                                                                      self.models)
         return self.found[state] if state < len(self.found) else None
 
     def show_matches(self, _substitution, matches, _longest) -> None:
-        lines = suggest.menu_lines(list(matches), self.choices(), self.columns())
+        lines = suggest.menu_lines(list(matches), self.meanings, self.columns())
         self.write("\n" + "\n".join(lines) + "\n" + self.prompt + self.module.get_line_buffer())
 
     def read(self, prompt: str, width: int, kept: str) -> tuple[str, bool]:
@@ -106,10 +108,11 @@ class ReadlineLine:
 
 
 class ConsoleLine:
-    def __init__(self, key, write=None, choices=None, columns=None):
+    def __init__(self, key, write=None, choices=None, columns=None, models=None):
         self.key = key
         self.write = write or shown_at_once
         self.choices = choices
+        self.models = models
         self.columns = columns or terminal_columns
         self.history = []
         self.prompt = ""
@@ -162,17 +165,16 @@ class ConsoleLine:
     def complete(self) -> None:
         if not self.choices:
             return
-        typed = "".join(self.typed)
-        found = suggest.matching(typed, self.choices())
+        found, meanings, partial = suggest.suggestions("".join(self.typed), self.choices, self.models)
         if len(found) == 1:
             self.move_end()
-            for letter in found[0][len(typed):] + " ":
+            for letter in found[0][len(partial):] + " ":
                 self.insert(letter)
         elif found:
-            self.show_menu(found)
+            self.show_menu(found, meanings)
 
-    def show_menu(self, found: list[str]) -> None:
-        lines = suggest.menu_lines(found, self.choices(), self.columns())
+    def show_menu(self, found: list[str], meanings: dict) -> None:
+        lines = suggest.menu_lines(found, meanings, self.columns())
         tail = len(self.typed) - self.cursor
         self.write(NEW_LINE + NEW_LINE.join(lines) + NEW_LINE + self.prompt + "".join(self.typed) + "\b" * tail)
 
@@ -245,13 +247,13 @@ def console_keys():
     return polled_keys(msvcrt.kbhit, msvcrt.getwch)
 
 
-def line_reader(is_interactive, choices=None):
+def line_reader(is_interactive, choices=None, models=None):
     if not is_interactive():
         return None
     if os.name == "nt":
-        return ConsoleLine(console_keys(), choices=choices)
+        return ConsoleLine(console_keys(), choices=choices, models=models)
     try:
         import readline
     except ImportError:
         return None
-    return ReadlineLine(readline, choices=choices)
+    return ReadlineLine(readline, choices=choices, models=models)

@@ -1046,6 +1046,14 @@ class Session:
         self.choices = models.Choices(models.listed_for(self.client, self.client.model))
         return self.choices
 
+    def model_choices(self) -> dict[str, str]:
+        if self.choices is None:
+            try:
+                self.listed_models()
+            except providers.ERRORS:
+                return {}
+        return {choice.model: choice.about for choice in self.choices.listed}
+
     def show_models(self) -> None:
         listed = self.listed_models()
         for line in listed.lines(self.client.model):
@@ -1158,7 +1166,7 @@ def welcome(session: Session) -> None:
 
 def chat(session: Session, share: bool = False) -> None:
     welcome(session)
-    reader = prompt_line.line_reader(is_interactive, session.slash_choices)
+    reader = prompt_line.line_reader(is_interactive, session.slash_choices, session.model_choices)
     if share:
         session.start_remote()
     try:

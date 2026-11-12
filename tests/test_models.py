@@ -108,6 +108,12 @@ def test_carrying_on_reuses_the_saved_arty_model(arty_set_up, monkeypatch):
     assert ListingBrain.made[0].model == "arty/qwen3:14b"
 
 
+def test_carrying_on_reuses_a_saved_model_from_the_brain_s_own_list(arty_set_up, monkeypatch):
+    saved_conversation_with("own/Coder")
+    chat(monkeypatch, "/exit", arguments=["-c"])
+    assert ListingBrain.made[0].model == "own/Coder"
+
+
 def test_carrying_on_ignores_a_saved_model_that_is_not_one_of_arty_s(arty_set_up, monkeypatch):
     saved_conversation_with("other-vendor-1")
     chat(monkeypatch, "/exit", arguments=["-c"])
@@ -120,13 +126,26 @@ def test_the_brain_lists_its_arty_models_with_the_key():
         {"id": "arty/qwen3:14b", "description": "14B, tools"},
         {"id": "arty/qwen2.5-coder:14b"},
         {"id": "solo/qwen3:14b", "description": "on its own"}]}
-    with serving([(200, json.dumps(listing))], "application/json") as (url, recorder):
+    offered = {"object": "list", "data": [{"id": "Arty"}, {"id": "arty/qwen3:14b"}, {"id": "own/Coder"}]}
+    with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
         listed = client.available_models()
-    assert listed == [("arty/qwen3:14b", "14B, tools"), ("arty/qwen2.5-coder:14b", "")]
-    assert recorder.requests[0]["path"] == "/models?all=1"
+    assert listed == [("arty/qwen3:14b", "14B, tools"), ("arty/qwen2.5-coder:14b", ""), ("own/Coder", "")]
+    assert [sent["path"] for sent in recorder.requests] == ["/models?all=1", "/models"]
     sent = {name.lower(): value for name, value in recorder.requests[0]["headers"].items()}
     assert sent["authorization"] == "Bearer secret"
+
+
+def test_a_brain_that_marks_coding_models_gets_only_those_listed():
+    listing = {"object": "list", "data": [
+        {"id": "arty/qwen3:14b", "description": "14B", "coding": False},
+        {"id": "arty/mimo-v2.6:9b", "description": "9B, sees images", "coding": True}]}
+    offered = {"object": "list", "data": [{"id": "Arty"}, {"id": "arty/qwen3:14b"}, {"id": "own/Persona"},
+                                          {"id": "own/Coder", "description": "private coder", "coding": True}]}
+    with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, _recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
+        listed = client.available_models()
+    assert listed == [("arty/mimo-v2.6:9b", "9B, sees images"), ("own/Coder", "private coder")]
 
 
 def test_the_brain_listing_error_is_plain():

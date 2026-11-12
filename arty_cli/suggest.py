@@ -6,6 +6,7 @@ MENU_ROWS = 12
 NAME_GAP = 2
 CLOSE_ENOUGH = 0.6
 MENU_INDENT = "  "
+MODEL_COMMAND = "/model "
 
 
 def slash_choices(groups, custom_meanings: dict) -> dict[str, str]:
@@ -27,6 +28,17 @@ def matching(typed: str, choices: dict) -> list[str]:
     if not is_command_start(typed):
         return []
     return [name for name in choices if name.startswith(typed)]
+
+
+def suggestions(typed: str, commands, models=None) -> tuple[list[str], dict, str]:
+    if models is not None and typed.startswith(MODEL_COMMAND):
+        wanted = typed[len(MODEL_COMMAND):]
+        if any(space in wanted for space in " \t\n"):
+            return [], {}, wanted
+        listed = models()
+        return [name for name in listed if name.startswith(wanted)], listed, wanted
+    listed = commands()
+    return matching(typed, listed), listed, typed
 
 
 def closest(name: str, choices: dict) -> str | None:

@@ -242,14 +242,18 @@ def test_a_reply_without_offered_tools_is_left_as_text(monkeypatch):
     assert arty.reply([{"role": "user", "content": "hi"}], [], lambda text: None)["content"] == written
 
 
+DESKTOP_MISSING = (404, {"error": {"message": "unknown tool workspace__browser_open"}})
+
+
 class SearchingBrain(BaseHTTPRequestHandler):
     seen = []
     answer = (200, {"result": "1. Python docs\n   https://docs.python.org\n   The docs"})
+    desktop = DESKTOP_MISSING
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         SearchingBrain.seen.append({"path": self.path, "headers": self.headers, "body": body})
-        status, answer = SearchingBrain.answer
+        status, answer = SearchingBrain.desktop if self.path.endswith("browser_open") else SearchingBrain.answer
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -262,6 +266,7 @@ class SearchingBrain(BaseHTTPRequestHandler):
 @pytest.fixture
 def searching():
     SearchingBrain.seen = []
+    SearchingBrain.desktop = DESKTOP_MISSING
     server = ThreadingHTTPServer(("127.0.0.1", 0), SearchingBrain)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield brain.Brain(settings.Settings(base_url=unused_port_url(), remote_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
@@ -269,9 +274,24 @@ def searching():
     server.shutdown()
 
 
-def test_a_web_search_uses_the_brains_own_search_tool(searching):
+def test_a_web_search_opens_the_results_page_in_arty_s_desktop_browser(searching):
+    SearchingBrain.desktop = (200, {"result": "Title: python json at DuckDuckGo\nPage text:\njson docs"})
+    assert searching.search_web("python json", 4) == SearchingBrain.desktop[1]["result"]
+    assert [request["path"] for request in SearchingBrain.seen] == ["/v1/tools/workspace__browser_open"]
+    assert SearchingBrain.seen[0]["body"] == {
+        "arguments": {"url": "https://html.duckduckgo.com/html/?q=python+json"}}
+    assert SearchingBrain.seen[0]["headers"]["Authorization"] == "Bearer key"
+
+
+def test_a_desktop_browser_in_trouble_hands_over_to_the_brains_search(searching):
+    SearchingBrain.desktop = (200, {"result": "browser error: Chrome isn't running"})
     assert searching.search_web("python json", 4) == SearchingBrain.answer[1]["result"]
-    request = SearchingBrain.seen[0]
+    assert SearchingBrain.seen[-1]["path"] == "/v1/tools/research__web_search"
+
+
+def test_without_a_desktop_a_web_search_uses_the_brains_own_search_tool(searching):
+    assert searching.search_web("python json", 4) == SearchingBrain.answer[1]["result"]
+    request = SearchingBrain.seen[-1]
     assert request["path"] == "/v1/tools/research__web_search"
     assert request["body"] == {"arguments": {"query": "python json", "results": 4}}
     assert request["headers"]["Authorization"] == "Bearer key"

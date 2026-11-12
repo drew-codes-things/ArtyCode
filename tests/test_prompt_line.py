@@ -246,3 +246,22 @@ def test_on_windows_tab_with_several_matches_shows_only_those():
     assert reader.read("› ", 2, "") == ("/mo", False)
     after_tab = written.getvalue().split("› ")[-2]
     assert "/model" in after_tab and "/help" not in after_tab
+
+
+MODEL_LIST = {"arty/qwen3:14b": "14B, all tools", "own/Coder": "private coder"}
+
+
+def test_on_linux_tab_after_slash_model_lists_the_models_with_what_they_do():
+    reader, module, written, _prompts = readline_reader("/model own/Coder", choices=lambda: COMMANDS)
+    reader.models = lambda: MODEL_LIST
+    reader.read("default › ", 10, "")
+    module.buffer = "/model "
+    assert [module.completer("", state) for state in range(3)] == ["arty/qwen3:14b", "own/Coder", None]
+    module.display_hook("", ["arty/qwen3:14b", "own/Coder"], 14)
+    assert "own/Coder       private coder" in written.getvalue()
+
+
+def test_on_windows_tab_after_slash_model_finishes_the_one_model_that_fits():
+    reader, _written = console_reader(list("/model o") + ["\t", "\r"], choices=lambda: COMMANDS)
+    reader.models = lambda: MODEL_LIST
+    assert reader.read("› ", 2, "") == ("/model own/Coder ", False)

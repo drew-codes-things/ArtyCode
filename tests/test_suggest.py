@@ -40,3 +40,18 @@ def test_every_command_the_session_knows_is_offered():
                  "/rewind", "/resume", "/remote", "/rules", "/mcp", "/skills", "/helpers", "/hooks", "/help",
                  "/exit", "/init", "/review"):
         assert name in choices
+
+
+MODELS = {"arty/qwen3:14b": "14B, all tools", "arty/mimo-v2.6:9b": "9B, sees images", "own/Coder": ""}
+
+
+def test_after_slash_model_the_brain_s_models_are_offered_with_what_they_do():
+    found, meanings, partial = suggest.suggestions("/model arty/", lambda: {}, lambda: MODELS)
+    assert found == ["arty/qwen3:14b", "arty/mimo-v2.6:9b"] and meanings is MODELS and partial == "arty/"
+    assert suggest.suggestions("/model ", lambda: {}, lambda: MODELS)[0] == list(MODELS)
+    assert suggest.suggestions("/model arty/qwen3:14b now", lambda: {}, lambda: MODELS)[0] == []
+
+
+def test_without_a_model_list_slash_model_offers_nothing_more():
+    assert suggest.suggestions("/model ", lambda: {"/model": "switch"}, None)[0] == []
+    assert suggest.suggestions("/mo", lambda: {"/model": "switch"}, None)[0] == ["/model"]
