@@ -147,7 +147,7 @@ def test_a_background_command_can_be_read_and_stopped(workspace):
     job = started.split()[1]
     output = ""
     for _ in range(50):
-        output += tools.run("command_output", {"job": job}, workspace)
+        output += tools.run("command_output", {"job": job, "wait_seconds": 0}, workspace)
         if "ready" in output:
             break
         __import__("time").sleep(0.1)
@@ -630,3 +630,60 @@ def test_the_write_file_definition_offers_overwrite():
     write = next(item["function"] for item in tools.DEFINITIONS if item["function"]["name"] == "write_file")
     assert write["parameters"]["properties"]["overwrite"]["type"] == "boolean"
     assert "edit_file" in write["description"]
+
+
+class EndlessProcess:
+    def __init__(self):
+        self.timeouts = []
+        self.ended = False
+
+    def communicate(self, timeout=None):
+        self.timeouts.append(timeout)
+        if not self.ended:
+            raise tools.subprocess.TimeoutExpired("server", timeout)
+        return "", None
+
+    def end_tree(self):
+        self.ended = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def test_a_command_that_runs_too_long_says_how_to_run_it_for_longer_or_in_the_background(workspace, monkeypatch):
+    process = EndlessProcess()
+    monkeypatch.setattr(tools, "start_process", lambda workspace, command: process)
+    result = tools.run("run_command", {"command": "npm run dev", "timeout_seconds": 30}, workspace)
+    assert process.timeouts[0] == 30
+    assert "stopped after 30 s" in result and "background: true" in result
+    assert f"up to {tools.MAX_COMMAND_SECONDS}" in result
+
+
+def test_the_longest_a_command_may_run_follows_the_setting(workspace, monkeypatch):
+    process = EndlessProcess()
+    monkeypatch.setattr(tools, "start_process", lambda workspace, command: process)
+    workspace.max_command_seconds = 7200
+    result = tools.run("run_command", {"command": "make", "timeout_seconds": 100_000}, workspace)
+    assert process.timeouts[0] == 7200 and "up to 7200" in result
+
+
+def test_the_longest_a_command_may_run_is_generous_for_builds_by_default(workspace):
+    assert workspace.max_command_seconds == tools.MAX_COMMAND_SECONDS >= 1800
+
+
+def test_reading_a_background_job_can_wait_for_it_to_finish(workspace):
+    command = python_call("-u", "-c", "import time; time.sleep(0.5); print('built')")
+    job = tools.run("run_command", {"command": command, "background": True}, workspace).split()[1]
+    output = tools.run("command_output", {"job": job, "wait_seconds": 30}, workspace)
+    assert "built" in output and "finished with exit code 0" in output
+
+
+def test_reading_a_background_server_waits_only_as_long_as_asked(workspace):
+    command = python_call("-u", "-c", "import time; print('listening'); time.sleep(30)")
+    job = tools.run("run_command", {"command": command, "background": True}, workspace).split()[1]
+    started = time.monotonic()
+    output = tools.run("command_output", {"job": job, "wait_seconds": 1}, workspace)
+    waited = time.monotonic() - started
+    workspace.stop_jobs()
+    assert "listening" in output and tools.STILL_RUNNING in output
+    assert 0.9 <= waited < 10
