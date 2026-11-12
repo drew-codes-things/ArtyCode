@@ -1,18 +1,15 @@
 import json
-import shlex
-import sys
 
 import pytest
 
 from arty_cli import hooks, tools
-
-PYTHON = shlex.quote(sys.executable)
+from tests.portable import python_call
 
 
 def script(tmp_path, name, body):
     path = tmp_path / f"{name}.py"
     path.write_text(body)
-    return f"{PYTHON} {shlex.quote(str(path))}"
+    return python_call(path)
 
 
 def write_settings(folder, table):
@@ -123,7 +120,9 @@ def test_a_hook_that_times_out_is_killed_with_everything_it_started(places):
     import time
     personal, workspace, tmp_path = places
     marker = tmp_path / "still-running"
-    command = f"(sleep 2; touch {shlex.quote(str(marker))}) & sleep 20"
+    child = f"import time; time.sleep(2); open({str(marker)!r}, 'w')"
+    command = script(tmp_path, "slow", f"import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', {child!r}])\n"
+                     "time.sleep(20)\n")
     write_settings(personal, {"PostToolUse": [entry(command, timeout=1)]})
     loaded, _ = hooks.load(personal, workspace, include_project=False)
     began = time.monotonic()

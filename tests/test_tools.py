@@ -8,6 +8,7 @@ import time
 import pytest
 
 from arty_cli import tools
+from tests.portable import python_call
 
 
 @pytest.fixture
@@ -82,14 +83,14 @@ def test_an_unknown_tool_is_an_error(workspace):
 
 
 def test_running_a_command_reports_output_and_exit_code(workspace):
-    command = f'"{sys.executable}" -c "print(6 * 7); raise SystemExit(3)"'
+    command = python_call("-c", "print(6 * 7); raise SystemExit(3)")
     result = tools.run("run_command", {"command": command}, workspace)
     assert "42" in result
     assert "exit code 3" in result
 
 
 def test_a_command_that_runs_too_long_is_stopped(workspace):
-    command = f'"{sys.executable}" -c "import time; time.sleep(5)"'
+    command = python_call("-c", "import time; time.sleep(5)")
     result = tools.run("run_command", {"command": command, "timeout_seconds": 1}, workspace)
     assert "stopped after 1 s" in result
 
@@ -141,7 +142,7 @@ def test_a_todo_with_an_unknown_status_is_refused(workspace):
 
 
 def test_a_background_command_can_be_read_and_stopped(workspace):
-    command = f'"{sys.executable}" -u -c "import time; print(\'ready\'); time.sleep(30)"'
+    command = python_call("-u", "-c", "import time; print('ready'); time.sleep(30)")
     started = tools.run("run_command", {"command": command, "background": True}, workspace)
     job = started.split()[1]
     output = ""
@@ -246,7 +247,7 @@ def test_windows_runs_powershell_by_its_full_path(monkeypatch):
 
 def test_background_output_keeps_only_the_tail(workspace, monkeypatch):
     monkeypatch.setattr(tools, "MAX_JOB_OUTPUT_CHARS", 100)
-    command = f'"{sys.executable}" -u -c "print(\'\\n\'.join(str(n) for n in range(200)))"'
+    command = python_call("-u", "-c", "print('\\n'.join(str(n) for n in range(200)))")
     job = tools.run("run_command", {"command": command, "background": True}, workspace).split()[1]
     running = workspace.jobs[job]
     running.process.wait()
@@ -260,14 +261,14 @@ def test_background_output_keeps_only_the_tail(workspace, monkeypatch):
 
 
 def test_stopping_every_job_ends_background_commands(workspace):
-    command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+    command = python_call("-c", "import time; time.sleep(30)")
     job = tools.run("run_command", {"command": command, "background": True}, workspace).split()[1]
     workspace.stop_jobs()
     assert workspace.jobs[job].process.poll() is not None
 
 
 def test_ctrl_c_during_a_command_stops_it(workspace, monkeypatch):
-    command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+    command = python_call("-c", "import time; time.sleep(30)")
     started = []
     real_start = tools.start_process
 

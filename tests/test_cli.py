@@ -1,13 +1,15 @@
 import io
 import json
 import os
-import shlex
 import sys
 from pathlib import Path
 
 import pytest
 
 from arty_cli import cli, settings
+from tests.portable import file_making_call, python_call
+
+MAKE_THE_FILE = file_making_call("made.txt")
 
 
 class FakeBrain:
@@ -417,7 +419,7 @@ def personal_settings(table):
 def hook_command(ready, name, body):
     path = ready.parent / f"{name}.py"
     path.write_text(body)
-    return f"{shlex.quote(sys.executable)} {shlex.quote(str(path))}"
+    return python_call(path)
 
 
 def test_a_prompt_hook_can_stop_a_request_before_it_is_sent(ready, capsys):
@@ -640,7 +642,7 @@ class CommandBrain(FakeBrain):
         self.calls.append([dict(m) for m in messages])
         if len(self.calls) == 1:
             found = {"id": "c1", "type": "function",
-                     "function": {"name": "run_command", "arguments": json.dumps({"command": "touch made.txt"})}}
+                     "function": {"name": "run_command", "arguments": json.dumps({"command": MAKE_THE_FILE})}}
             return {"role": "assistant", "content": "", "tool_calls": [found]}
         return super().reply(messages, tools, on_text)
 
@@ -655,8 +657,8 @@ def test_saving_an_answer_as_a_rule_keeps_the_folder_trusted(ready, monkeypatch,
     assert cli.main(["-p", "make the file"]) == 0
     assert prompts_seen[-1] == "Choose y, a, s or n: "
     table = json.loads((ready / ".arty" / "settings.json").read_text())
-    assert table["permissions"]["allow"] == ["run_command(touch made.txt)"]
-    assert "run_command(touch made.txt)" in capsys.readouterr().err
+    assert table["permissions"]["allow"] == [f"run_command({MAKE_THE_FILE})"]
+    assert f"run_command({MAKE_THE_FILE})" in capsys.readouterr().err
     monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail(f"asked {prompt!r}"))
     (ready / "made.txt").unlink()
     assert cli.main(["-p", "make it again"]) == 0
@@ -762,7 +764,7 @@ def test_a_notification_hook_runs_when_arty_waits_for_an_answer(ready, monkeypat
     cli.main(["-p", "make the file"])
     found = payloads_in(seen)
     assert found and found[0]["notification_type"] == "permission_prompt"
-    assert "touch made.txt" in found[0]["message"]
+    assert MAKE_THE_FILE in found[0]["message"]
 
 
 def test_the_terminal_shows_the_plan_and_asks_for_approval_or_feedback(monkeypatch):

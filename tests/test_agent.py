@@ -1,12 +1,13 @@
 import _thread
 import json
-import shlex
-import sys
 import threading
 
 import pytest
 
 from arty_cli import agent, brain, extras, helpers, hooks, permissions, skills, tools
+from tests.portable import file_making_call, python_call
+
+MAKE_A_FILE = file_making_call("made")
 
 
 def call(name, call_id="c1", **arguments):
@@ -239,7 +240,7 @@ def test_ctrl_c_while_being_asked_records_nothing(tmp_path):
 def hook_script(tmp_path, name, body):
     path = tmp_path / f"{name}.py"
     path.write_text(body)
-    return f"{shlex.quote(sys.executable)} {shlex.quote(str(path))}"
+    return python_call(path)
 
 
 def with_hooks(workspace, *listed):
@@ -494,7 +495,7 @@ def test_a_helper_stopped_while_the_model_answers_runs_none_of_its_calls(tmp_pat
     stopped = threading.Event()
     ran = []
     gate = permissions.Gate(workspace, lambda q, p="": ran.append(q) or "y")
-    brain = StoppingBrain(stopped, ("", [call("run_command", command="touch made")]))
+    brain = StoppingBrain(stopped, ("", [call("run_command", command=MAKE_A_FILE)]))
     answer = agent.run_turn([{"role": "user", "content": "go"}], brain, workspace, gate, Screen(), stopped=stopped)
     assert answer == agent.HELPER_STOPPED
     assert not (tmp_path / "made").exists() and ran == []
@@ -526,13 +527,13 @@ def test_a_hook_allow_skips_the_question_but_not_plan_mode(tmp_path):
     workspace = tools.Workspace(tmp_path)
     asked = []
     extra = with_hooks(workspace, ("PreToolUse", "", decision_hook(tmp_path, "allow")))
-    scripted = ScriptedBrain(("", [call("run_command", command="touch made")]), ("OK.", []))
+    scripted = ScriptedBrain(("", [call("run_command", command=MAKE_A_FILE)]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                    permissions.Gate(workspace, lambda q, p="": asked.append(q) or "n"), Screen(), extras=extra)
     result = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]
     assert asked == [] and (tmp_path / "made").exists() and "note from the hook" in result
     (tmp_path / "made").unlink()
-    scripted = ScriptedBrain(("", [call("run_command", command="touch made")]), ("OK.", []))
+    scripted = ScriptedBrain(("", [call("run_command", command=MAKE_A_FILE)]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                    permissions.Gate(workspace, lambda q, p="": "y", mode=permissions.PLAN), Screen(), extras=extra)
     assert not (tmp_path / "made").exists()
@@ -552,7 +553,7 @@ def test_a_hook_ask_asks_even_for_a_look_only_call(tmp_path):
 def test_a_hook_deny_refuses_with_its_reason(tmp_path):
     workspace = tools.Workspace(tmp_path)
     extra = with_hooks(workspace, ("PreToolUse", "", decision_hook(tmp_path, "deny")))
-    scripted = ScriptedBrain(("", [call("run_command", command="touch made")]), ("OK.", []))
+    scripted = ScriptedBrain(("", [call("run_command", command=MAKE_A_FILE)]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                    permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=extra)
     result = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]
