@@ -1,4 +1,4 @@
-from arty_cli import context, tools
+from arty_cli import agent, context, tools
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
 
@@ -90,3 +90,20 @@ def test_a_file_attached_with_at_can_be_edited_without_reading_it_again(project)
     session_for(project, brain).ask("fix @calc.py")
     assert brain.tool_results()[0].startswith("Edited calc.py")
     assert "1\tdef add(a, b):" in brain.prompts[0][-1]["content"]
+
+
+def test_a_fail_read_fail_read_cycle_is_caught_and_the_model_is_told_to_rewrite(project):
+    (project / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    wrong = ("edit_file", {"path": "calc.py", "old_text": "return a-b", "new_text": "return a + b"})
+    looked = ("read_file", {"path": "calc.py"})
+    brain = ScriptedBrain([[looked], [wrong], [looked], [wrong], [looked], [wrong], [looked], [wrong], [looked],
+                           [wrong], [looked], [wrong]])
+    session = session_for(project, brain)
+    session.ask("fix add")
+    misses = [result for prompt in brain.prompts for result in
+              [m["content"] for m in prompt if m["role"] == "tool" and m["content"].startswith("Error")]]
+    assert any("write_file" in result and "overwrite" in result for result in misses)
+    told = [m["content"] for m in brain.prompts[-1] if m["role"] == "user"]
+    assert any(text.startswith("You have made the same tool calls") for text in told)
+    assert brain.log.count("edit_file") <= 4
+    assert session.messages[-1]["content"] == agent.STUCK_STOPPED

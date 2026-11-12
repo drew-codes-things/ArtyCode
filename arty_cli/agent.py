@@ -37,6 +37,15 @@ RECORDED_TOOLS = tools.CHANGING_TOOLS + ("run_command",)
 STUCK_NOTE = ("You have made the same tool calls several times in a row with the same results. Don't call them "
               "again: answer now with what you have, or say what is blocking you.")
 STUCK_STOPPED = "I stopped because I kept repeating the same step. Tell me how you'd like to go on."
+STUCK_WINDOW = 8
+STUCK_FAILING_NOTE = ("You have made the same tool calls several times and they keep failing with the same error. "
+                      "Don't make that call again: do it another way (for an edit that keeps missing, replace the "
+                      "whole function or rewrite the file), or say what is blocking you.")
+EDITING_TOOLS = ("edit_file", "multi_edit")
+SMALL_FILE_LINES = 200
+REPEATED_MISS = ("\nThat is miss {count} on {path}. Stop copying small pieces: read it again and replace the whole "
+                 "function or block in one edit_file, with old_text copied from that read")
+SMALL_FILE_WAY = ", or, as {path} is short ({lines} lines), rewrite it with write_file and overwrite: true"
 HOOK_BLOCKED = "A hook stopped this call:"
 HOOK_FEEDBACK = "Hook feedback:"
 HOOK_CONTEXT = "Note from a hook:"
@@ -481,6 +490,46 @@ def signature_of(calls: list[dict], results: list[str]) -> str:
                       + [(call.get("function") or {}).get("arguments") for call in calls] + results)
 
 
+def failing_signatures(calls: list[dict], results: list[str]) -> set[str]:
+    return {json.dumps([(call.get("function") or {}).get("name"), (call.get("function") or {}).get("arguments"),
+                        result]) for call, result in zip(calls, results) if result.startswith(ERROR_LEAD)}
+
+
+def repeated_failure(window: list[set]) -> str | None:
+    counted = {}
+    for signatures in window:
+        for signature in signatures:
+            counted[signature] = counted.get(signature, 0) + 1
+    return next((signature for signature, count in counted.items() if count >= STUCK_REPEATS), None)
+
+
+def file_lines_of(workspace, path: str) -> int:
+    try:
+        return len(tools.read_text(workspace.resolve(path)).splitlines())
+    except (tools.ToolError, OSError, ValueError):
+        return 0
+
+
+def miss_advice(workspace, path: str, count: int) -> str:
+    lines = file_lines_of(workspace, path)
+    small = SMALL_FILE_WAY.format(path=path, lines=lines) if 0 < lines <= SMALL_FILE_LINES else ""
+    return REPEATED_MISS.format(count=count, path=path) + small + "."
+
+
+def advised_results(calls: list[dict], results: list[str], misses: dict, workspace) -> list[str]:
+    advised = []
+    for call, result in zip(calls, results):
+        name, arguments, _problem = call_parts(call)
+        is_miss = name in EDITING_TOOLS and result.startswith(ERROR_LEAD) and tools.NOT_FOUND in result
+        if not is_miss or arguments is None:
+            advised.append(result)
+            continue
+        path = str(arguments.get("path") or "")
+        misses[path] = misses.get(path, 0) + 1
+        advised.append(result + miss_advice(workspace, path, misses[path]) if misses[path] >= 2 else result)
+    return advised
+
+
 def waits_on_running_jobs(calls: list[dict], results: list[str]) -> bool:
     names = {(call.get("function") or {}).get("name") for call in calls}
     return names == {"command_output"} and all(result.rstrip().endswith(f"{tools.STILL_RUNNING}]")
@@ -551,6 +600,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
     helpers = Helpers(brain, workspace, gate, screen, extras)
     recent, continued, steered_from, nudges = [], 0, None, []
     approved_with, reminded = None, False
+    failures, steered_failures, misses = [], set(), {}
     while True:
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
@@ -583,7 +633,8 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
         for call in calls:
             tell(screen, "show_tool_call", call)
-        results = results_of(calls, helpers, can_explore, done, extras)
+        raw_results = results_of(calls, helpers, can_explore, done, extras)
+        results = advised_results(calls, raw_results, misses, workspace)
         for call, result in zip(calls, results):
             messages.append({"role": "tool", "tool_call_id": call.get("id") or "", "content": result})
             tell(screen, "show_tool_result", call, result)
@@ -593,10 +644,16 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
             squeeze(messages)
         if waits_on_running_jobs(calls, results):
             continue
-        signature = signature_of(calls, results)
-        if signature == steered_from:
+        signature = signature_of(calls, raw_results)
+        failures = (failures + [failing_signatures(calls, raw_results)])[-STUCK_WINDOW:]
+        failing = repeated_failure(failures)
+        if signature == steered_from or (failing is not None and failing in steered_failures):
             messages.append({"role": "assistant", "content": STUCK_STOPPED})
             return STUCK_STOPPED
+        if failing is not None:
+            messages.append({"role": "user", "content": STUCK_FAILING_NOTE})
+            steered_failures.add(failing)
+            continue
         recent = (recent + [signature])[-STUCK_REPEATS:]
         if len(recent) == STUCK_REPEATS and len(set(recent)) == 1:
             messages.append({"role": "user", "content": STUCK_NOTE})

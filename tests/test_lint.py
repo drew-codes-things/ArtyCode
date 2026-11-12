@@ -46,7 +46,8 @@ def test_a_clean_file_adds_nothing_to_the_result(project):
     workspace = tools.Workspace(project)
     workspace.lint = lint.Checker(project)
     path = edited(workspace, "app.py", "x = 1\n")
-    assert tools.edit_file(workspace, str(path), "x = 1", "x = 2") == "Edited app.py"
+    result = tools.edit_file(workspace, str(path), "x = 1", "x = 2")
+    assert result.splitlines()[0] == "Edited app.py" and "Lint" not in result
 
 
 @stand_in_linters
@@ -140,4 +141,5 @@ def test_an_untrusted_project_cannot_change_the_lint_setting(tmp_path):
 def test_without_a_checker_edits_behave_as_before(project):
     workspace = tools.Workspace(project)
     path = edited(workspace, "app.py", "x = 1\n")
-    assert tools.edit_file(workspace, str(path), "x = 1", "x = (") == "Edited app.py"
+    result = tools.edit_file(workspace, str(path), "x = 1", "x = (")
+    assert result.splitlines()[0] == "Edited app.py" and "Lint" not in result

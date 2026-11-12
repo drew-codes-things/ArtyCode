@@ -493,7 +493,7 @@ def test_multi_edit_makes_every_change_in_order_as_one_undoable_step(workspace):
     edits = [{"old_text": "def add", "new_text": "def plus"}, {"old_text": "a - b", "new_text": "a + b"},
              {"old_text": "plus(a, b)", "new_text": "plus(a, b=0)"}]
     result = tools.run("multi_edit", {"path": "src/app.py", "edits": edits}, workspace)
-    assert result == "Made 3 edits to src/app.py"
+    assert result.splitlines()[0] == "Made 3 edits to src/app.py"
     assert (workspace.root / "src" / "app.py").read_text() == "def plus(a, b=0):\n    return a + b\n"
     assert len(workspace.checkpoints) == 1
     workspace.undo_last()
@@ -600,7 +600,7 @@ def test_the_tool_result_says_how_old_text_matched(workspace):
     (workspace.root / "f.py").write_text(INDENTED)
     tools.run("read_file", {"path": "f.py"}, workspace)
     exact = tools.run("edit_file", {"path": "f.py", "old_text": "    return 0", "new_text": "    return -1"}, workspace)
-    assert exact == "Edited f.py"
+    assert exact.splitlines()[0] == "Edited f.py"
     loose = tools.run("edit_file", {"path": "f.py", "old_text": "if x:\n    return 1", "new_text": "if x:\n    return 3"},
                       workspace)
     assert loose.startswith("Edited f.py") and "ignoring indentation" in loose
@@ -730,3 +730,37 @@ def test_checklist_statuses_and_item_names_are_normalised():
 def test_wrong_argument_names_get_the_list_of_right_ones(tmp_path):
     result = tools.run("read_file", {"where": "a.txt"}, tools.Workspace(tmp_path))
     assert result.startswith("Error") and "where" in result and "path, offset, limit" in result
+
+
+FUNCTIONS = "".join(f"def step_{number}(value):\n    return value + {number}\n\n\n" for number in range(1, 30))
+
+
+def test_a_missed_edit_shows_the_closest_lines_with_their_numbers(tmp_path):
+    (tmp_path / "steps.py").write_text(FUNCTIONS)
+    workspace = tools.Workspace(tmp_path)
+    tools.read_file(workspace, "steps.py")
+    result = tools.run("edit_file", {"path": "steps.py", "old_text": "def step_12(valu):\n    return value + 12",
+                                     "new_text": "x"}, workspace)
+    assert result.startswith("Error: old_text was not found")
+    assert "45\tdef step_12(value):\n46\t    return value + 12" in result
+
+
+def test_a_missed_edit_in_a_multi_edit_also_shows_the_closest_lines(tmp_path):
+    (tmp_path / "steps.py").write_text(FUNCTIONS)
+    workspace = tools.Workspace(tmp_path)
+    tools.read_file(workspace, "steps.py")
+    result = tools.run("multi_edit", {"path": "steps.py", "edits": [
+        {"old_text": "return value + 1\n", "new_text": "return value + 100\n"},
+        {"old_text": "def step_3(valu):", "new_text": "x"}]}, workspace)
+    assert result.startswith("Error: edit 2: old_text was not found") and "9\tdef step_3(value):" in result
+
+
+def test_a_made_edit_shows_the_changed_lines_with_a_few_around_them(tmp_path):
+    (tmp_path / "steps.py").write_text(FUNCTIONS)
+    workspace = tools.Workspace(tmp_path)
+    tools.read_file(workspace, "steps.py")
+    result = tools.edit_file(workspace, "steps.py", "return value + 12\n", "doubled = value * 2\n    return doubled\n")
+    first, *shown = result.splitlines()
+    assert first.startswith("Edited steps.py")
+    assert "46\t    doubled = value * 2" in shown and "47\t    return doubled" in shown
+    assert "45\tdef step_12(value):" in shown and len(shown) <= 12

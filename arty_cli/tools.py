@@ -1,4 +1,5 @@
 import collections
+import difflib
 import fnmatch
 import hashlib
 import json
@@ -54,6 +55,12 @@ POWERSHELL_EXIT_CODE = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE
 TEMPORARY_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL
 TRUE_WORDS = ("true", "yes", "1")
 JSON_TYPES = {"array": list, "object": dict}
+CLOSEST_CONTEXT_LINES = 2
+CLOSEST_CANDIDATES = 20
+MIN_CLOSENESS = 0.5
+ECHO_CONTEXT_LINES = 3
+MAX_ECHO_LINES = 30
+NOT_FOUND = "old_text was not found"
 KEY_ALIASES = {"file_path": "path", "filepath": "path", "file": "path", "filename": "path", "file_name": "path",
                "old_string": "old_text", "old_str": "old_text", "new_string": "new_text", "new_str": "new_text",
                "cmd": "command", "todos": "items", "content": "text", "task": "text", "title": "text",
@@ -444,6 +451,58 @@ def loosely_edited(before: str, old_text: str, new_text: str) -> AppliedEdit | N
     return None
 
 
+def stripped_lines(lines: list[str]) -> str:
+    return "\n".join(line.strip() for line in lines)
+
+
+def closest_start(lines: list[str], pattern: list[str]) -> int | None:
+    size = len(pattern)
+    wanted = stripped_lines(pattern)
+    if not lines or not wanted.strip():
+        return None
+    matcher = difflib.SequenceMatcher(None, autojunk=False)
+    matcher.set_seq2(wanted)
+
+    def closeness(start: int, quick: bool) -> float:
+        matcher.set_seq1(stripped_lines(lines[start:start + size]))
+        return matcher.quick_ratio() if quick else matcher.ratio()
+
+    starts = range(max(len(lines) - size + 1, 1))
+    candidates = sorted(starts, key=lambda start: closeness(start, True), reverse=True)[:CLOSEST_CANDIDATES]
+    best = max(candidates, key=lambda start: closeness(start, False))
+    return best if closeness(best, False) >= MIN_CLOSENESS else None
+
+
+def numbered_lines(lines: list[str], first: int, last: int) -> str:
+    return "\n".join(f"{number + 1}\t{lines[number][:MAX_LINE_CHARS]}" for number in range(first, last))
+
+
+def not_found_message(before: str, old_text: str) -> str:
+    lines = before.splitlines()
+    pattern = pattern_lines(old_text)
+    start = closest_start(lines, pattern)
+    if start is None:
+        return f"{NOT_FOUND}; read the file again and copy the text exactly"
+    first = max(start - CLOSEST_CONTEXT_LINES, 0)
+    last = min(start + len(pattern) + CLOSEST_CONTEXT_LINES, len(lines))
+    return (f"{NOT_FOUND}. The closest lines in the file are these; copy old_text from them exactly, without the "
+            f"line numbers:\n{numbered_lines(lines, first, last)}\n")
+
+
+def changed_region(before: str, after: str) -> str:
+    old_lines, new_lines = before.splitlines(), after.splitlines()
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    changed = [(start, end) for tag, _a, _b, start, end in matcher.get_opcodes() if tag != "equal"]
+    if not changed or not new_lines:
+        return ""
+    first = max(changed[0][0] - ECHO_CONTEXT_LINES, 0)
+    last = min(max(changed[-1][1], changed[0][0] + 1) + ECHO_CONTEXT_LINES, len(new_lines))
+    shown_last = min(last, first + MAX_ECHO_LINES)
+    hidden = last - shown_last
+    more = f"\n... {hidden} more lines changed or around the change; read_file shows them" if hidden else ""
+    return f"\nLines {first + 1}-{shown_last} now:\n{numbered_lines(new_lines, first, shown_last)}{more}"
+
+
 def applied_edit(before: str, old_text: str, new_text: str, replace_all: bool) -> AppliedEdit:
     if not old_text:
         raise ToolError("old_text is empty; use write_file to create a file")
@@ -454,7 +513,7 @@ def applied_edit(before: str, old_text: str, new_text: str, replace_all: bool) -
     if found == 0:
         loose = loosely_edited(before, old_text, new_text)
         if loose is None:
-            raise ToolError("old_text was not found; read the file again and copy the text exactly")
+            raise ToolError(not_found_message(before, old_text))
         return loose
     if found > 1 and not replace_all:
         raise ToolError(f"old_text is in {found} places; add more surrounding text or set replace_all")
@@ -601,14 +660,15 @@ def edit_file(workspace, path, old_text, new_text, replace_all=False):
     arguments = {"path": path, "old_text": old_text, "new_text": new_text, "replace_all": replace_all}
     target, before, after = changed_file(workspace, "edit_file", arguments)
     note = match_note("edit_file", arguments, before)
-    return f"Edited {workspace.shown(target)}{note}" + workspace.lint_note(target, after)
+    return f"Edited {workspace.shown(target)}{note}{changed_region(before, after)}" + workspace.lint_note(target, after)
 
 
 def multi_edit(workspace, path, edits):
     arguments = {"path": path, "edits": edits}
     target, before, after = changed_file(workspace, "multi_edit", arguments)
     note = match_note("multi_edit", arguments, before)
-    return f"Made {len(edits)} edits to {workspace.shown(target)}{note}" + workspace.lint_note(target, after)
+    return (f"Made {len(edits)} edits to {workspace.shown(target)}{note}{changed_region(before, after)}"
+            + workspace.lint_note(target, after))
 
 
 def notebook_edit(workspace, path, cell, source="", cell_type="", edit_mode="replace"):
