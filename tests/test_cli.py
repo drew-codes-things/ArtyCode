@@ -525,6 +525,21 @@ def test_the_accent_is_arty_red_in_true_colour_or_256_colours(monkeypatch, color
     assert terminal.paint("x", "error").startswith(cli.ERROR_STYLE)
 
 
+@pytest.mark.parametrize("readline_loaded", [True, False])
+def test_a_coloured_question_tells_readline_its_colour_codes_take_no_room(monkeypatch, readline_loaded):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    if readline_loaded:
+        monkeypatch.setitem(sys.modules, "readline", object())
+    else:
+        monkeypatch.delitem(sys.modules, "readline", raising=False)
+    prompts_seen = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts_seen.append(prompt) or "y")
+    terminal = cli.Terminal(Tty(), Tty())
+    assert terminal.answer("Run: ls [y]es: ", {"y": "yes"}, "Run: ls")[0] == "yes"
+    painted = terminal.paint("Run: ls [y]es: ", "accent")
+    assert prompts_seen == [cli.prompt_line.for_readline(painted) if readline_loaded else painted]
+
+
 def test_no_color_and_a_pipe_stay_plain(monkeypatch):
     monkeypatch.setenv("COLORTERM", "truecolor")
     monkeypatch.setenv("NO_COLOR", "1")

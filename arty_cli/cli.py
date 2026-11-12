@@ -195,9 +195,12 @@ class Terminal:
                 self.note(f"{by} {'refused' if choice == permissions.NO else 'allowed'} that from another device.")
             return choice, by
         while True:
-            answer = input(self.paint(prompt, "accent")).strip().lower()
+            answer = self.asked(prompt).strip().lower()
             if answer in answers:
                 return answers[answer], ""
+
+    def asked(self, question: str) -> str:
+        return input(prompt_line.readline_safe(self.paint(question, "accent")))
 
     def review_plan(self, plan: str) -> tuple[str, str]:
         return plan_review(self, plan)
@@ -213,7 +216,7 @@ def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
     choice, by = terminal.answer(PLAN_QUESTION, PLAN_ANSWERS, "Approve the plan?", plan)
     if choice != permissions.NO or by or not is_interactive():
         return choice, ""
-    return permissions.NO, input(terminal.paint(PLAN_FEEDBACK_QUESTION, "accent")).strip()
+    return permissions.NO, terminal.asked(PLAN_FEEDBACK_QUESTION).strip()
 
 
 def parse_arguments(argv):
@@ -350,7 +353,7 @@ def project_notes_allowed(workspace, personal: Path, terminal: Terminal) -> bool
     if state == memory.CHANGED:
         terminal.note("This folder's hooks or MCP servers changed since you trusted it.", "error")
     try:
-        answer = input(terminal.paint(CHANGED_QUESTION if state == memory.CHANGED else TRUST_QUESTION, "accent")).strip().lower()
+        answer = terminal.asked(CHANGED_QUESTION if state == memory.CHANGED else TRUST_QUESTION).strip().lower()
     except (EOFError, KeyboardInterrupt):
         answer = ""
     if answer in ("y", "yes"):

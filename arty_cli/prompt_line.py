@@ -47,6 +47,10 @@ def for_readline(prompt: str) -> str:
     return COLOUR_CODE.sub("\001\\1\002", prompt)
 
 
+def readline_safe(prompt: str) -> str:
+    return for_readline(prompt) if "readline" in sys.modules else prompt
+
+
 class ReadlineLine:
     def __init__(self, module, read=None, write=None, columns=None):
         self.module = module
