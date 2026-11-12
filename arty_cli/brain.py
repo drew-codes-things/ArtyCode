@@ -38,6 +38,7 @@ OFFERED_MODELS = "/models"
 CODING_MARK = "coding"
 CONTEXT_MARK = "context_tokens"
 REPLY_MARK = "reply_tokens"
+LATEST_TAG = ":latest"
 SKIPPED_GROUPS = "browser,screen,windows,computer,documents"
 DATA_PREFIX = "data: "
 DONE = "data: [DONE]"
@@ -372,6 +373,10 @@ def decoded_lines(response):
         yield raw.decode("utf-8", errors="replace").rstrip("\r\n")
 
 
+def is_same_model(listed: str, model: str) -> bool:
+    return listed.removesuffix(LATEST_TAG) == model.removesuffix(LATEST_TAG)
+
+
 def is_token_count(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -385,9 +390,7 @@ class Brain:
         self.route = None
         self.reached = ""
         self.on_thinking = None
-        self.reported_context: int | None = None
-        self.reported_reply: int | None = None
-        self.asked_for_context = False
+        self.sized_models: list[dict] | None = None
 
     def address(self) -> str:
         return self.route.url if self.route else ""
@@ -492,25 +495,21 @@ class Brain:
         chosen = settings_module.positive_number(self.settings, "context_tokens")
         if chosen:
             return chosen
-        if not self.asked_for_context:
-            self.ask_for_context()
-        return self.reported_context
-
-    def ask_for_context(self):
-        try:
-            entries = self.model_entries(DOWNLOADED_MODELS, QUICK_LIST_SECONDS)
-        except BrainError:
-            return
-        self.asked_for_context = True
-        sizes = [entry.get(CONTEXT_MARK) for entry in entries if is_token_count(entry.get(CONTEXT_MARK))]
-        self.reported_context = min(sizes, default=None)
-        replies = [entry.get(REPLY_MARK) for entry in entries if is_token_count(entry.get(REPLY_MARK))]
-        self.reported_reply = min(replies, default=None)
+        return self.reported_size(CONTEXT_MARK)
 
     def reply_tokens(self) -> int | None:
-        if not self.asked_for_context:
-            self.ask_for_context()
-        return self.reported_reply
+        return self.reported_size(REPLY_MARK)
+
+    def reported_size(self, mark: str) -> int | None:
+        if self.sized_models is None:
+            try:
+                self.sized_models = self.model_entries(DOWNLOADED_MODELS, QUICK_LIST_SECONDS)
+            except BrainError:
+                return None
+        sizes = [entry.get(mark) for entry in self.sized_models if is_token_count(entry.get(mark))]
+        own = [entry.get(mark) for entry in self.sized_models
+               if is_same_model(str(entry.get("id", "")), self.model) and is_token_count(entry.get(mark))]
+        return own[0] if own else min(sizes, default=None)
 
     def streamed_reply(self, route: Route, body: dict, on_text) -> dict:
         with patient_opener().open(self.request(route, body), timeout=CHAT_CONNECT_SECONDS) as response:

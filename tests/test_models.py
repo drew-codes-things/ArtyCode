@@ -290,3 +290,29 @@ def test_without_reply_tokens_in_the_list_the_reply_room_is_unknown():
     with serving([(200, json.dumps({"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576}]}))],
                  "application/json") as (url, _recorder):
         assert brain.Brain(settings.Settings(remote_url=url, api_key="k")).reply_tokens() is None
+
+
+SIZED_LISTING = {"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576, "reply_tokens": 4096},
+                          {"id": "arty/mimo-v2.6:9b", "context_tokens": 49152, "reply_tokens": 6144}]}
+
+
+def test_the_window_and_reply_room_are_those_of_the_model_requests_go_to():
+    with serving([(200, json.dumps(SIZED_LISTING))], "application/json") as (url, recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="k", model="arty/mimo-v2.6:9b"))
+        assert (client.context_tokens(), client.reply_tokens()) == (49152, 6144)
+        client.model = "arty/qwen3:14b"
+        assert (client.context_tokens(), client.reply_tokens()) == (24576, 4096)
+    assert len(recorder.requests) == 1
+
+
+def test_a_model_named_without_latest_finds_its_listed_window():
+    listing = {"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576},
+                        {"id": "arty/coder:latest", "context_tokens": 65536}]}
+    with serving([(200, json.dumps(listing))], "application/json") as (url, _recorder):
+        assert brain.Brain(settings.Settings(remote_url=url, api_key="k", model="arty/coder")).context_tokens() == 65536
+
+
+def test_a_model_the_list_does_not_size_gets_the_smallest_window():
+    with serving([(200, json.dumps(SIZED_LISTING))], "application/json") as (url, _recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="k", model="Arty"))
+        assert (client.context_tokens(), client.reply_tokens()) == (24576, 4096)

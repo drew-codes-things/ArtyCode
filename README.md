@@ -324,7 +324,7 @@ These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `A
 `ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET`, `ARTY_CLI_MODEL` and `ARTY_CLI_FINISH_CHECK` (`on` or `off`, the
 finish check above). Two optional limits can be set the same way,
 as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_TOKENS` and
-`ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (unless set, the size the brain reports in its model list, or 12288 tokens for a brain that doesn't say) and the
+`ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (unless set, the size the brain's model list reports for the model in use, else the smallest it lists, or 12288 tokens for a brain that doesn't say) and the
 longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops ArtyCode at the start
 with a message saying where to fix it. `notify` (or `ARTY_CLI_NOTIFY`) set to `off` stops the bell and desktop notice
 of the terminal interface; they are on unless set.
@@ -515,8 +515,8 @@ show the state.
 
 ### Long conversations
 
-The conversation size is estimated in tokens (about 3.5 characters each until the brain reports a real count: when its `usage.prompt_tokens` shows a prompt was bigger than estimated, the estimate is raised to match for the rest of the session, and a prompt within 10% of the window is noted on screen). The room kept for the reply is the smallest `reply_tokens` the brain's model list reports, or 2,048 tokens. When it no longer leaves room in the model's context
-window (`context_tokens` if set, otherwise the size the brain reports, otherwise 12288 tokens) for the tool list and a full reply, older
+The conversation size is estimated in tokens (about 3.5 characters each until the brain reports a real count: when its `usage.prompt_tokens` shows a prompt was bigger than estimated, the estimate is raised to match for the rest of the session, and a prompt within 10% of the window is noted on screen). The room kept for the reply is the `reply_tokens` the brain's model list reports for the model in use (the smallest listed when that model isn't there), or 2,048 tokens. When it no longer leaves room in the model's context
+window (`context_tokens` if set, otherwise the size the brain reports for the model in use, then the smallest it lists, otherwise 12288 tokens) for the tool list and a full reply, older
 results are hidden first, with no model call: each becomes one line naming the step and what it showed (`[Hidden to
 save room: run_command pytest -q (3 failed, 9 passed, exit code 1). ...]`). Earlier reads of the same lines of a file
 that was read again or changed since go first, then all but the newest run of a command and the long text of past
