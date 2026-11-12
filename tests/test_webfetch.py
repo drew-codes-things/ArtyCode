@@ -40,6 +40,27 @@ def test_fetching_a_page_returns_its_text(site):
     assert "pip install thing" in text
 
 
+class UnknownCharsetSite(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=x-user-defined")
+        self.end_headers()
+        self.wfile.write(b"plain words")
+
+    def log_message(self, *args):
+        pass
+
+
+def test_a_page_in_an_unknown_charset_is_read_as_utf8():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), UnknownCharsetSite)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        text = webfetch.fetch(f"http://127.0.0.1:{server.server_address[1]}/", allow_private=True)
+    finally:
+        server.shutdown()
+    assert text.endswith("plain words")
+
+
 def test_only_web_addresses_are_fetched():
     with pytest.raises(webfetch.FetchError, match="http"):
         webfetch.fetch("file:///etc/passwd")

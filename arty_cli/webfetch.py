@@ -11,6 +11,7 @@ from arty_cli import __version__
 FETCH_SECONDS = 30
 MAX_DOWNLOAD_BYTES = 3_000_000
 MAX_TEXT_CHARS = 40_000
+FALLBACK_CHARSET = "utf-8"
 HIDDEN_TAGS = {"script", "style", "noscript", "template", "svg", "head"}
 BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "section", "article", "table"}
 WEB_SCHEMES = ("http", "https")
@@ -100,6 +101,13 @@ def page_text(html: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
+def decoded_body(body: bytes, charset: str) -> str:
+    try:
+        return body.decode(charset, errors="replace")
+    except LookupError:
+        return body.decode(FALLBACK_CHARSET, errors="replace")
+
+
 def fetch(url: str, allow_private: bool = False) -> str:
     if urlparse(url).scheme not in WEB_SCHEMES:
         raise FetchError("only http and https addresses can be fetched")
@@ -111,11 +119,11 @@ def fetch(url: str, allow_private: bool = False) -> str:
         with opener.open(request, timeout=FETCH_SECONDS) as response:
             body = response.read(MAX_DOWNLOAD_BYTES)
             kind = response.headers.get("Content-Type") or ""
-            charset = response.headers.get_content_charset() or "utf-8"
+            charset = response.headers.get_content_charset() or FALLBACK_CHARSET
     except urllib.error.HTTPError as error:
         raise FetchError(f"{url} answered {error.code}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise FetchError(f"couldn't fetch {url}: {error}") from None
-    decoded = body.decode(charset, errors="replace")
+    decoded = decoded_body(body, charset)
     text = page_text(decoded) if "html" in kind else decoded
     return f"{url}\n{UNTRUSTED}\n\n{text[:MAX_TEXT_CHARS]}"

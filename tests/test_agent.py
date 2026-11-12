@@ -121,6 +121,18 @@ def test_booleans_written_as_words_are_read_strictly(tmp_path):
     assert unclear.startswith("Error") and "replace_all" in unclear
 
 
+def test_a_path_the_system_rejects_is_an_error_for_the_model_not_a_crash(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(("", [call("read_file", path="a\x00b"), call("write_file", "c2", path="b\x00", content=""),
+                                   call("search", "c3", pattern="x", path="c\x00")]), ("Sorry.", []))
+    answer = agent.run_turn([{"role": "user", "content": "read"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "Sorry."
+    results = tool_results_sent(scripted, 1)
+    assert len(results) == 3
+    assert all(result.startswith("Error") and "null" in result for result in results)
+
+
 def test_a_long_job_stops_after_the_step_limit(tmp_path):
     (tmp_path / "a.txt").write_text("a\n")
     workspace = tools.Workspace(tmp_path)

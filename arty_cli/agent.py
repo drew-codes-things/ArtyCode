@@ -179,13 +179,18 @@ def gate_refusal(name: str, arguments: dict, gate, extras, decision: str = "", r
     return extras.check(name, arguments, gate) if extras.handles(name) else gate.check(name, arguments)
 
 
-def performed(name: str, arguments: dict, workspace, gate, extras, done: list, decision: str = "",
-              reason: str = "") -> str:
+def reason_not_to_run(name: str, arguments: dict, workspace, gate, extras, decision: str, reason: str) -> str | None:
     checks_first = name in tools.CHANGING_TOOLS and gate.mode != permissions.PLAN
     problem = tools.change_problem(workspace, name, arguments) if checks_first else ""
-    if problem:
-        return problem
-    refusal = gate_refusal(name, arguments, gate, extras, decision, reason)
+    return problem or gate_refusal(name, arguments, gate, extras, decision, reason)
+
+
+def performed(name: str, arguments: dict, workspace, gate, extras, done: list, decision: str = "",
+              reason: str = "") -> str:
+    try:
+        refusal = reason_not_to_run(name, arguments, workspace, gate, extras, decision, reason)
+    except (tools.ToolError, OSError, ValueError) as error:
+        return f"Error: {error}"
     if refusal:
         return refusal
     if extras.handles(name):
