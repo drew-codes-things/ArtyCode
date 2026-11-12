@@ -2,6 +2,8 @@ import io
 import json
 import re
 
+import pytest
+
 from arty_cli import look, notify, settings, tools, view
 
 PLAIN = look.Theme(colour=False)
@@ -178,3 +180,9 @@ def test_a_notice_that_cannot_start_still_rings_the_bell():
 
     notifier = notify.Notifier(lambda: rung.append(1), start=broken, command=lambda title, text: ["notify-send"])
     assert notifier.notice("t", "x") is False and rung == [1]
+
+
+def test_a_notify_setting_that_is_neither_on_nor_off_is_refused():
+    with pytest.raises(settings.SettingsError, match="notify should be on or off"):
+        notify.wanted(settings.Settings(notify="sometimes"))
+    assert notify.wanted(settings.Settings(notify="yes")) and notify.wanted(None)

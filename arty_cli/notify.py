@@ -3,7 +3,8 @@ import subprocess
 import sys
 import threading
 
-OFF_WORDS = ("off", "no", "false", "0")
+from arty_cli import settings
+
 DESKTOP_PROGRAM = "notify-send"
 APP_NAME = "ArtyCode"
 MOST_NOTICE_CHARS = 200
@@ -11,8 +12,7 @@ LINUX = "linux"
 
 
 def wanted(config) -> bool:
-    chosen = str(getattr(config, "notify", "") or "").strip().lower()
-    return chosen not in OFF_WORDS
+    return not isinstance(config, settings.Settings) or settings.is_on(config, "notify")
 
 
 def desktop_command(title: str, text: str, platform: str = sys.platform, find=shutil.which) -> list[str] | None:
