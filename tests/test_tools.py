@@ -531,6 +531,18 @@ def test_a_real_backslash_n_in_the_file_is_matched_as_written():
     assert tools.edited_text(before, 'print("a\\nb")', 'print("a\\nc")', False) == 'print("a\\nc")\n'
 
 
+def test_a_real_escape_the_file_already_has_stays_an_escape_in_unescaped_new_text():
+    before = 'def report():\n    pass\n\nprint("done\\n")\n'
+    after = tools.edited_text(before, "def report():\\n    pass", 'def report():\\n    print("done\\n")', False)
+    assert after == 'def report():\n    print("done\\n")\n\nprint("done\\n")\n'
+    compile(after, "report.py", "exec")
+
+
+def test_new_text_is_left_as_written_when_old_text_matched_as_written():
+    before = "a = 1\n"
+    assert tools.edited_text(before, "a = 1", "a = 1\\nb = 2", False) == "a = 1\\nb = 2\n"
+
+
 def test_escaped_text_that_still_does_not_match_gives_the_usual_error():
     with pytest.raises(tools.ToolError, match="was not found"):
         tools.edited_text("one\ntwo\n", "three\\nfour", "x", False)

@@ -294,12 +294,33 @@ def unescaped(text: str) -> str:
     return text
 
 
+WRITTEN_OUT_ESCAPE = re.compile(r'\\[nt"]')
+CONTEXT_STOP = re.compile(r'\s|\\[nt"]')
+
+
+def written_context(text: str, start: int, end: int) -> str:
+    stops_before = [stop.end() for stop in CONTEXT_STOP.finditer(text, 0, start)]
+    stop_after = CONTEXT_STOP.search(text, end)
+    left = stops_before[-1] if stops_before else 0
+    right = stop_after.start() if stop_after else len(text)
+    return text[left:right]
+
+
+def unescaped_new_text(new_text: str, before: str) -> str:
+    def replaced(escape: re.Match) -> str:
+        context = written_context(new_text, escape.start(), escape.end())
+        file_has_this_escape = len(context) > len(escape.group()) and context in before
+        return escape.group() if file_has_this_escape else WRITTEN_OUT_ESCAPES[escape.group()]
+
+    return WRITTEN_OUT_ESCAPE.sub(replaced, new_text)
+
+
 def edited_text(before: str, old_text: str, new_text: str, replace_all: bool) -> str:
     if not old_text:
         raise ToolError("old_text is empty; use write_file to create a file")
     found = before.count(old_text)
     if found == 0 and before.count(unescaped(old_text)) > 0:
-        old_text, new_text = unescaped(old_text), unescaped(new_text)
+        old_text, new_text = unescaped(old_text), unescaped_new_text(new_text, before)
         found = before.count(old_text)
     if found == 0:
         raise ToolError("old_text was not found; read the file again and copy the text exactly")
