@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 import pytest
@@ -413,6 +414,19 @@ def test_writes_are_atomic_and_keep_the_file_mode(tmp_path, monkeypatch):
     assert replaced == [target] and target.read_text() == "echo two\n"
     assert target.stat().st_mode & 0o777 == 0o755
     assert sorted(path.name for path in tmp_path.iterdir()) == ["run.sh"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+@pytest.mark.parametrize("umask, expected", [(0o022, 0o644), (0o002, 0o664), (0o077, 0o600)])
+def test_new_files_get_the_mode_the_umask_allows(tmp_path, umask, expected):
+    workspace = tools.Workspace(tmp_path)
+    previous = os.umask(umask)
+    try:
+        tools.run("write_file", {"path": "made.html", "content": "<p>hi</p>\n"}, workspace)
+    finally:
+        os.umask(previous)
+    assert (tmp_path / "made.html").stat().st_mode & 0o777 == expected
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["made.html"]
 
 
 def test_undo_puts_back_each_change_in_turn_and_removes_created_files(tmp_path):

@@ -7,7 +7,6 @@ import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
@@ -42,6 +41,8 @@ TEXT_OUTPUT = "text/plain"
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 NOTHING_TO_UNDO = "There is nothing to undo."
 MAX_CHECKPOINTS = 100
+NEW_FILE_MODE = 0o666
+TEMPORARY_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL
 TRUE_WORDS = ("true", "yes", "1")
 FALSE_WORDS = ("false", "no", "0")
 
@@ -175,18 +176,23 @@ def read_text(path: Path) -> str:
         raise ToolError(f"{path} is not a text file") from None
 
 
+def created_beside(path: Path) -> Path:
+    temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.arty-tmp"
+    os.close(os.open(temporary, TEMPORARY_FILE_FLAGS, NEW_FILE_MODE))
+    return temporary
+
+
 def write_text(path: Path, text: str) -> None:
     mode = path.stat().st_mode & 0o7777 if path.exists() else None
-    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", dir=path.parent,
-                                         prefix=f".{path.name}.", suffix=".arty-tmp", delete=False)
+    temporary = created_beside(path)
     try:
-        with handle:
+        with open(temporary, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
         if mode is not None:
-            os.chmod(handle.name, mode)
-        os.replace(handle.name, path)
+            os.chmod(temporary, mode)
+        os.replace(temporary, path)
     except BaseException:
-        Path(handle.name).unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
         raise
 
 
