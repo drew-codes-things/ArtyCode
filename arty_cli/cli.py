@@ -35,7 +35,8 @@ NOTE_MARK = "#"
 SHELL_MARK = "!"
 HELP_MARK = "?"
 SESSIONS_FOLDER = "sessions"
-SUMMARY_LEAD = "Summary of our conversation so far:"
+SUMMARY_LEAD = "Carry on from this summary of our conversation so far:"
+SUMMARY_HEADING = "Summary of our conversation so far:"
 SUMMARY_ACK = "Got it, carrying on from there."
 COMPACTED_LEAD = "Carry on with the work from there: the conversation got too long, so this is where it stands."
 LAST_OUTPUT_LEAD = "The end of the last command's output ({command}):"
@@ -188,8 +189,12 @@ REMOTE_USAGE = "Use /remote to share this session, /remote name <new name> to re
 REMOTE_NAME_USAGE = "Give the new name: /remote name <new name>."
 REMOTE_NAME_NEEDS_SHARING = "Turn remote control on with /remote first, then rename it."
 REMOTE_NAME = "name"
-SUMMARY_LEADS = (COMPACTED_LEAD, SUMMARY_LEAD, NO_SUMMARY_LEAD)
+SUMMARY_LEADS = (COMPACTED_LEAD, SUMMARY_LEAD, SUMMARY_HEADING, NO_SUMMARY_LEAD)
 REMOTE_ONLY_IN_CHAT = "--remote works in the chat, not with a single question."
+
+
+def is_lasting(error: Exception) -> bool:
+    return isinstance(error, (brain.SetupProblem, brain.WindowOverflow))
 
 
 def is_interactive() -> bool:
@@ -874,7 +879,7 @@ class Session:
             self.abandon_turn(self.done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
             return False
         except providers.ERRORS as error:
-            self.abandon_turn(self.done, str(error) if isinstance(error, brain.SetupProblem) else f"{error} {ASK_AGAIN}")
+            self.abandon_turn(self.done, str(error) if is_lasting(error) else f"{error} {ASK_AGAIN}")
             return False
         finally:
             self.terminal.stopped_listening()
@@ -1080,7 +1085,7 @@ class Session:
             return
         self.terminal.note("The conversation is long, so it's being summarised before the next step.")
         try:
-            summary = f"{SUMMARY_LEAD}\n{self.summary_of(messages, instructions)}"
+            summary = f"{SUMMARY_HEADING}\n{self.summary_of(messages, instructions)}"
         except providers.ERRORS as error:
             self.terminal.note(f"{error} Carrying on from the request, the checklist and what was done instead.",
                                "error")

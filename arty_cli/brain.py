@@ -42,6 +42,9 @@ SKIPPED_GROUPS = "browser,screen,windows,computer,documents"
 DATA_PREFIX = "data: "
 DONE = "data: [DONE]"
 CUT_OFF = "the reply stopped before its end, so it was not used"
+OVERFLOW_TYPE = "context_length_exceeded"
+OVERFLOW_WORDING = re.compile(r"context window", re.I)
+OVERFLOW_FALLBACK = "The conversation is longer than the model's context window, so the model did not read it."
 DEFAULT_PORTS = {"http": 80, "https": 443}
 IDENTITY_PREFIX = "arty-identity:"
 NONCE_BYTES = 16
@@ -76,6 +79,21 @@ class ToolMissing(BrainError):
 
 class SetupProblem(BrainError):
     pass
+
+
+class WindowOverflow(BrainError):
+    def __init__(self, message: str, model: str = "", window: int | None = None):
+        super().__init__(message)
+        self.model = model
+        self.window = window
+
+
+def window_overflow_in(found) -> WindowOverflow | None:
+    if not isinstance(found, dict) or found.get("type") != OVERFLOW_TYPE:
+        return None
+    window = found.get(CONTEXT_MARK)
+    return WindowOverflow(str(found.get("message") or OVERFLOW_FALLBACK), str(found.get("model") or ""),
+                          window if is_token_count(window) else None)
 
 
 class Dropped(BrainError):
@@ -278,7 +296,7 @@ def reasoning_in(delta: dict) -> str:
 
 
 def read_reply(lines, on_text, on_thinking=None) -> dict:
-    content, calls, finished, usage = [], {}, False, None
+    content, calls, finished, usage, held = [], {}, False, None, ""
     for line in lines:
         if not line.startswith(DATA_PREFIX):
             continue
@@ -290,6 +308,12 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
             choice = (chunk.get("choices") or [{}])[0]
         except (ValueError, AttributeError) as error:
             raise BrainError(f"Arty's brain sent something unreadable: {error}") from None
+        overflow = window_overflow_in(chunk.get("error"))
+        if overflow:
+            raise overflow
+        if held:
+            on_text(held)
+            held = ""
         usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else usage
         finished = finished or bool(choice.get("finish_reason"))
         delta = choice.get("delta") or {}
@@ -297,10 +321,14 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
             on_thinking(reasoning_in(delta))
         if delta.get("content"):
             content.append(delta["content"])
-            on_text(delta["content"])
+            held = delta["content"] if OVERFLOW_WORDING.search(delta["content"]) else ""
+            if not held:
+                on_text(delta["content"])
         for call in delta.get("tool_calls") or []:
             index = call.pop("index", len(calls))
             calls[index] = call
+    if held:
+        on_text(held)
     if not finished:
         raise ConnectionError(CUT_OFF)
     if is_brain_fault("".join(content)):
@@ -309,11 +337,12 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
     return {**reply, "usage": usage} if usage else reply
 
 
-def error_detail(error: urllib.error.HTTPError) -> str:
+def error_object(error: urllib.error.HTTPError) -> dict:
     try:
-        return json.loads(error.read() or b"{}").get("error", {}).get("message", "")
+        found = json.loads(error.read() or b"{}").get("error")
     except (ValueError, AttributeError, OSError):
-        return ""
+        return {}
+    return found if isinstance(found, dict) else {}
 
 
 def error_message(error: urllib.error.HTTPError) -> str:
@@ -519,7 +548,11 @@ class Brain:
         except urllib.error.HTTPError as error:
             if error.code == REFUSED_KEY:
                 raise SetupProblem("Arty's brain refused the API key. Run `arty-cli login` to log in again.") from None
-            detail = error_detail(error)
+            found = error_object(error)
+            overflow = window_overflow_in(found)
+            if overflow:
+                raise overflow from None
+            detail = str(found.get("message") or "")
             if error.code in MISSING_MODEL_CODES and MISSING_MODEL.search(detail):
                 raise SetupProblem(missing_model_message(self.model)) from None
             if error.code in BUSY_CODES:

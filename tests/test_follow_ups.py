@@ -18,7 +18,7 @@ AUTOMATIC_MESSAGES = [
     agent.unfinished_note([{"text": "Write tests", "status": "pending"}]), f"{agent.STOP_HOOK_LEAD} keep going",
     f"{agent.SUBAGENT_STOP_LEAD} keep going", agent.NOTHING_CHANGED_YET, agent.STUCK_NOTE, agent.STUCK_FAILING_NOTE,
     checks.FINISH_LEAD, cli.COMPACTED_LEAD, agent.anchor_note("make calc.py", []),
-    agent.anchor_note("make calc.py", [{"text": "Write tests", "status": "pending"}]), finish.FOLLOW_UP,
+    agent.anchor_note("make calc.py", [{"text": "Write tests", "status": "pending"}]), finish.FOLLOW_UP, cli.SUMMARY_LEAD,
 ]
 
 
@@ -52,3 +52,14 @@ def test_the_follow_ups_sent_in_a_real_turn_all_start_the_way_the_brain_expects(
 def test_the_message_after_a_summary_starts_the_way_the_brain_expects(project, monkeypatch):
     _session, brain, carried = forced_summary(project, monkeypatch)
     assert BRAINS_FOLLOW_UP.search(carried)
+
+
+def test_the_summary_left_by_compacting_starts_the_way_the_brain_expects(project):
+    brain = ScriptedBrain(["Hi.", "Second answer."], summary="We said hi.")
+    session = session_for(project, brain)
+    session.ask("first")
+    assert session.compact()
+    session.ask("second")
+    carried = brain.prompts[-1][1]
+    assert carried["role"] == "user" and "We said hi." in carried["content"]
+    assert BRAINS_FOLLOW_UP.search(carried["content"])

@@ -5,6 +5,7 @@ import re
 import threading
 
 from arty_cli import extras as extra_tools
+from arty_cli import brain as brain_module
 from arty_cli import checks, context, finish, hooks, offering, permissions, prune, remote, tools
 
 STUCK_REPEATS = 3
@@ -46,6 +47,9 @@ TODO_TOOL = "todo_write"
 NEAR_WINDOW_NOTE = ("The last prompt used {used} of the model's {window} tokens, near the end of the model's context "
                     "window; older results will be hidden to make room.")
 WINDOW_OVERFLOW = re.compile(r"context (?:window|length|size)|too long|too many tokens|exceeds", re.I)
+STILL_TOO_LONG = ("The conversation is still longer than {model} context window{size} after compacting it, so the "
+                  "model didn't read it. Start a fresh conversation with /clear, or pick a model with a bigger "
+                  "window with /model.")
 STUCK_FAILING_NOTE = ("You have made the same tool calls several times and they keep failing with the same error. "
                       "Don't make that call again: do it another way (for an edit that keeps missing, replace the "
                       "whole function or rewrite the file), or say what is blocking you.")
@@ -634,7 +638,15 @@ def kept_reply(content: str, reason: str) -> str:
 
 
 def is_window_overflow(error: Exception) -> bool:
-    return bool(WINDOW_OVERFLOW.search(str(error)))
+    return isinstance(error, brain_module.WindowOverflow) or bool(WINDOW_OVERFLOW.search(str(error)))
+
+
+def still_too_long(error: Exception, brain) -> brain_module.WindowOverflow:
+    model = getattr(error, "model", "") or str(getattr(brain, "model", "") or "")
+    window = getattr(error, "window", None)
+    return brain_module.WindowOverflow(STILL_TOO_LONG.format(model=f"{model}'s" if model else "the model's",
+                                                             size=f" of {window} tokens" if window else ""),
+                                       model, window)
 
 
 def replied(brain, messages: list[dict], offered: list[dict], screen, squeeze) -> dict:
@@ -644,7 +656,12 @@ def replied(brain, messages: list[dict], offered: list[dict], screen, squeeze) -
         if squeeze is None or not is_window_overflow(error):
             raise
     squeeze(messages, True)
-    return brain.reply(messages, tools=offered, on_text=screen.show_text)
+    try:
+        return brain.reply(messages, tools=offered, on_text=screen.show_text)
+    except Exception as error:
+        if not is_window_overflow(error):
+            raise
+        raise still_too_long(error, brain) from None
 
 
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,

@@ -523,8 +523,9 @@ that was read again or changed since go first, then all but the newest run of a 
 writes and edits, then the oldest results outside the newest five steps, until the conversation is at 60% of that
 point; only if that is not enough are the newer steps hidden too. Calls and their results stay in place, the newest
 step is never touched, and a file whose reads were all hidden has to be read again before it is edited. Only if that
-is not enough is it summarised. If the brain still refuses a conversation as longer than the model's window, it is
-cut down harder and sent once more. `/status` shows the
+is not enough is it summarised. If the brain still refuses a conversation as longer than the model's window (a 413
+`context_length_exceeded`, or a streamed reply ending in that error), the refusal is not shown as the answer: the
+conversation is cut down harder and sent once more, and a second refusal ends the request with a message saying so. `/status` shows the
 estimate. A summary in the middle of a request keeps the request itself, the checklist, the changes made and the
 commands run with what each showed, the end of the last command's output and the file changed last (numbered, so it
 can be edited at once), then the work carries on; the conversation sent to be summarised has big tool results and file
