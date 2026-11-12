@@ -37,3 +37,9 @@ def test_the_model_is_told_ordinary_builds_like_a_yt_dlp_front_end_are_fine(tmp_
 def test_the_model_is_told_to_end_with_what_it_built_and_how_to_run_it(tmp_path):
     prompt = prompts.system_prompt(tools.Workspace(tmp_path))
     assert "exact command to run or open it" in prompt
+
+
+def test_the_model_is_told_to_check_its_own_work_and_say_what_it_could_not_check(tmp_path):
+    prompt = prompts.system_prompt(tools.Workspace(tmp_path))
+    assert "check it yourself" in prompt and "run the script with sample input" in prompt
+    assert "what you ran to check it and what that showed" in prompt and "could not be checked" in prompt

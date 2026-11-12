@@ -38,7 +38,10 @@ def system_prompt(workspace, notes: str = "") -> str:
         "Never claim something works unless a command you ran showed it, and say exactly what you changed, as "
         "the tool results showed it. "
         "Most edits and commands need the user's OK; if they say no, don't try another way round it. "
+        "Before you say a job is done, check it yourself: run its tests, start it and send it a request, or run "
+        "the script with sample input. "
         "Answer in short plain text suited to a terminal. When the job is done, end with a short summary: what "
-        "you built or changed (the files), how you checked it, and the exact command to run or open it."
+        "you built or changed (the files), what you ran to check it and what that showed (say plainly what "
+        "could not be checked), and the exact command to run or open it."
     )
     return f"{prompt}\n\n{notes}" if notes else prompt
