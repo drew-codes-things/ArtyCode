@@ -1,3 +1,5 @@
+import contextlib
+
 from arty_cli import agent, cli, context, prune, tools
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
@@ -171,3 +173,65 @@ def test_after_a_summary_the_last_check_output_and_the_last_edited_file_are_carr
 def test_after_a_summary_only_the_carried_file_counts_as_read(project, monkeypatch):
     session, _brain, _carried = forced_summary(project, monkeypatch)
     assert set(session.workspace.seen) == {(project / "calc.py").resolve()}
+
+
+class Interrupting:
+    def __call__(self, messages):
+        raise KeyboardInterrupt
+
+
+def test_stopping_keeps_every_finished_round_and_drops_only_the_unfinished_one(project):
+    (project / "a.txt").write_text("alpha\n")
+    brain = ScriptedBrain([[("read_file", {"path": "a.txt"})], [("run_command", {"command": "echo hi"})],
+                           Interrupting()])
+    session = session_for(project, brain)
+    assert session.ask("look around") is False
+    roles = [message["role"] for message in session.messages[1:]]
+    assert roles == ["user", "assistant", "tool", "assistant", "tool", "assistant"]
+    assert session.messages[-1]["content"].startswith(cli.STOPPED)
+    assert "alpha" in session.messages[3]["content"]
+
+
+def test_stopping_in_the_middle_of_a_round_drops_its_calls_but_keeps_the_rounds_before(project, monkeypatch):
+    (project / "a.txt").write_text("alpha\n")
+    brain = ScriptedBrain([[("read_file", {"path": "a.txt"})], [("run_command", {"command": "echo hi"})], "x"])
+    session = session_for(project, brain)
+    real_run = tools.run
+
+    def stopped_at_the_command(name, arguments, workspace):
+        if name == "run_command":
+            raise KeyboardInterrupt
+        return real_run(name, arguments, workspace)
+
+    monkeypatch.setattr(tools, "run", stopped_at_the_command)
+    session.ask("look around")
+    roles = [message["role"] for message in session.messages[1:]]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    assert "run_command echo hi (stopped part way)" in session.messages[-1]["content"]
+
+
+class QueuingConsole:
+    def __init__(self, *texts):
+        self.texts = list(texts)
+
+    @contextlib.contextmanager
+    def showing(self, label, started_at, tokens):
+        yield self
+
+    def take_queued(self, wanted):
+        taken = [text for text in self.texts if wanted(text)]
+        self.texts = [text for text in self.texts if not wanted(text)]
+        return taken
+
+
+def test_a_message_queued_while_arty_works_reaches_the_model_at_the_next_step(project):
+    (project / "a.txt").write_text("alpha\n")
+    brain = ScriptedBrain([[("read_file", {"path": "a.txt"})], "Done."])
+    session = session_for(project, brain)
+    session.terminal.console = QueuingConsole("also check b.txt", "/status")
+    session.ask("read a.txt")
+    sent = [message["content"] for message in brain.prompts[1] if message["role"] == "user"]
+    assert sent[0] == "read a.txt" and sent[-1].endswith("also check b.txt")
+    assert brain.prompts[1][-2]["role"] == "tool"
+    assert session.terminal.console.texts == ["/status"]
+    assert "also check b.txt" in session.request

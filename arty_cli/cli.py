@@ -31,6 +31,7 @@ CONTINUATION_PROMPT = "… "
 LINE_CONTINUES = "\\"
 NOTE_MARK = "#"
 SHELL_MARK = "!"
+HELP_MARK = "?"
 SESSIONS_FOLDER = "sessions"
 SUMMARY_LEAD = "Summary of our conversation so far:"
 SUMMARY_ACK = "Got it, carrying on from there."
@@ -40,6 +41,8 @@ LAST_FILE_LEAD = "The file you changed last, {path}, as it is now (it counts as 
 CARRIED_OUTPUT_SHARE = 4
 CARRIED_FILE_SHARE = 2
 PRUNED_NOTE = "The conversation is long, so older results were dropped to make room."
+STEER_LEAD = "(I sent this while you were working; take it into account from here:)"
+NOT_STEERING_MARKS = ("/", SHELL_MARK, NOTE_MARK, HELP_MARK)
 REQUEST_LEAD = "The request you are working on:"
 CHECKLIST_LEAD = "Your checklist:"
 DONE_LEAD = "Changes and commands that already ran:"
@@ -107,7 +110,7 @@ HELP_GROUPS = (
         "Esc": "stop the current request",
         "Ctrl-C": "clear what you typed, twice to leave (at the plain prompt it stops the request)",
         "Ctrl-D, /exit": "leave",
-        "Enter while Arty works": "queue your next message for when it finishes",
+        "Enter while Arty works": "queue a message: Arty reads it at its next step (commands wait)",
         "Alt+Enter": "start another line (so does a line ending in \\)",
         "Up, Down, Ctrl-R": "earlier requests in this project, and searching them",
         "Tab, Enter": "take the highlighted /command, model or @file from the menu",
@@ -115,7 +118,6 @@ HELP_GROUPS = (
     }),
 )
 CUSTOM_HELP_HEADING = "Your commands"
-HELP_MARK = "?"
 HELP_GAP = 2
 TRUE_COLOUR_ACCENT = "\033[38;2;229;56;59m"
 PALETTE_ACCENT = "\033[38;5;167m"
@@ -779,7 +781,7 @@ class Session:
         try:
             with self.running(remote.IN_TURN), self.terminal.interruptible():
                 agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=self.done,
-                               squeeze=self.squeeze, extras=self.extras)
+                               squeeze=self.squeeze, extras=self.extras, steer=self.steering_messages)
         except KeyboardInterrupt:
             self.abandon_turn(self.done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
             return False
@@ -794,13 +796,38 @@ class Session:
         self.remember()
         return True
 
+    def steering_messages(self) -> list[dict]:
+        taking = getattr(self.terminal.console, "take_queued", None)
+        if taking is None:
+            return []
+        steered = []
+        for text in taking(is_steering_text):
+            allowed = self.prompt_hook(text)
+            if allowed is None:
+                continue
+            self.tell_remote({"type": "user", "text": text})
+            self.request = f"{self.request}\n{text}"
+            steered.append({"role": "user", "content": mentions.expand(f"{STEER_LEAD}\n{allowed}", self.workspace)})
+        return steered
+
+    def finished_upto(self) -> int:
+        index = kept = self.turn_start + 1
+        while index < len(self.messages):
+            calls = self.messages[index].get("tool_calls") or []
+            answered = self.messages[index + 1:index + 1 + len(calls)]
+            if len(answered) < len(calls) or any(message.get("role") != "tool" for message in answered):
+                break
+            index = kept = index + 1 + len(calls)
+        return kept
+
     def abandon_turn(self, done: list[str], reason: str) -> None:
         self.tell_remote({"type": "error", "text": reason})
-        if not done and not self.compacted_in_turn:
+        kept = self.finished_upto()
+        if not done and not self.compacted_in_turn and kept == self.turn_start + 1:
             del self.messages[self.turn_start:]
             self.terminal.note(f"{reason} That request was dropped from the conversation.", "error")
             return
-        del self.messages[self.turn_start + 1:]
+        del self.messages[kept:]
         self.messages.append({"role": "assistant", "content": stopped_note(done)})
         self.remember()
         self.terminal.note(f"{reason} What already ran is noted in the conversation.", "error")
@@ -1266,6 +1293,10 @@ class Session:
         self.client.model = choice.model
         settings.remember(model=choice.model)
         self.terminal.note(f"Model: {choice.model}, kept for next time.")
+
+
+def is_steering_text(text: str) -> bool:
+    return bool(text.strip()) and not text.startswith(NOT_STEERING_MARKS)
 
 
 def unknown_command_note(name: str, choices: dict) -> str:

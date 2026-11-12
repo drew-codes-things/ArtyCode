@@ -315,7 +315,7 @@ def test_stopping_a_request_keeps_a_record_of_what_already_changed(ready, monkey
     later = FakeBrain.made[0].calls[3]
     assert user_texts(later) == ["change x", "what changed?"]
     assert any(m["role"] == "assistant" and "edit_file a.py" in (m["content"] or "") for m in later)
-    assert all(m["role"] != "tool" for m in later)
+    assert [m["content"].splitlines()[0] for m in later if m["role"] == "tool"] == ["1\tx = 1", "Edited a.py"]
 
 
 class LongReadBrain(FakeBrain):

@@ -366,3 +366,15 @@ def test_an_interface_that_cannot_start_says_why(tmp_path, monkeypatch):
     monkeypatch.setattr(tui.Interface, "build", lambda self: (_ for _ in ()).throw(OSError("no console here")))
     with pytest.raises(tui.InterfaceError, match="no console here"):
         tui.Interface(Host(tmp_path), commit=lambda line: None).start()
+
+
+def test_queued_lines_can_be_taken_mid_turn_leaving_commands_for_later(started):
+    interface, typed = started
+    with interface.working():
+        typed.send_text("also handle division by zero\r")
+        typed.send_text("/status\r")
+        assert until(lambda: len(interface.queued) == 2)
+        taken = interface.take_queued(lambda text: not text.startswith("/"))
+        assert taken == ["also handle division by zero"]
+        assert interface.queued == ["/status"] and interface.sent == ["› also handle division by zero"]
+    assert interface.next_message() == "/status"

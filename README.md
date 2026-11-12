@@ -78,7 +78,9 @@ and an input box stays pinned underneath.
 ```
 
 - **Typing while Arty works.** The box is always live. Enter while a request runs queues your message (shown as
-  `queued: ...` above the box) and it is sent when the turn ends. **Esc** stops the running request. **Ctrl-C** clears
+  `queued: ...` above the box). A plain message reaches Arty at its next step, so it can change course mid-request;
+  a `/command`, `!command` or `# note` waits until the turn ends. **Esc** stops the running request, keeping every step
+  that finished (and what it showed) in the conversation and dropping only the unfinished one. **Ctrl-C** clears
   what you typed; on an empty line it asks once more and the second Ctrl-C leaves. **Ctrl-D** on an empty line leaves.
 - **Menus.** `/` opens a list of commands under the box that narrows as you type, each with what it does; after
   `/model ` it lists the models; `@` completes file paths inside the project. Up and Down move through it, Tab or

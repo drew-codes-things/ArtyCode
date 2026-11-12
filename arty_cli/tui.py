@@ -490,6 +490,19 @@ class Interface:
             with self.lock:
                 self.busy = False
 
+    def take_queued(self, wanted) -> list[str]:
+        with self.lock:
+            waiting = []
+            while not self.messages.empty():
+                waiting.append(self.messages.get_nowait())
+            taken = [text for text in waiting if wanted(text)]
+            for text in waiting:
+                if text not in taken:
+                    self.messages.put(text)
+        for text in taken:
+            self.show_request(text)
+        return taken
+
     def next_message(self) -> str | None:
         while not self.leaving:
             try:

@@ -605,7 +605,7 @@ def kept_reply(content: str, reason: str) -> str:
 
 
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
-             squeeze=None, extras=None, stop_hooks=True, stopped=None) -> str:
+             squeeze=None, extras=None, stop_hooks=True, stopped=None, steer=None) -> str:
     extras = extras or extra_tools.NONE
     offered = offered_definitions(extras) + planning_definitions(gate) if offered is None else offered
     if stop_hooks:
@@ -656,6 +656,11 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
                 approved_with = len(done)
         if squeeze:
             squeeze(messages)
+        steered = steer() if steer else []
+        if steered:
+            messages.extend(steered)
+            recent, failures = [], []
+            continue
         if waits_on_running_jobs(calls, results):
             continue
         signature = signature_of(calls, raw_results)
