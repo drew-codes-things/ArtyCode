@@ -62,12 +62,9 @@ FINISH_LEAD = "Before you finish (ArtyCode's built-in rules):"
 VERIFY_REQUEST = ("You changed files but ran nothing to check them after the last change. Run the project's tests "
                   "now with run_command (or a build, a lint or the program itself) and read the result. If it can't "
                   f"be checked, write {rules.UNVERIFIED} in your report with what would check it.")
-HISTORY_REQUEST = (f"Now append one entry for this task to the end of {rules.HISTORY.as_posix()}: create it with "
-                   "write_file if it is missing, otherwise read it and add the entry after its last line with "
-                   "edit_file. Never change earlier entries. The shape:\n{template}")
 REPORT_REMINDER = (f"Then finish with your report: Outcome (DONE, PARTIAL, BLOCKED or {rules.UNVERIFIED}), Changed, "
                    "Verification (each command and its result), Assumptions, Open items.")
-VERIFY_STEP, HISTORY_STEP = "verify", "history"
+VERIFY_STEP = "verify"
 SENT_BACK_NOTE = "Rule check: sent back to"
 LEFT_IN_NOTE = "Rule check: still in the lines added:"
 
@@ -81,7 +78,6 @@ class Hit:
 
 @dataclass
 class Turn:
-    history_before: str | None
     baselines: dict = field(default_factory=dict)
     steps: int = 0
     changed_at: int = 0
@@ -249,7 +245,7 @@ def current_turn(workspace) -> Turn | None:
 
 def start_turn(workspace) -> None:
     if rules.checked(workspace):
-        workspace.rules.turn = Turn(text_or_none(workspace.root / rules.HISTORY))
+        workspace.rules.turn = Turn()
 
 
 def watch(workspace, name: str, arguments: dict) -> Watched | None:
@@ -311,18 +307,10 @@ def outstanding_hits(turn: Turn) -> dict:
     return found
 
 
-def history_appended(workspace, turn: Turn) -> bool:
-    now = text_or_none(workspace.root / rules.HISTORY) or ""
-    before = turn.history_before or ""
-    return len(now.strip()) > len(before.strip()) and now.startswith(before)
-
-
 def missing_steps(workspace, turn: Turn, answer: str) -> list[tuple[str, str]]:
     missing = []
     if turn.checked_at <= turn.changed_at and rules.UNVERIFIED not in answer:
         missing.append((VERIFY_STEP, VERIFY_REQUEST))
-    if not history_appended(workspace, turn):
-        missing.append((HISTORY_STEP, HISTORY_REQUEST.format(template=rules.history_template(rules.today_text()))))
     return [(step, request) for step, request in missing if step not in turn.asked]
 
 
@@ -363,4 +351,4 @@ def sent_back(workspace, messages: list[dict], answer: str, screen=None) -> bool
 def sent_for(reason: str) -> str:
     if reason.startswith(HITS_LEAD):
         return "remove comments or em dashes"
-    return "check the work" if reason == VERIFY_REQUEST else "write the history entry"
+    return "check the work"

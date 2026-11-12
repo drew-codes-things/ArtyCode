@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from arty_cli import agent, cli, context, prune, sessions, tools
+from arty_cli import agent, checks, cli, context, prune, rules, sessions, tools
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
 
@@ -335,3 +335,66 @@ def test_real_token_counts_from_the_brain_calibrate_the_estimate_and_warn_near_t
     session.ask("read a.txt")
     assert context.chars_per_token(brain) < context.CHARS_PER_TOKEN
     assert "near the end of the model's context window" in session.terminal.err.getvalue()
+
+
+REPORT = ("Outcome: DONE\nChanged: calc.py adds two numbers.\nVerification: python3 calc.py printed 5.\n"
+          "Assumptions: plain functions, as the project has no classes.\nOpen items: none")
+
+
+def file_changing_task(project, level, steps=None):
+    brain = ScriptedBrain(steps or [[("write_file", {"path": "calc.py", "content": "print(2 + 3)\n"})],
+                                    [("run_command", {"command": "python3 calc.py"})], REPORT])
+    session = session_for(project, brain)
+    session.workspace.rules = rules.Rules(level)
+    session.messages[0] = session.fresh()[0]
+    session.ask("make calc.py that prints 2 + 3")
+    return session, brain
+
+
+def test_with_the_rules_on_artycode_writes_the_history_entry_and_the_model_spends_no_rounds_on_it(project):
+    _session, brain = file_changing_task(project, rules.ON)
+    assert brain.log == ["write_file", "run_command", "answer"]
+    entry = (project / ".arty" / "history.md").read_text()
+    lines = entry.splitlines()
+    assert lines[0].startswith("## ") and lines[0].endswith(" - make calc.py that prints 2 + 3")
+    assert "Status: DONE" in lines and "Changed: calc.py" in lines
+    assert "What: calc.py adds two numbers." in lines
+    assert "Why: plain functions, as the project has no classes." in lines
+    assert "Verified by: run_command python3 calc.py: 5 (exit code 0)" in lines
+    assert "Left open: none" in lines and checks.EM_DASH not in entry
+    assert not (project / ".arty" / "scratchpad.md").exists()
+
+
+def test_tell_only_also_keeps_the_history_and_off_does_not(project):
+    file_changing_task(project, rules.TELL_ONLY)
+    assert (project / ".arty" / "history.md").read_text().count("## ") == 1
+    (project / ".arty" / "history.md").unlink()
+    file_changing_task(project, rules.OFF)
+    assert not (project / ".arty" / "history.md").exists()
+
+
+def test_entries_are_appended_after_the_earlier_ones(project):
+    (project / ".arty").mkdir()
+    (project / ".arty" / "history.md").write_text("## 2026-11-01 - first\nStatus: DONE\n")
+    file_changing_task(project, rules.ON)
+    text = (project / ".arty" / "history.md").read_text()
+    assert text.startswith("## 2026-11-01 - first\nStatus: DONE\n\n## ") and text.count("## ") == 2
+
+
+def test_a_request_that_changes_nothing_gets_no_entry(project):
+    file_changing_task(project, rules.ON, steps=[[("run_command", {"command": "echo hi"})], "Nothing to change."])
+    assert not (project / ".arty" / "history.md").exists()
+
+
+def test_a_report_without_an_outcome_is_unverified_when_nothing_ran_after_the_change(project):
+    file_changing_task(project, rules.TELL_ONLY,
+                       steps=[[("write_file", {"path": "calc.py", "content": "print(5)\n"})], "Made calc.py."])
+    lines = (project / ".arty" / "history.md").read_text().splitlines()
+    assert "Status: UNVERIFIED" in lines and "Verified by: nothing was run" in lines
+
+
+def test_a_request_stopped_after_a_change_is_recorded_as_partial(project):
+    file_changing_task(project, rules.ON,
+                       steps=[[("write_file", {"path": "calc.py", "content": "print(5)\n"})], Interrupting()])
+    lines = (project / ".arty" / "history.md").read_text().splitlines()
+    assert "Status: PARTIAL" in lines and "Changed: calc.py" in lines

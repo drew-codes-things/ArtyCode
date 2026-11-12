@@ -32,9 +32,10 @@ def test_the_instructions_cover_every_rule_and_stay_small(workspace):
     text = rules.instructions(workspace, "2026-11-12")
     for needed in ("callers", "smallest change", "make anything up", "no comments", "shebangs",
                    "suppressions", "license headers", "em dash", "destructive", "all questions at once",
-                   "UNVERIFIED", ".arty/scratchpad.md", ".arty/history.md", "## 2026-11-12", "Outcome", "Changed",
+                   "UNVERIFIED", ".arty/history.md", "Outcome", "Changed",
                    "Verification", "Assumptions", "Open items", "project's notes"):
         assert needed in text, needed
+    assert ".arty/scratchpad.md" not in text and "## 2026-11-12" not in text
     assert "\u2014" not in text
     tokens = context.estimated_tokens([{"role": "system", "content": text}], None)
     assert tokens <= MAX_INSTRUCTION_TOKENS

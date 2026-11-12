@@ -186,20 +186,18 @@ def test_a_clean_edit_gets_no_rule_note(tmp_path):
     assert answer == "Done." and sent_back_texts(messages) == []
 
 
-def test_finishing_without_checking_or_history_is_sent_back_once_for_each_then_allowed(tmp_path):
+def test_finishing_without_checking_is_sent_back_once_and_never_asked_for_a_history_entry(tmp_path):
     workspace = ruled_workspace(tmp_path)
     answer, messages, _scripted = turn(
         workspace,
         ("", [call("write_file", path="app.py", content="x = 1\n")]),
         ("All done.", []),
         ("Still done.", []),
-        ("Really done.", []),
     )
-    assert answer == "Really done."
-    verify, history = sent_back_texts(messages)
+    assert answer == "Still done."
+    [verify] = sent_back_texts(messages)
     assert checks.VERIFY_REQUEST in verify and ".arty/history.md" not in verify
-    assert ".arty/history.md" in history and "Verified by" in history and checks.VERIFY_REQUEST not in history
-    assert all(checks.REPORT_REMINDER in text for text in (verify, history))
+    assert checks.REPORT_REMINDER in verify
 
 
 def test_a_command_that_was_not_found_is_not_a_check(tmp_path):
@@ -373,9 +371,11 @@ def test_helpers_do_not_run_the_finish_check(tmp_path):
     assert sent_back_texts(messages) == []
 
 
-def test_the_history_template_has_every_field():
+def test_a_history_entry_has_every_field():
+    entry = rules.history_entry(rules.Record("add", ["a.py"], [], False, ""), "2026-11-12")
+    assert entry.startswith("## 2026-11-12 - add\n")
     for field in ("Status", "Changed", "What", "Why", "Verified by", "Not verified", "Left open"):
-        assert f"{field}:" in rules.history_template("2026-11-12")
+        assert f"\n{field}: " in entry
 
 
 def test_no_source_file_of_arty_cli_holds_an_em_dash():

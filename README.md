@@ -374,16 +374,21 @@ after `!` run in the sandbox too; hooks and MCP servers don't.
 
 ### Built-in working rules
 
-Out of the box Arty works by a short set of engineering rules, added to what the model is told (about 2,000
-characters: 462 tokens for qwen3:14b, 473 for mimo-v2.6:9b):
+Out of the box Arty works by a short set of engineering rules, added to what the model is told (about 1,600
+characters):
 
 - read the code and its callers first, match the project's patterns, make the smallest change, never make things up;
 - no comments or docstrings in code it writes (shebangs, encoding lines, lint or type suppressions and license headers
   are fine), and never the em dash character;
 - ask before anything destructive, otherwise decide, note the assumption and carry on;
 - nothing is done until a test, build, lint or run shows it, or the report says `UNVERIFIED`;
-- keep a scratchpad in `.arty/scratchpad.md` and add an entry to the end of `.arty/history.md` for each task that
-  changes files, then report with Outcome, Changed, Verification, Assumptions and Open items.
+- end a task that changes files with a report: Outcome, Changed, Verification, Assumptions and Open items.
+
+ArtyCode keeps the record itself, so the model spends no steps on it: when the rules are on or tell-only, each request
+that changed files gets an entry at the end of `.arty/history.md`, written by ArtyCode from what it already holds: the
+date and the request, Status (the report's Outcome; otherwise DONE if a command ran after the last change and
+UNVERIFIED if not; PARTIAL for a request stopped part way), the files changed, What (the report's Changed), Why (its
+Assumptions), Verified by (each command run, with what it showed), Not verified and Left open (its Open items).
 
 They are also checked, not only told:
 
@@ -393,19 +398,17 @@ They are also checked, not only told:
 - When the model says it has finished a request that changed files, it is sent back if comments or em dashes it added
   are still there (up to three times), once if nothing was run to check the work after the last change (a test,
   build, lint or the program; looking around with `ls`, `cat` or `git` doesn't count) and the report doesn't say
-  `UNVERIFIED` (a command that wasn't found doesn't count), and once more if no entry was added to
-  `.arty/history.md`. Those two are asked for one at a time, and every send-back ends with the report shape.
+  `UNVERIFIED` (a command that wasn't found doesn't count). Every send-back ends with the report shape.
 
-Arty writes `.arty/scratchpad.md` and `.arty/history.md` without asking, and `.arty/history.md` only at its end:
-a change that alters an earlier entry is refused. Everything else under `.arty` is still asked about every time, and
-plan mode still changes nothing. The scratchpad is working state, so leave it out of commits (add
-`.arty/scratchpad.md` to `.gitignore` if you like); the history is meant to be kept.
+If the model writes `.arty/scratchpad.md` or `.arty/history.md` anyway, that is allowed without asking, and
+`.arty/history.md` only at its end: a change that alters an earlier entry is refused. Everything else under `.arty` is
+still asked about every time, and plan mode still changes nothing. The history is meant to be kept in git.
 
 A project's `ARTY.md` or `AGENTS.md` comes after the rules and wins where they differ. To change them:
 
 | Where | Setting |
 |---|---|
-| `settings.json` in the config folder (or a trusted project's `.arty/settings.json`) | `"builtInRules": true` (the default), `"tell-only"` (told, not checked) or `false` |
+| `settings.json` in the config folder (or a trusted project's `.arty/settings.json`) | `"builtInRules": true` (the default), `"tell-only"` (told, not checked; the history is still kept) or `false` (not told, no history) |
 | One run | `arty --rules on`, `--rules tell-only` or `--rules off` |
 | This session | `/rules on`, `/rules tell-only`, `/rules off`; `/rules` alone shows the state |
 

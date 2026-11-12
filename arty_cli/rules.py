@@ -1,5 +1,6 @@
 import datetime
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,7 @@ SCRATCHPAD = RECORDS_FOLDER / "scratchpad.md"
 HISTORY = RECORDS_FOLDER / "history.md"
 RECORD_FILES = (SCRATCHPAD, HISTORY)
 UNVERIFIED = "UNVERIFIED"
+EM_DASH = "\u2014"
 HEADING = "Working rules (built into ArtyCode; where the project's notes below say otherwise, the notes win):"
 RULES = (
     "Before changing code, read it and its callers, and match the project's existing patterns.",
@@ -28,27 +30,19 @@ RULES = (
     "you must, all questions at once.",
     "Nothing is done until it has run: after your last change run the tests, a build, a lint or the program and "
     f"read the result. If you can't, write {UNVERIFIED} in the report with what would check it.",
-    f"For a task that changes files keep {SCRATCHPAD.as_posix()} (never commit it): read it first, then write Task, "
-    "Goal, Verification commands, Plan checklist, Assumptions, Verification log (command -> result) and a last line "
-    "Status: IN PROGRESS, DONE, PARTIAL or BLOCKED.",
-    f"Before finishing such a task append one entry to the end of {HISTORY.as_posix()} (read it first, never change "
-    "earlier entries): ## {today} - <task>, then lines Status, Changed, What, Why, Verified by (commands and "
-    "results), Not verified, Left open.",
-    f"End such a task with a short report: Outcome (DONE, PARTIAL, BLOCKED or {UNVERIFIED}), Changed, Verification "
-    "(each command and its result, failures first), Assumptions, Open items.",
+    f"End a task that changes files with a short report: Outcome (DONE, PARTIAL, BLOCKED or {UNVERIFIED}), Changed, "
+    "Verification (each command and its result, failures first), Assumptions (with the reasons for your choices), "
+    f"Open items. ArtyCode adds it to {HISTORY.as_posix()} itself, so don't write that file or a scratchpad.",
 )
 CHECKED_NOTE = ("ArtyCode checks comments and em dashes after each edit, and sends you back once if you finish "
-                "without checking your work or writing the history entry.")
-HISTORY_TEMPLATE = (
-    "## {today} - <the task in one line>\n"
-    f"Status: DONE, PARTIAL, BLOCKED or {UNVERIFIED}\n"
-    "Changed: <files>\n"
-    "What: <what changed and what it does now>\n"
-    "Why: <the choices made and the evidence for them; reasons live here, not in code comments>\n"
-    "Verified by: <each command and its result>\n"
-    "Not verified: <what wasn't proven and why, or nothing>\n"
-    "Left open: <follow-ups and risks>"
-)
+                "without checking your work.")
+STATUSES = ("DONE", "PARTIAL", "BLOCKED", UNVERIFIED)
+REPORT_HEADING = re.compile(r"^[\s#*_>-]*(outcome|changed|verification|assumptions|open items|not verified)[*_\s]*:"
+                            r"[*_\s]*(.*)$", re.I)
+MAX_FIELD_CHARS = 600
+MAX_TASK_CHARS = 100
+NOTHING_RUN = "nothing was run"
+UNCHECKED = "no command checked the last change"
 APPEND_ONLY = (f"Error: {HISTORY.as_posix()} is append-only: keep every earlier entry exactly as it is and add the "
                "new entry at the end (edit_file with its last lines as old_text, and those lines plus the entry as "
                "new_text).")
@@ -99,14 +93,10 @@ def today_text() -> str:
     return datetime.date.today().isoformat()
 
 
-def history_template(today: str) -> str:
-    return HISTORY_TEMPLATE.format(today=today)
-
-
 def instructions(workspace, today: str = "") -> str:
     if not told(workspace):
         return ""
-    listed = [f"- {rule.format(today=today or today_text())}" for rule in RULES]
+    listed = [f"- {rule}" for rule in RULES]
     lines = [HEADING, *listed] + ([CHECKED_NOTE] if checked(workspace) else [])
     return "\n".join(lines)
 
@@ -143,3 +133,60 @@ def append_only_refusal(workspace, name: str, arguments: dict) -> str | None:
     except (tools.ToolError, OSError, ValueError, TypeError):
         return None
     return None if after.startswith(before) else APPEND_ONLY
+
+
+def one_line(text: str, limit: int = MAX_FIELD_CHARS) -> str:
+    flat = " ".join(str(text).replace(EM_DASH, ",").split())
+    return flat if len(flat) <= limit else flat[:limit - 3] + "..."
+
+
+def report_sections(report: str) -> dict[str, str]:
+    sections, current = {}, None
+    for line in report.splitlines():
+        heading = REPORT_HEADING.match(line)
+        if heading:
+            current = heading.group(1).lower()
+            sections[current] = heading.group(2)
+        elif current is not None:
+            sections[current] = f"{sections[current]} {line}"
+    return {name: one_line(text) for name, text in sections.items() if text.strip()}
+
+
+def report_status(sections: dict[str, str]) -> str:
+    words = sections.get("outcome", "").replace(":", " ").replace(",", " ").split()
+    return next((word.upper() for word in words[:3] if word.upper() in STATUSES), "")
+
+
+@dataclass(frozen=True)
+class Record:
+    task: str
+    changed: list
+    commands: list
+    checked: bool
+    report: str
+    stopped: str = ""
+
+
+def history_entry(record: Record, today: str) -> str:
+    sections = report_sections(record.report)
+    status = "PARTIAL" if record.stopped else report_status(sections) or ("DONE" if record.checked else UNVERIFIED)
+    what = sections.get("changed") or one_line(record.report) or record.stopped
+    not_verified = sections.get("not verified") or ("nothing listed" if record.checked else UNCHECKED)
+    lines = [f"## {today} - {one_line(record.task, MAX_TASK_CHARS)}",
+             f"Status: {status}",
+             f"Changed: {', '.join(record.changed)}",
+             f"What: {what or 'not described'}",
+             f"Why: {sections.get('assumptions') or 'not given in the report'}",
+             f"Verified by: {one_line('; '.join(record.commands)) or NOTHING_RUN}",
+             f"Not verified: {not_verified}",
+             f"Left open: {sections.get('open items') or record.stopped or 'nothing listed'}"]
+    return "\n".join(lines) + "\n"
+
+
+def append_history(workspace, record: Record, today: str = "") -> Path:
+    path = workspace.root / HISTORY
+    path.parent.mkdir(parents=True, exist_ok=True)
+    earlier = tools.read_text(path) if path.is_file() else ""
+    entry = history_entry(record, today or today_text())
+    tools.write_text(path, f"{earlier.rstrip()}\n\n{entry}" if earlier.strip() else entry)
+    return path

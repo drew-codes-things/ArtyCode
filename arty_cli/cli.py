@@ -41,6 +41,7 @@ LAST_FILE_LEAD = "The file you changed last, {path}, as it is now (it counts as 
 CARRIED_OUTPUT_SHARE = 4
 CARRIED_FILE_SHARE = 2
 PRUNED_NOTE = "The conversation is long, so older results were dropped to make room."
+COMMAND_STEP = "run_command "
 STEER_LEAD = "(I sent this while you were working; take it into account from here:)"
 NOT_STEERING_MARKS = ("/", SHELL_MARK, NOTE_MARK, HELP_MARK)
 REQUEST_LEAD = "The request you are working on:"
@@ -711,6 +712,7 @@ class Session:
         self.choices = None
         self.turns = []
         self.request, self.done = "", []
+        self.last_checkpoint = None
         client.on_thinking = terminal.count_thinking
         self.remote = None
         self.remote_name = ""
@@ -790,6 +792,7 @@ class Session:
         self.messages.append({"role": "user", "content": content})
         self.turns.append(Turn(self.turn_start, len(self.workspace.checkpoints), text, content))
         self.request, self.done = text, []
+        self.last_checkpoint = self.workspace.checkpoints[-1] if self.workspace.checkpoints else None
         self.terminal.start_turn()
         try:
             with self.running(remote.IN_TURN), self.terminal.interruptible():
@@ -807,8 +810,33 @@ class Session:
             self.tell_mode()
         self.terminal.end_line()
         self.terminal.finish_turn()
+        self.keep_history(str(self.messages[-1].get("content") or "") if self.messages else "")
         self.remember()
         return True
+
+    def changed_in_turn(self) -> list[str]:
+        checkpoints = self.workspace.checkpoints
+        start = checkpoints.index(self.last_checkpoint) + 1 if self.last_checkpoint in checkpoints else 0
+        shown = [self.workspace.shown(kept.path) for kept in checkpoints[start:]
+                 if not rules.is_record_path(self.workspace, kept.path)]
+        return list(dict.fromkeys(shown))
+
+    def checked_after_last_change(self) -> bool:
+        changes = [index for index, step in enumerate(self.done) if not step.startswith(COMMAND_STEP)]
+        last_change = changes[-1] if changes else -1
+        return any(step.startswith(COMMAND_STEP) for step in self.done[last_change + 1:])
+
+    def keep_history(self, report: str, stopped: str = "") -> None:
+        changed = self.changed_in_turn()
+        if not rules.told(self.workspace) or not changed:
+            return
+        commands = [step.removeprefix(COMMAND_STEP).strip() for step in self.done if step.startswith(COMMAND_STEP)]
+        record = rules.Record(self.request, changed, [f"run_command {command}" for command in commands],
+                              self.checked_after_last_change(), report, stopped)
+        try:
+            rules.append_history(self.workspace, record)
+        except (tools.ToolError, OSError) as error:
+            self.terminal.note(f"Couldn't add to {rules.HISTORY.as_posix()}: {error}", "error")
 
     def steering_messages(self) -> list[dict]:
         taking = getattr(self.terminal.console, "take_queued", None)
@@ -843,6 +871,7 @@ class Session:
             return
         del self.messages[kept:]
         self.messages.append({"role": "assistant", "content": stopped_note(done)})
+        self.keep_history("", f"stopped before it finished: {reason}")
         self.remember()
         self.terminal.note(f"{reason} What already ran is noted in the conversation.", "error")
 
