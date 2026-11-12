@@ -203,7 +203,8 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/compact` | Swap the conversation for a summary (also done automatically when it gets long) |
 | `/mcp`, `/skills`, `/helpers`, `/hooks` | What's set up of each (below) |
 | `/remote`, `/remote off` | Share this chat with the Arty apps and starfire.ai, or stop sharing (below) |
-| `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/help`, `/exit` | The rest |
+| `?` or `/help` | The commands and keys, in short groups (your own commands last) |
+| `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/exit` | The rest |
 
 `ARTY.md` in the project and in the config folder (notes for every project) are added to what the model is told, and so
 is a project's `AGENTS.md` (the shared file other coding tools read), after `ARTY.md` when both are there. The

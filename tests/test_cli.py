@@ -87,6 +87,52 @@ def test_an_unknown_slash_command_is_explained(ready, monkeypatch, capsys):
     assert FakeBrain.made[0].calls == []
 
 
+def help_shown(monkeypatch, capsys, asked="/help"):
+    chat_with(monkeypatch, asked, "/exit")
+    rows = capsys.readouterr().err.splitlines()
+    return rows[rows.index(cli.HELP_GROUPS[0][0]):]
+
+
+def test_help_lists_commands_under_a_few_headings(ready, monkeypatch, capsys):
+    rows = help_shown(monkeypatch, capsys)
+    headings = [row for row in rows if row and not row.startswith(" ") and "›" not in row]
+    assert headings == [heading for heading, _rows in cli.HELP_GROUPS]
+    assert 3 <= len(headings) <= 6
+
+
+def test_help_names_every_built_in_command_including_init_and_review(ready, monkeypatch, capsys):
+    shown = "\n".join(help_shown(monkeypatch, capsys))
+    for name in ("/init", "/review", "/undo", "/rewind", "/model", "/mode", "/plan", "/status", "/compact",
+                 "/clear", "/resume", "/remote", "/exit", "Shift+Tab", "Ctrl-C"):
+        assert name in shown
+
+
+def test_help_lines_up_its_descriptions_in_one_column(ready, monkeypatch, capsys):
+    rows = [row for row in help_shown(monkeypatch, capsys) if row.startswith("  ")]
+    starts = {len(row) - len(row[2:].split("  ", 1)[1].lstrip()) for row in rows}
+    assert len(starts) == 1
+
+
+def test_help_lists_your_own_commands_after_the_built_in_ones(ready, monkeypatch, capsys):
+    (ready / ".arty" / "commands").mkdir(parents=True)
+    (ready / ".arty" / "commands" / "deploy.md").write_text("Deploy the site to staging.\n")
+    monkeypatch.setattr(cli, "project_notes_allowed", lambda *a: True)
+    rows = help_shown(monkeypatch, capsys)
+    assert rows[-2] == "Your commands"
+    assert rows[-1].split()[0] == "/deploy" and "Deploy the site" in rows[-1]
+
+
+def test_a_lone_question_mark_shows_help_without_asking_the_model(ready, monkeypatch, capsys):
+    chat_with(monkeypatch, "?", "/exit")
+    assert cli.HELP_GROUPS[0][0] in capsys.readouterr().err.splitlines()
+    assert FakeBrain.made[0].calls == []
+
+
+def test_the_welcome_says_a_question_mark_shows_help(ready, monkeypatch, capsys):
+    chat_with(monkeypatch, "/exit")
+    assert "? or /help" in capsys.readouterr().err
+
+
 class FlakyBrain(FakeBrain):
     def reply(self, messages, tools, on_text):
         self.calls.append([dict(m) for m in messages])

@@ -54,32 +54,45 @@ NO_SUMMARY = "The model didn't send a summary, so the conversation was kept as i
 SUMMARY_REQUEST = ("Summarise this conversation for yourself so the work can carry on with only the summary: what "
                    "the user wants, decisions made, files changed and how, commands run and their results, and "
                    "what is left to do. Be specific with file paths. Plain text, no tools.")
-COMMANDS = {
-    "/help": "show this list",
-    "/model [number|name]": "list Arty's models, or switch to one (remembered)",
-    "/mode [name]": f"show or change how much is asked first: {', '.join(permissions.MODES)}",
-    "/plan": "switch plan mode on or off (look and plan, change nothing)",
-    "/status": "model, mode, project and conversation size",
-    "/todos": "show the current checklist",
-    "/memory": "show which ARTY.md notes are loaded",
-    "/mcp": "MCP servers and the tools they add",
-    "/skills": "skills the model can load",
-    "/helpers": "your own helpers the model can hand jobs to",
-    "/hooks": "hooks that run on events",
-    "/compact": "replace the conversation with a summary to free up room",
-    "/undo": "put back the last file change Arty made (again for the one before)",
-    "/rewind [number]": "list your requests, or go back to before one, putting back the files changed since",
-    "/clear": "start a fresh conversation",
-    "/resume": "list this project's earlier conversations",
-    "/remote [off]": "share this session with Arty on your phone or starfire.ai to follow and steer (off to stop)",
-    "/exit": "leave (Ctrl-D works too)",
-}
-SHORTCUTS = {
-    "@path": "attach a file (pictures too)",
-    "# note": "add a note to this project's ARTY.md",
-    "!command": "run a shell command yourself; Arty sees the output",
-    "line \\": "carry on typing on the next line",
-}
+HELP_GROUPS = (
+    ("Asking", {
+        "@path": "attach a file (pictures too)",
+        "!command": "run a shell command yourself; Arty sees the output",
+        "# note": "add a note to this project's ARTY.md",
+        "line \\": "carry on typing on the next line",
+        "/init": "look through the project and write ARTY.md",
+        "/review": "review the uncommitted changes",
+    }),
+    ("Going back", {
+        "/undo": "put back the last file change Arty made (again for the one before)",
+        "/rewind [number]": "list your requests, or go back to before one and its file changes",
+        "/clear": "start a fresh conversation",
+        "/resume": "list this project's earlier conversations",
+        "/compact": "swap the conversation for a summary to free up room",
+    }),
+    ("Settings", {
+        "/model [number|name]": "list Arty's models, or switch to one (remembered)",
+        "/mode [name]": f"how much is asked first: {', '.join(permissions.MODES)}",
+        "/plan": "plan mode on or off (look and plan, change nothing)",
+        "/status": "model, mode, project and conversation size",
+        "/remote [off]": "share this chat with your phone or starfire.ai (off to stop)",
+    }),
+    ("Looking at the setup", {
+        "/todos": "the current checklist",
+        "/memory": "which ARTY.md notes are loaded",
+        "/mcp, /skills": "MCP servers and skills",
+        "/helpers, /hooks": "your own helpers and hooks",
+    }),
+    ("Keys", {
+        "Shift+Tab": "next mode: default, auto-edit, plan",
+        "Ctrl-C": "stop the current request",
+        "Ctrl-D, /exit": "leave",
+        "?, /help": "this list",
+    }),
+)
+CUSTOM_HELP_HEADING = "Your commands"
+HELP_MARK = "?"
+HELP_GAP = 2
 TRUE_COLOUR_ACCENT = "\033[38;2;229;56;59m"
 PALETTE_ACCENT = "\033[38;5;167m"
 TRUE_COLOUR_NAMES = ("truecolor", "24bit")
@@ -94,7 +107,7 @@ MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
                  permissions.ALLOW_ALL: "asks nothing"}
 WELCOME_TIPS = ('Ask in plain words, e.g. "why does the login test fail?" or "add a --dry-run flag"',
                 "@file attaches a file · !command runs one yourself · # note saves a project note",
-                "/help for commands · Ctrl-C stops a request · Ctrl-D leaves")
+                "? or /help for commands · Ctrl-C stops a request · Ctrl-D leaves")
 NO_NOTES_TIP = "No ARTY.md here yet: /init looks through the project and writes notes Arty reads every time."
 ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO,
            "a": permissions.ALWAYS, "always": permissions.ALWAYS}
@@ -732,10 +745,16 @@ class Session:
             message = self.remote.next_message()
 
     def show_help(self, custom: dict) -> None:
-        for usage, meaning in {**COMMANDS, **SHORTCUTS}.items():
-            self.terminal.note(f"{usage:16} {meaning}")
-        for name, command in custom.items():
-            self.terminal.note(f"{name:16} ({command.source}) {command.template.strip().splitlines()[0][:60]}")
+        mine = {name: f"{command.template.strip().splitlines()[0][:60]} ({command.source})"
+                for name, command in custom.items()}
+        groups = HELP_GROUPS + (((CUSTOM_HELP_HEADING, mine),) if mine else ())
+        width = max(len(usage) for _heading, rows in groups for usage in rows) + HELP_GAP
+        for number, (heading, rows) in enumerate(groups):
+            if number:
+                self.terminal.note("")
+            self.terminal.note(heading, "accent")
+            for usage, meaning in rows.items():
+                self.terminal.note(f"  {usage:{width}}{self.terminal.paint(meaning, 'dim')}", "reset")
 
     def command(self, line: str) -> bool:
         name, _, rest = line.partition(" ")
@@ -830,6 +849,8 @@ def read_request(session, reader) -> str:
 
 
 def handle(session: Session, line: str) -> bool:
+    if line == HELP_MARK:
+        line = "/help"
     if line.startswith("/"):
         return session.command(line)
     if line.startswith(SHELL_MARK) and len(line) > 1:
