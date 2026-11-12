@@ -30,17 +30,23 @@ def text_tokens(text: str) -> int:
     return int(len(text) / CHARS_PER_TOKEN)
 
 
-def window_tokens(client) -> int:
-    reported = getattr(client, "context_tokens", None)
+def reported_number(client, name: str) -> int | None:
+    reported = getattr(client, name, None)
     found = reported() if callable(reported) else None
-    if isinstance(found, int) and found > 0:
-        return found
-    return DEFAULT_WINDOW_TOKENS
+    return found if isinstance(found, int) and not isinstance(found, bool) and found > 0 else None
+
+
+def window_tokens(client) -> int:
+    return reported_number(client, "context_tokens") or DEFAULT_WINDOW_TOKENS
+
+
+def reply_room(client) -> int:
+    return reported_number(client, "reply_tokens") or REPLY_ROOM_TOKENS
 
 
 def compact_limit(client, offered: list[dict] | None = None) -> int:
     window = window_tokens(client)
-    room = int((window - tool_tokens(offered or []) - REPLY_ROOM_TOKENS) * SAFETY_SHARE)
+    room = int((window - tool_tokens(offered or []) - reply_room(client)) * SAFETY_SHARE)
     return max(room, int(window * SMALLEST_SHARE))
 
 

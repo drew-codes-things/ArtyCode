@@ -34,6 +34,7 @@ DOWNLOADED_MODELS = "/models?all=1"
 OFFERED_MODELS = "/models"
 CODING_MARK = "coding"
 CONTEXT_MARK = "context_tokens"
+REPLY_MARK = "reply_tokens"
 SKIPPED_GROUPS = "browser,screen,windows,computer,documents"
 DATA_PREFIX = "data: "
 DONE = "data: [DONE]"
@@ -353,6 +354,7 @@ class Brain:
         self.reached = ""
         self.on_thinking = None
         self.reported_context: int | None = None
+        self.reported_reply: int | None = None
         self.asked_for_context = False
 
     def address(self) -> str:
@@ -470,6 +472,13 @@ class Brain:
         self.asked_for_context = True
         sizes = [entry.get(CONTEXT_MARK) for entry in entries if is_token_count(entry.get(CONTEXT_MARK))]
         self.reported_context = min(sizes, default=None)
+        replies = [entry.get(REPLY_MARK) for entry in entries if is_token_count(entry.get(REPLY_MARK))]
+        self.reported_reply = min(replies, default=None)
+
+    def reply_tokens(self) -> int | None:
+        if not self.asked_for_context:
+            self.ask_for_context()
+        return self.reported_reply
 
     def streamed_reply(self, route: Route, body: dict, on_text) -> dict:
         with patient_opener().open(self.request(route, body), timeout=CHAT_CONNECT_SECONDS) as response:

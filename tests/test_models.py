@@ -275,3 +275,18 @@ def test_a_failed_look_up_is_tried_again_next_time():
         client = brain.Brain(settings.Settings(remote_url=url, api_key="k"))
         assert client.context_tokens() is None
         assert client.context_tokens() == 24576
+
+
+def test_the_reply_room_comes_from_the_brain_when_it_reports_one():
+    listing = {"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576, "reply_tokens": 4096},
+                        {"id": "arty/mimo-v2.6:9b", "context_tokens": 24576, "reply_tokens": 6144}]}
+    with serving([(200, json.dumps(listing))], "application/json") as (url, recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="k"))
+        assert client.reply_tokens() == 4096 and client.context_tokens() == 24576
+    assert len(recorder.requests) == 1
+
+
+def test_without_reply_tokens_in_the_list_the_reply_room_is_unknown():
+    with serving([(200, json.dumps({"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576}]}))],
+                 "application/json") as (url, _recorder):
+        assert brain.Brain(settings.Settings(remote_url=url, api_key="k")).reply_tokens() is None
