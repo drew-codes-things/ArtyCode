@@ -29,6 +29,8 @@ READ_CHUNK = 4096
 REQUEST_ID_BYTES = 6
 HERE = "the computer"
 GONE_CODES = (404, 410)
+REFUSED_REASONS = {401: "this computer's API key was refused (run arty-cli login)",
+                   403: "remote control isn't allowed for this key or device"}
 PASSED_THROUGH = frozenset({"user", "permission", "permission_answered", "status", "error"})
 IDLE, AT_PROMPT, IN_TURN = "idle", "at_prompt", "in_turn"
 NOTHING_TO_STOP = "Nothing was running, so there was nothing to stop."
@@ -40,6 +42,10 @@ class RelayError(Exception):
     def __init__(self, message: str, status: int = 0):
         super().__init__(message)
         self.status = status
+
+
+def ends_remote_control(error: RelayError) -> bool:
+    return error.status in GONE_CODES or error.status in REFUSED_REASONS
 
 
 class Relay:
@@ -357,7 +363,7 @@ class Bridge:
                 self.relay.post(self.session_id, batch)
                 return
             except RelayError as error:
-                if error.status in GONE_CODES:
+                if ends_remote_control(error):
                     self.lose(error)
                     return
                 if attempt == POST_TRIES - 1:
@@ -370,7 +376,7 @@ class Bridge:
             try:
                 items = self.relay.inbox(self.session_id)
             except RelayError as error:
-                if error.status in GONE_CODES:
+                if ends_remote_control(error):
                     self.lose(error)
                     return
                 if self.stopping.wait(RETRY_PAUSE_SECONDS):
@@ -383,7 +389,8 @@ class Bridge:
         if self.stopping.is_set() or self.ended:
             return
         self.ended = True
-        self.notices.put(f"Remote control ended: {error}")
+        reason = REFUSED_REASONS.get(error.status)
+        self.notices.put(f"Remote control ended: {error}" + (f" ({reason})" if reason else ""))
         with self.answered:
             self.answered.notify_all()
         self.waker.wake_prompt()

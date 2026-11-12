@@ -374,6 +374,32 @@ def test_a_session_the_brain_forgot_ends_remote_control_with_a_notice(relay):
     assert relay.ended == []
 
 
+@pytest.mark.parametrize("status, why", [(401, "API key"), (403, "isn't allowed")])
+def test_a_refused_key_or_device_ends_remote_control_and_says_why(relay, status, why):
+    bridge, _written = started_bridge(relay)
+    relay.inbox_status = status
+    try:
+        assert wait_until(lambda: bridge.ended)
+    finally:
+        bridge.stop()
+    notices = bridge.take_notices()
+    assert len(notices) == 1 and "Remote control ended" in notices[0] and why in notices[0]
+
+
+def test_other_relay_errors_are_retried_until_it_answers_again(relay, monkeypatch):
+    monkeypatch.setattr(remote, "RETRY_PAUSE_SECONDS", 0.05)
+    bridge, _written = started_bridge(relay)
+    relay.inbox_status = 502
+    time.sleep(0.3)
+    relay.inbox_status = 200
+    relay.give({"type": "message", "text": "still here", "by": PHONE})
+    try:
+        assert wait_until(lambda: (message := bridge.next_message()) is not None and message.text == "still here")
+        assert not bridge.ended
+    finally:
+        bridge.stop()
+
+
 def test_a_permission_without_a_terminal_is_refused_once_the_session_is_gone(relay):
     bridge, _written = started_bridge(relay, None)
     relay.inbox_status = 410
