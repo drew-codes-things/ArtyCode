@@ -136,13 +136,18 @@ def test_a_path_the_system_rejects_is_an_error_for_the_model_not_a_crash(tmp_pat
     assert all(result.startswith("Error") and "null" in result for result in results)
 
 
-def test_a_long_job_stops_after_the_step_limit(tmp_path):
-    (tmp_path / "a.txt").write_text("a\n")
+LONG_JOB_STEPS = 150
+
+
+def test_a_long_job_carries_on_for_as_many_steps_as_it_needs(tmp_path):
+    (tmp_path / "a.txt").write_text("".join(f"line {number}\n" for number in range(LONG_JOB_STEPS)))
     workspace = tools.Workspace(tmp_path)
-    replies = [("", [call("read_file", f"c{i}", path="a.txt", offset=i + 1)]) for i in range(agent.MAX_ROUNDS + 1)]
-    answer = agent.run_turn([{"role": "user", "content": "go"}], ScriptedBrain(*replies), workspace,
+    replies = [("", [call("read_file", f"c{i}", path="a.txt", offset=i + 1, limit=1)]) for i in range(LONG_JOB_STEPS)]
+    scripted = ScriptedBrain(*replies, ("Read every line.", []))
+    answer = agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                             permissions.Gate(workspace, permissions.refuse), Screen())
-    assert answer == agent.STEP_LIMIT_REACHED
+    assert answer == "Read every line."
+    assert len(scripted.sent) == LONG_JOB_STEPS + 1
 
 
 def test_an_explore_helper_looks_around_on_its_own_and_reports_back(tmp_path):
@@ -953,3 +958,202 @@ def test_looking_tools_come_through_the_extras_and_run_without_changing_anything
     assert done == []
     assert with_looks.without_stop_hooks().handles("screenshot")
     assert not extras.NONE.handles("view_image")
+
+
+class ChangingFileBrain(ScriptedBrain):
+    def __init__(self, path, *replies):
+        super().__init__(*replies)
+        self.path = path
+
+    def reply(self, messages, tools, on_text):
+        self.path.write_text(f"version {len(self.sent)}\n")
+        return super().reply(messages, tools, on_text)
+
+
+def test_the_same_call_with_a_new_result_each_time_is_not_taken_for_being_stuck(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    same = ("", [call("read_file", path="a.txt")])
+    scripted = ChangingFileBrain(tmp_path / "a.txt", *([same] * (agent.STUCK_REPEATS + 2)), ("It kept changing.", []))
+    answer = agent.run_turn([{"role": "user", "content": "watch a.txt"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "It kept changing."
+    assert all(m["content"] != agent.STUCK_NOTE for sent in scripted.sent for m in sent["messages"])
+
+
+class LongBuild:
+    def __init__(self, polls_before_done):
+        self.polls_left = polls_before_done
+
+    def wait_for_end(self, seconds):
+        self.polls_left -= 1
+
+    def unread(self):
+        return "built\n" if self.polls_left <= 0 else ""
+
+    def state(self):
+        return tools.STILL_RUNNING if self.polls_left > 0 else "finished with exit code 0"
+
+
+def test_waiting_on_a_long_background_build_is_not_taken_for_being_stuck(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    polls = agent.STUCK_REPEATS * 3
+    workspace.jobs["1"] = LongBuild(polls)
+    poll = ("", [call("command_output", job="1")])
+    scripted = ScriptedBrain(*([poll] * polls), ("The build finished.", []))
+    answer = agent.run_turn([{"role": "user", "content": "build it"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "The build finished."
+    assert all(m["content"] != agent.STUCK_NOTE for sent in scripted.sent for m in sent["messages"])
+
+
+@pytest.mark.parametrize("question", [
+    "I've made index.html. Shall I continue with the styles?",
+    "The server part is written. Would you like me to proceed with the page?",
+    "Step 2 of 4 is done. Let me know if you'd like me to keep going.",
+])
+def test_asking_whether_to_carry_on_is_answered_yes(tmp_path, question):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain((question, []), ("", [call("list_files")]), ("All four steps are done.", []))
+    answer = agent.run_turn([{"role": "user", "content": "make me a calculator"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "All four steps are done."
+    assert scripted.sent[1]["messages"][-1] == {"role": "user", "content": agent.CARRY_ON_ANSWER}
+
+
+@pytest.mark.parametrize("question", [
+    "Would you like me to build it for you?",
+    "Which port should the server use?",
+])
+def test_a_real_question_for_the_user_is_left_for_them(tmp_path, question):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain((question, []))
+    assert agent.run_turn([{"role": "user", "content": "how would I make a calculator?"}], scripted, workspace,
+                          permissions.Gate(workspace, permissions.refuse), Screen()) == question
+    assert len(scripted.sent) == 1
+
+
+def checklist(*pairs):
+    return [{"text": text, "status": status} for text, status in pairs]
+
+
+def test_an_unfinished_checklist_sends_the_model_back_to_it(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(
+        ("", [call("todo_write", items=checklist(("Write app.py", "done"), ("Try it with curl", "pending")))]),
+        ("Here is your app.", []),
+        ("", [call("todo_write", "c2", items=checklist(("Write app.py", "done"), ("Try it with curl", "done")))]),
+        ("Built app.py and tried it with curl. Run it with: python app.py", []),
+    )
+    answer = agent.run_turn([{"role": "user", "content": "make me an app"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer.startswith("Built app.py")
+    nudge = scripted.sent[2]["messages"][-1]
+    assert nudge["role"] == "user" and nudge["content"].startswith(agent.UNFINISHED_LEAD)
+    assert "[ ] Try it with curl" in nudge["content"] and "Write app.py" not in nudge["content"]
+
+
+def test_the_checklist_nudge_comes_once_until_the_model_works_again(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    workspace.todos = checklist(("Pick a port", "pending"))
+    scripted = ScriptedBrain(("I need you to pick a port.", []), ("Please tell me which port to use.", []))
+    answer = agent.run_turn([{"role": "user", "content": "serve it"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "Please tell me which port to use."
+    assert len(scripted.sent) == 2
+
+
+def test_plan_mode_and_helpers_are_not_pushed_on_by_the_checklist(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    workspace.todos = checklist(("Write app.py", "pending"))
+    planning = ScriptedBrain(("Here is the plan.", []))
+    agent.run_turn([{"role": "user", "content": "plan it"}], planning, workspace,
+                   permissions.Gate(workspace, permissions.refuse, mode=permissions.PLAN), Screen())
+    helping = ScriptedBrain(("Found it in a.py.", []))
+    agent.run_turn([{"role": "user", "content": "find it"}], helping, workspace,
+                   permissions.Gate(workspace, permissions.refuse), Screen(), can_explore=False)
+    assert len(planning.sent) == 1 and len(helping.sent) == 1
+
+
+def test_a_reply_cut_off_at_the_length_limit_is_sent_back_to_carry_on_in_parts(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    cut = "```python\n" + "x = 1\n" * 1000 + "\n\n" + agent.CUT_SHORT_NOTE
+    scripted = ScriptedBrain((cut, []), ("", [call("list_files")]), ("Written in parts.", []))
+    messages = [{"role": "user", "content": "write a big file"}]
+    answer = agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "Written in parts."
+    kept, nudge = scripted.sent[1]["messages"][-2:]
+    assert kept["role"] == "assistant" and len(kept["content"]) <= agent.CUT_REPLY_KEPT_CHARS + 1
+    assert nudge == {"role": "user", "content": agent.CUT_SHORT_ANSWER}
+
+
+class ProgressScreen(Screen):
+    def __init__(self):
+        super().__init__()
+        self.outcomes, self.checklists, self.labels, self.counted = [], [], [], []
+
+    def show_outcome(self, line, is_problem):
+        self.outcomes.append(line)
+
+    def show_todos(self, items):
+        self.checklists.append([dict(item) for item in items])
+
+    def working(self, label):
+        self.labels.append(label)
+        return __import__("contextlib").nullcontext()
+
+    def count_reply(self, reply):
+        self.counted.append(reply.get("content"))
+
+
+def test_the_checklist_is_drawn_after_each_update_with_how_much_is_done(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    items = checklist(("Write app.py", "done"), ("Try it", "in_progress"))
+    scripted = ScriptedBrain(("", [call("todo_write", items=items)]), ("", [call("todo_write", "c2", items="nope")]),
+                             ("Still trying it.", []), ("Done.", []))
+    screen = ProgressScreen()
+    agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
+                   permissions.Gate(workspace, permissions.refuse), screen)
+    assert screen.outcomes[0] == "1 of 2 done"
+    assert screen.checklists == [items]
+
+
+def test_each_tool_run_shows_a_working_line_and_each_reply_is_counted(tmp_path):
+    (tmp_path / "a.txt").write_text("a\n")
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(("", [call("read_file", path="a.txt")]), ("Read it.", []))
+    screen = ProgressScreen()
+    agent.run_turn([{"role": "user", "content": "read"}], scripted, workspace,
+                   permissions.Gate(workspace, permissions.refuse), screen)
+    assert screen.labels == ["Read a.txt"]
+    assert screen.counted == ["", "Read it."]
+
+
+def test_a_command_stopped_at_its_timeout_shows_as_a_problem_not_as_its_last_output():
+    result = tools.timed_out_note(120, 1800) + " * Serving Flask app 'app'\n"
+    assert agent.outcome_line("run_command", result) == ("stopped after 120 s while still running", True)
+
+
+LAST_LIVE_REPLY = ("I'll test the application by attempting to download a video from YouTube.\n\nLet's try "
+                   "downloading a sample video to ensure everything works correctly.\n\nI'll test the application by "
+                   "attempting to download a video from YouTube.\n\nI did not try downloading a sample video or use a "
+                   "YouTube URL for testing.\n\nI did not test the application or attempt to download a video from "
+                   "YouTube.")
+
+
+@pytest.mark.parametrize("reply, nudge", [
+    ("The page is written. I'll test it with curl now.", agent.DO_IT_NOW),
+    ("Next I will install the packages in a virtual environment.", agent.DO_IT_NOW),
+    (LAST_LIVE_REPLY, agent.DO_IT_NOW),
+    ("The server is written.\n\nI did not test the application.", agent.NOT_DONE_ANSWER),
+])
+def test_a_reply_that_says_what_it_will_do_or_has_not_done_is_sent_back_to_do_it(tmp_path, reply, nudge):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain((reply, []), ("", [call("list_files")]), ("Tested it: the page loads.", []))
+    answer = agent.run_turn([{"role": "user", "content": "make me an app"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "Tested it: the page loads."
+    assert scripted.sent[1]["messages"][-1] == {"role": "user", "content": nudge}
+
+
+def test_offering_more_with_let_me_know_is_not_taken_for_an_announced_step():
+    assert not agent.announces_a_next_step("Built calc.py. Let me know if you'd like me to add a history feature.")

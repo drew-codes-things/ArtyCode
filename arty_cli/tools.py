@@ -24,7 +24,10 @@ MAX_OUTPUT_CHARS = 20_000
 MAX_READ_CHARS = 60_000
 OUTPUT_HEAD_SHARE = 0.4
 DEFAULT_COMMAND_SECONDS = 120
-MAX_COMMAND_SECONDS = 600
+MAX_COMMAND_SECONDS = 1800
+DEFAULT_OUTPUT_WAIT_SECONDS = 5
+JOB_POLL_SECONDS = 0.1
+STILL_RUNNING = "still running"
 STOPPED_OUTPUT_SECONDS = 3
 STRAY_OUTPUT_NOTE = "\n[a process it started is still running and holding the output, so the rest wasn't read]"
 MAX_JOB_OUTPUT_CHARS = 200_000
@@ -78,7 +81,8 @@ class Job:
         self.read_upto = 0
         self.missed = 0
         self.lock = threading.Lock()
-        threading.Thread(target=self.collect, daemon=True).start()
+        self.collector = threading.Thread(target=self.collect, daemon=True)
+        self.collector.start()
 
     def collect(self) -> None:
         for line in self.process.stdout:
@@ -104,13 +108,21 @@ class Job:
 
     def state(self) -> str:
         code = self.process.poll()
-        return "still running" if code is None else f"finished with exit code {code}"
+        return STILL_RUNNING if code is None else f"finished with exit code {code}"
+
+    def wait_for_end(self, seconds: float) -> None:
+        try:
+            self.process.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            return
+        self.collector.join(STOPPED_OUTPUT_SECONDS)
 
 
 class Workspace:
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.todos = []
+        self.max_command_seconds = MAX_COMMAND_SECONDS
         self.jobs = {}
         self.seen = {}
         self.checkpoints = []
@@ -760,8 +772,9 @@ def job_of(workspace, job) -> Job:
     return found
 
 
-def command_output(workspace, job):
+def command_output(workspace, job, wait_seconds=DEFAULT_OUTPUT_WAIT_SECONDS):
     running = job_of(workspace, job)
+    running.wait_for_end(min(max(float(wait_seconds), 0), workspace.max_command_seconds))
     return clipped(running.unread()) + f"\n[job {job} {running.state()}]"
 
 
@@ -804,16 +817,26 @@ def output_after_stop(process: subprocess.Popen) -> str:
         return text_of(error.output) + STRAY_OUTPUT_NOTE
 
 
+STOPPED_LEAD = "[stopped after"
+
+
+def timed_out_note(seconds: int, most: int) -> str:
+    return (f"{STOPPED_LEAD} {seconds} s while still running, so it is not running now. A server or watcher "
+            f"should run with background: true, then command_output reads it; a long install or build can run "
+            f"again with a bigger timeout_seconds (up to {most}). Its output before it was stopped:]\n")
+
+
 def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, background=False):
     if background:
         return start_job(workspace, command)
-    seconds = min(max(int(timeout_seconds), 1), MAX_COMMAND_SECONDS)
+    most = workspace.max_command_seconds
+    seconds = min(max(int(timeout_seconds), 1), most)
     process = start_process(workspace, command)
     try:
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
         stop(process)
-        return clipped(output_after_stop(process)) + f"\n[stopped after {seconds} s]"
+        return timed_out_note(seconds, most) + clipped(output_after_stop(process))
     except KeyboardInterrupt:
         stop(process)
         process.wait()
@@ -877,12 +900,16 @@ DEFINITIONS = [
              {"pattern": TEXT, "path": TEXT, "glob": {**TEXT, "description": "file name filter, e.g. *.py"}},
              ["pattern"]),
     function("run_command", "Run a shell command in the project folder (bash on Linux, PowerShell on Windows), "
-                            "e.g. tests, builds, git. Returns the output and exit code.",
+                            "e.g. tests, builds, git. Returns the output and exit code. It is stopped after "
+                            f"timeout_seconds (default {DEFAULT_COMMAND_SECONDS}); give long installs and builds "
+                            "more. Servers and watchers never end, so start them with background: true.",
              {"command": TEXT, "timeout_seconds": NUMBER,
               "background": {"type": "boolean", "description": "start it and return at once, e.g. a dev server"}},
              ["command"]),
-    function("command_output", "Read new output from a background job started by run_command.",
-             {"job": TEXT}, ["job"]),
+    function("command_output", "Read new output from a background job started by run_command. Waits up to "
+                               f"wait_seconds (default {DEFAULT_OUTPUT_WAIT_SECONDS}) for the job to finish first; "
+                               "pass more to wait for a long build.",
+             {"job": TEXT, "wait_seconds": NUMBER}, ["job"]),
     function("stop_command", "Stop a background job.", {"job": TEXT}, ["job"]),
     function("todo_write", "Keep a short checklist for a job with several steps; send the whole list each time "
                            "with each item's status (pending, in_progress, done). The user sees it.",

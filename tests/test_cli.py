@@ -1079,3 +1079,144 @@ def test_a_lost_connection_still_says_to_ask_again_when_it_is_back(ready, monkey
     monkeypatch.setattr(cli.brain, "Brain", FlakyBrain)
     assert cli.main(["-p", "hello"]) == cli.FAILED
     assert "Ask again when it's back" in capsys.readouterr().err
+
+
+class ChecklistThenLongReadBrain(FakeBrain):
+    summary_fails = False
+
+    def reply(self, messages, tools, on_text):
+        self.calls.append([dict(m) for m in messages])
+        if messages[-1]["content"] == cli.SUMMARY_REQUEST:
+            if ChecklistThenLongReadBrain.summary_fails:
+                raise cli.brain.BrainError("The brain is busy")
+            return {"role": "assistant", "content": "made app.py, read big.txt", "tool_calls": []}
+        steps = {1: ("todo_write", {"items": [{"text": "Write app.py", "status": "done"},
+                                              {"text": "Try it", "status": "pending"}]}),
+                 2: ("write_file", {"path": "app.py", "content": "print('hi')\n"}),
+                 3: ("read_file", {"path": "big.txt"})}
+        if len(self.calls) in steps:
+            name, arguments = steps[len(self.calls)]
+            made = {"id": f"s{len(self.calls)}", "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments)}}
+            return {"role": "assistant", "content": "", "tool_calls": [made]}
+        on_text("Finished.")
+        return {"role": "assistant", "content": "Finished.", "tool_calls": []}
+
+
+def squeezed_request(ready, monkeypatch, summary_fails):
+    (ready / "big.txt").write_text("word word word word\n" * 1000)
+    ChecklistThenLongReadBrain.summary_fails = summary_fails
+    monkeypatch.setattr(cli.Session, "compact_limit", lambda self: 3_000)
+    monkeypatch.setattr(cli.brain, "Brain", ChecklistThenLongReadBrain)
+    assert cli.main(["--permission-mode", "allow-all", "-p", "make me an app"]) == 0
+    calls = FakeBrain.made[0].calls
+    return next(call for call in calls if len(call) > 1 and str(call[1]["content"]).endswith(cli.CARRY_ON))
+
+
+def test_after_a_summary_mid_job_the_request_checklist_and_changes_are_kept(ready, monkeypatch):
+    carried = squeezed_request(ready, monkeypatch, summary_fails=False)[1]["content"]
+    assert "made app.py, read big.txt" in carried
+    assert f"{cli.REQUEST_LEAD}\nmake me an app" in carried
+    assert "[x] Write app.py" in carried and "[ ] Try it" in carried
+    assert "write_file app.py" in carried and carried.endswith(cli.CARRY_ON)
+
+
+def test_a_summary_that_fails_mid_job_does_not_stop_the_job(ready, monkeypatch, capsys):
+    carried = squeezed_request(ready, monkeypatch, summary_fails=True)[1]["content"]
+    assert carried.startswith(cli.NO_SUMMARY_LEAD) and "make me an app" in carried
+    assert "Finished." in capsys.readouterr().out
+
+
+def test_the_summary_request_is_trimmed_to_fit(ready, monkeypatch):
+    squeezed_request(ready, monkeypatch, summary_fails=False)
+    asked = next(call for call in FakeBrain.made[0].calls if call[-1]["content"] == cli.SUMMARY_REQUEST)
+    read_result = [m for m in asked if m["role"] == "tool"][-1]["content"]
+    assert len(read_result) <= cli.MAX_SUMMARISED_RESULT_CHARS + 100
+
+
+def test_a_finished_request_with_steps_says_how_long_it_took(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    err = io.StringIO()
+    terminal = cli.Terminal(io.StringIO(), err)
+    terminal.start_turn()
+    terminal.show_step("Write app.py")
+    terminal.show_step("Run python app.py")
+    terminal.count_reply({"content": "", "usage": {"completion_tokens": 1500}})
+    terminal.finish_turn()
+    assert err.getvalue().splitlines()[-1].startswith("Worked for 0s · 2 steps · ↓ 1.5k tokens")
+
+
+def test_a_request_answered_without_steps_has_no_footer(monkeypatch):
+    err = io.StringIO()
+    terminal = cli.Terminal(io.StringIO(), err)
+    terminal.start_turn()
+    terminal.finish_turn()
+    assert err.getvalue() == ""
+
+
+def test_the_checklist_is_drawn_with_boxes(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    err = io.StringIO()
+    cli.Terminal(io.StringIO(), err).show_todos([{"text": "Write app.py", "status": "done"},
+                                                 {"text": "Try it", "status": "in_progress"},
+                                                 {"text": "Tidy up", "status": "pending"}])
+    assert err.getvalue() == "    ☑ Write app.py\n    ☐ Try it\n    ☐ Tidy up\n"
+
+
+def test_tokens_so_far_count_what_is_streaming_and_what_finished(monkeypatch):
+    terminal = cli.Terminal(io.StringIO(), io.StringIO())
+    terminal.count_reply({"content": "x" * 350, "tool_calls": []})
+    terminal.show_text("y" * 70)
+    assert terminal.tokens_so_far() == 100 + 20
+
+
+class PausingKey:
+    def __init__(self):
+        self.paused_while = []
+
+    def paused(self):
+        key = self
+
+        class During:
+            def __enter__(self):
+                key.paused_while.append("in")
+
+            def __exit__(self, *details):
+                key.paused_while.append("out")
+
+        return During()
+
+
+def test_a_question_pauses_the_interrupt_key_so_typing_works(monkeypatch):
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    terminal = cli.Terminal(io.StringIO(), io.StringIO())
+    terminal.stop_key = PausingKey()
+    assert terminal.ask("Edit app.py?") == cli.permissions.YES
+    assert terminal.stop_key.paused_while == ["in", "out"]
+
+
+def test_without_a_terminal_there_is_no_interrupt_key():
+    terminal = cli.Terminal(io.StringIO(), io.StringIO())
+    with terminal.interruptible():
+        assert terminal.stop_key is None
+
+
+def test_a_bad_limit_in_the_settings_is_reported_before_anything_runs(ready, monkeypatch, capsys):
+    monkeypatch.setattr(cli.settings, "load", lambda *a, **k: settings.Settings(base_url="http://b/v1", api_key="k",
+                                                                              context_tokens="lots"))
+    assert cli.main(["-p", "hello"]) == cli.FAILED
+    assert "ARTY_CLI_CONTEXT_TOKENS" in capsys.readouterr().err
+    assert FakeBrain.made == []
+
+
+def test_the_longest_command_time_comes_from_the_settings(ready, monkeypatch):
+    monkeypatch.setattr(cli.settings, "load", lambda *a, **k: settings.Settings(base_url="http://b/v1", api_key="k",
+                                                                              max_command_seconds="5400"))
+    made = started_workspaces(monkeypatch)
+    cli.main(["-p", "hello"])
+    assert made[0].max_command_seconds == 5400
+
+
+def test_esc_is_named_as_a_way_to_stop_a_request(ready, monkeypatch, capsys):
+    assert "Esc" in "\n".join(help_shown(monkeypatch, capsys))

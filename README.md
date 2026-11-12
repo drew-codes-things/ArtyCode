@@ -30,9 +30,9 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `edit_file`, `write_file` | Change or create files, keeping each file's line endings. An existing file has to be read first, and is refused if it changed on disk since; every write is atomic (a temporary file, then a swap). `write_file` only creates new files: for an existing one it answers with how to use `edit_file` instead, unless the call sets `overwrite: true` (the question then says Overwrite). When `old_text` doesn't match exactly, `edit_file` tries again ignoring spaces at line ends, then indentation, then curly quotes and long dashes, uses a match only if it is the only one, keeps the file's indentation, and says which way it matched | Yes, showing the diff (`--auto-edit` skips this inside the project, except for anything in a `.arty` or `.git` folder: that is always asked about, because those files can make programs run) |
 | `multi_edit` | Several edits to one file in one step, applied in order; all or nothing, so if one edit doesn't match exactly once nothing is changed. One question with the whole diff, and one `/undo` puts it all back | Yes, like an edit |
 | `notebook_edit` | Replace, insert or delete one cell of a `.ipynb` notebook (a replaced code cell's old output is cleared) | Yes, like an edit |
-| `run_command` | Tests, builds, git (bash on Linux, PowerShell on Windows) | Yes, except look-only commands (below) |
-| `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a long build); background commands end when arty-cli does | No |
-| `todo_write` | A checklist for jobs with several steps, shown as it goes (`/todos`) | No |
+| `run_command` | Tests, builds, git (bash on Linux, PowerShell on Windows). A command is stopped after `timeout_seconds` (120 unless the model asks for more, up to 1800, or `max_command_seconds`), and the result starts by saying it was stopped and isn't running any more, then says to run a server in the background or give a long build more time, before the output it printed. `background: true` starts it and returns at once | Yes, except look-only commands (below) |
+| `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a watcher, a long build). `command_output` waits up to `wait_seconds` (5 unless asked for more) for the job to finish, then returns what it printed since the last read; background commands end when arty-cli does | No |
+| `todo_write` | A checklist for jobs with several steps, drawn with boxes under the step each time it changes (☐ to do, ☑ done) and kept for `/todos` | No |
 | `web_fetch` | Read a public web page (documentation, an issue), marked as information rather than instructions | Yes, once per site with **a** |
 | `web_search` | Search the web through your Arty brain's own search (its `research__web_search` tool, so no other search key is needed); titles, links and snippets, marked as information rather than instructions. Helpers can search too | Yes, once per session with **a** (also in plan mode, since it changes nothing) |
 | `view_image` | Looks at a picture in the project (PNG, JPEG, WebP, GIF) with your Arty brain's vision model and answers a question about it (below) | Only outside the project folder |
@@ -167,7 +167,11 @@ key being sent; a per-device key is proved through its SHA-256), so on another n
 address never sees it.
 
 These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `ARTY_API_KEY`,
-`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`.
+`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`. Two optional limits can be set the same way,
+as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_TOKENS` and
+`ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (12288 tokens unless set, the brain's own default) and the
+longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops arty-cli at the start
+with a message saying where to fix it.
 
 When something goes wrong the message says what to do next. A refused key says to run `arty-cli login` again; a
 model the brain doesn't have says so and points at `/model` (or `--model` for one run); neither suggests waiting.
@@ -231,10 +235,29 @@ repo could put instructions or programs there); until you say yes, they are left
 `.arty/mcp.json` change later (a pull, a branch switch), it asks again. Adding a `# note` never trusts a folder.
 Your own prompts go in `.arty/commands/<name>.md` (or `commands/` in the config folder) and run as `/<name> words`,
 with `$ARGUMENTS` replaced by the words. Conversations are saved per project in the config folder's `sessions/`.
-While it waits for the model, a dim `Thinking 4s · Ctrl-C to stop` line counts the seconds and is wiped as soon as the
-answer or a step appears (only when both output and errors go to a terminal, so piped and `-p` output stays plain).
-Ctrl-C stops the current request, helpers included (what it already changed or ran, MCP calls too, stays noted in the
-conversation); Ctrl-D leaves.
+While it works, a dim status line says what it is doing, for how long the request has been going, how many tokens the
+model has written so far and how to stop it: `• Thinking (1m 05s · ↓ 1.2k tokens · esc to interrupt)` while it waits
+for the model, `• Run npm install (2m 10s · ...)` while a step runs. It is wiped as soon as the answer or a step
+appears (only when both output and errors go to a terminal, so piped and `-p` output stays plain). When a request that
+took steps ends, one line says how long it worked, how many steps it took and how many tokens the model wrote.
+Esc or Ctrl-C stops the current request, helpers included (what it already changed or ran, MCP calls too, stays noted
+in the conversation); a question waiting for your answer reads keys normally. Ctrl-D leaves.
+
+### Long jobs
+
+A request carries on for as many steps as it needs: there is no cap on steps, rounds or time, so "make me a
+calculator" or "make me a yt-dlp download web application" runs until the job is done, checked and summed up (what was
+built, how it was checked and the command to run it). The model is told to keep a checklist for jobs with several
+steps and to work through it without asking whether to carry on. If it stops early anyway, it is sent back once each
+time: when it only says what it will do next or that it hasn't done something yet (tested it, say), when it asks "shall I continue?", when its checklist still has unfinished
+items, and (up to three times) when its reply was cut off at the brain's reply length limit, with a note to write long
+files in parts. A real question for you, or a second stop in a row, ends the request as usual. The only thing that
+stops a job on its own is the same step with the same result over and over (it is warned once first); waiting on a
+background build that is still running doesn't count.
+
+Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected arty-cli waits as
+long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
+writes), and only five minutes of total silence counts as a lost connection.
 
 ### Checks after edits, project map and sandbox
 
@@ -312,15 +335,23 @@ show the state.
 
 ### Long conversations
 
-The conversation size is estimated in tokens, and it is summarised when it reaches three quarters of the model's
-context window (16k for Arty's local models). `/status` shows the estimate. If summarising fails, the request carries
-on unsummarised.
+The conversation size is estimated in tokens, and it is summarised when it no longer leaves room in the model's context
+window (12288 tokens unless `context_tokens` says otherwise) for the tool list and a full reply. `/status` shows the
+estimate. A summary in the middle of a request keeps the request itself, the checklist and the changes and commands
+that already ran, then the work carries on; the conversation sent to be summarised has big tool results and file
+contents shortened so it fits. If summarising fails at the start of a request, it carries on unsummarised; if it fails
+in the middle, the work carries on from the request, the checklist and what already ran.
 
 ### When Arty is busy
 
-When Arty's brain answers 429 or 503 (all its jobs are taken), arty-cli waits and tries again, up to four tries, about
-1, 2 and 4 seconds apart with a little randomness, or as long as the brain's Retry-After asks (up to a minute), showing
-`busy, retrying in N s`.
+When Arty's brain answers 429 or 503 (all its jobs are taken), or a gateway in front of it answers 502 or 504, arty-cli
+waits and tries again, about 1, 2, 4 seconds apart and then every 30 seconds, with a little randomness, or as long as
+the brain's Retry-After asks (up to a minute), showing `busy, retrying in N s`. A connection lost part way through a
+reply, or a brain that can't be reached after it has answered once, is retried the same way (`lost the connection to
+Arty's brain (...), retrying in N s`), and the reply is asked for again, so a long job carries on where it was. This
+goes on for up to 15 minutes before the request stops with the error; Esc or Ctrl-C stops it sooner. A brain that has
+never answered since arty-cli started is reported at once. When the brain's reply is its own "hit an error" note, or
+it answers 500, it is tried three times in all before the error is shown.
 
 ### Remote control
 

@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import sys
+import time
 import webbrowser
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -18,7 +19,7 @@ from arty_cli import rules
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
-                       settings, skills, tools, waiting, webfetch)
+                       settings, skills, stopkey, tools, waiting, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -31,6 +32,12 @@ SESSIONS_FOLDER = "sessions"
 SUMMARY_LEAD = "Summary of our conversation so far:"
 SUMMARY_ACK = "Got it, carrying on from there."
 CARRY_ON = "Carry on with the work from there."
+REQUEST_LEAD = "The request you are working on:"
+CHECKLIST_LEAD = "Your checklist:"
+DONE_LEAD = "Changes and commands that already ran:"
+NO_SUMMARY_LEAD = "The conversation got too long and was cleared to make room."
+MAX_LISTED_DONE = 40
+MAX_SUMMARISED_RESULT_CHARS = 2_000
 STOPPED = "That request stopped before it finished."
 ASK_AGAIN = "Ask again when it's back."
 TRUST_QUESTION = ("This folder has its own Arty setup: notes Arty would follow (ARTY.md or AGENTS.md), /commands, skills, helpers, "
@@ -89,7 +96,7 @@ HELP_GROUPS = (
     }),
     ("Keys", {
         "Shift+Tab": "next mode: default, auto-edit, plan",
-        "Ctrl-C": "stop the current request",
+        "Esc, Ctrl-C": "stop the current request",
         "Ctrl-D, /exit": "leave",
         "?, /help": "this list",
     }),
@@ -131,6 +138,8 @@ SAVE_CHOICE = ("s", "Yes, and save it as an allow rule for this project")
 NO_CHOICE = ("n", "No, and tell Arty what to do instead")
 INSTEAD_QUESTION = "What should Arty do instead? (Enter to just say no) "
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
+CHECKBOXES = {"pending": "☐", "in_progress": "☐", "done": "☑"}
+CHECKBOX_COLOURS = {"pending": "reset", "in_progress": "accent", "done": "dim"}
 TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT = "text", "json", "stream-json"
 OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT)
 ERROR_MARK = "Error"
@@ -170,15 +179,62 @@ class Terminal:
         self.colour = self.err.isatty() and not os.environ.get("NO_COLOR")
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
+        self.stop_key = None
+        self.start_turn()
+
+    def start_turn(self) -> None:
+        self.turn_started = time.monotonic()
+        self.turn_tokens = 0
+        self.streamed_chars = 0
+        self.steps = 0
+
+    def tokens_so_far(self) -> int:
+        return self.turn_tokens + int(self.streamed_chars / context.CHARS_PER_TOKEN)
+
+    def count_reply(self, reply: dict) -> None:
+        self.turn_tokens += reply_tokens(reply)
+        self.streamed_chars = 0
+
+    def finish_turn(self) -> None:
+        if not self.steps:
+            return
+        seconds = time.monotonic() - self.turn_started
+        counted = f" · {waiting.TOKEN_MARK} {waiting.tokens_text(self.turn_tokens)} tokens" if self.turn_tokens else ""
+        self.note(f"Worked for {waiting.elapsed_text(seconds)} · {self.steps} step{'' if self.steps == 1 else 's'}"
+                  f"{counted}")
+
+    def shows_status(self) -> bool:
+        return self.out.isatty() and self.err.isatty()
+
+    def status_line(self, label: str):
+        self.stop_thinking()
+        self.waiting = waiting.ThinkingLine(self.shown_now, lambda text: self.paint(text, "dim"), label=label,
+                                            started_at=self.turn_started, tokens=self.tokens_so_far)
+        return self.waiting
+
+    def working(self, label: str):
+        return self.status_line(label) if self.shows_status() else contextlib.nullcontext()
+
+    def interruptible(self):
+        if not (is_interactive() and self.shows_status()):
+            return contextlib.nullcontext()
+        keys = stopkey.keys_here()
+        if keys is None:
+            return contextlib.nullcontext()
+        self.stop_key = stopkey.StopKey(keys)
+        return self.stop_key
+
+    def stopped_listening(self) -> None:
+        self.stop_key = None
+
+    def keys_paused(self):
+        return self.stop_key.paused() if self.stop_key else contextlib.nullcontext()
 
     def paint(self, text: str, colour: str) -> str:
         return f"{self.colours[colour]}{text}{self.colours['reset']}" if self.colour else text
 
     def thinking(self):
-        if not (self.out.isatty() and self.err.isatty()):
-            return contextlib.nullcontext()
-        self.waiting = waiting.ThinkingLine(self.shown_now, lambda text: self.paint(text, "dim"))
-        return self.waiting
+        return self.working(waiting.LABEL)
 
     def shown_now(self, text: str) -> None:
         self.err.write(text)
@@ -201,6 +257,7 @@ class Terminal:
             self.stop_thinking()
         self.out.write(text)
         self.out.flush()
+        self.streamed_chars += len(text)
         self.mid_line = not text.endswith("\n")
         if self.events and text:
             self.events.write({"type": "text", "text": text})
@@ -221,7 +278,17 @@ class Terminal:
 
     def show_step(self, line: str) -> None:
         self.end_line()
+        self.steps += 1
         self.err.write(f"{self.paint(STEP_MARK, 'accent')} {line}\n")
+        self.err.flush()
+
+    def show_todos(self, items: list[dict]) -> None:
+        self.end_line()
+        for item in items:
+            status = item.get("status", "pending")
+            box = CHECKBOXES.get(status, CHECKBOXES["pending"])
+            self.err.write("    " + self.paint(f"{box} {item.get('text', '')}", CHECKBOX_COLOURS.get(status, "reset"))
+                           + "\n")
         self.err.flush()
 
     def show_outcome(self, line: str, is_problem: bool) -> None:
@@ -246,6 +313,10 @@ class Terminal:
             self.err.write(self.paint(line, colour) + "\n")
 
     def ask(self, question: str, preview: str = "") -> str:
+        with self.keys_paused():
+            return self.asked_about(question, preview)
+
+    def asked_about(self, question: str, preview: str = "") -> str:
         if not is_interactive() and not self.remote:
             self.note(f"Refused without asking (no terminal to ask in): {question}", "error")
             return permissions.NO
@@ -263,7 +334,8 @@ class Terminal:
         if not is_interactive() or not self.answered_here:
             return ""
         try:
-            return self.asked(INSTEAD_QUESTION).strip()
+            with self.keys_paused():
+                return self.asked(INSTEAD_QUESTION).strip()
         except EOFError:
             return ""
 
@@ -291,7 +363,44 @@ class Terminal:
         return input(prompt_line.readline_safe(self.paint(question, "accent")))
 
     def review_plan(self, plan: str) -> tuple[str, str]:
-        return plan_review(self, plan)
+        with self.keys_paused():
+            return plan_review(self, plan)
+
+
+def shortened_value(value):
+    if isinstance(value, str):
+        return tools.clipped(value, MAX_SUMMARISED_RESULT_CHARS)
+    if isinstance(value, dict):
+        return {key: shortened_value(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [shortened_value(inner) for inner in value]
+    return value
+
+
+def shortened_call(call: dict) -> dict:
+    function = call.get("function") or {}
+    try:
+        arguments = json.dumps(shortened_value(agent.parsed_arguments(function.get("arguments"))))
+    except ValueError:
+        return call
+    return {**call, "function": {**function, "arguments": arguments}}
+
+
+def shortened(message: dict) -> dict:
+    if message.get("role") == "tool":
+        return {**message, "content": tools.clipped(str(message.get("content") or ""), MAX_SUMMARISED_RESULT_CHARS)}
+    if message.get("tool_calls"):
+        return {**message, "tool_calls": [shortened_call(call) for call in message["tool_calls"]]}
+    return message
+
+
+def reply_tokens(reply: dict) -> int:
+    usage = reply.get("usage") or {}
+    reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if isinstance(reported, int) and reported >= 0:
+        return reported
+    calls = json.dumps(reply.get("tool_calls") or [], ensure_ascii=False, default=str) if reply.get("tool_calls") else ""
+    return context.text_tokens(str(reply.get("content") or "") + calls)
 
 
 def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
@@ -496,6 +605,7 @@ class Session:
         self.compacted_in_turn = False
         self.choices = None
         self.turns = []
+        self.request, self.done = "", []
         self.remote = None
         self.remote_name = ""
         self.messages = saved.messages or self.fresh()
@@ -521,7 +631,7 @@ class Session:
         self.saved.save(self.messages, self.client.model)
 
     def compact_limit(self) -> int:
-        return context.compact_limit(self.client)
+        return context.compact_limit(self.client, agent.offered_definitions(self.extras))
 
     def is_too_long(self, messages: list[dict]) -> bool:
         return context.estimated_tokens(messages, self.client) > self.compact_limit()
@@ -544,20 +654,23 @@ class Session:
         content = mentions.expand(allowed, self.workspace)
         self.messages.append({"role": "user", "content": content})
         self.turns.append(Turn(self.turn_start, len(self.workspace.checkpoints), text, content))
-        done = []
+        self.request, self.done = text, []
+        self.terminal.start_turn()
         try:
-            with self.running(remote.IN_TURN):
-                agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=done,
+            with self.running(remote.IN_TURN), self.terminal.interruptible():
+                agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=self.done,
                                squeeze=self.squeeze, extras=self.extras)
         except KeyboardInterrupt:
-            self.abandon_turn(done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
+            self.abandon_turn(self.done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
             return False
         except providers.ERRORS as error:
-            self.abandon_turn(done, str(error) if isinstance(error, brain.SetupProblem) else f"{error} {ASK_AGAIN}")
+            self.abandon_turn(self.done, str(error) if isinstance(error, brain.SetupProblem) else f"{error} {ASK_AGAIN}")
             return False
         finally:
+            self.terminal.stopped_listening()
             self.tell_mode()
         self.terminal.end_line()
+        self.terminal.finish_turn()
         self.remember()
         return True
 
@@ -640,12 +753,30 @@ class Session:
 
     def summary_of(self, messages: list[dict], instructions: str = "") -> str:
         asked = f"{SUMMARY_REQUEST}\n\n{instructions}" if instructions else SUMMARY_REQUEST
-        request = messages + [{"role": "user", "content": asked}]
+        request = self.fitted_for_summary(messages) + [{"role": "user", "content": asked}]
         offered = agent.offered_definitions(self.extras)
         summary = (self.client.reply(request, tools=offered, on_text=lambda text: None).get("content") or "").strip()
         if not summary:
             raise providers.ProviderError(NO_SUMMARY)
         return summary
+
+    def fitted_for_summary(self, messages: list[dict]) -> list[dict]:
+        fitted = list(messages)
+        for index, message in enumerate(messages):
+            if not self.is_too_long(fitted):
+                break
+            fitted[index] = shortened(message)
+        return fitted
+
+    def work_so_far(self) -> str:
+        parts = [f"{REQUEST_LEAD}\n{self.request}"] if self.request else []
+        if self.workspace.todos:
+            listed = "\n".join(f"{TODO_MARKS.get(item.get('status'), '[ ]')} {item.get('text', '')}"
+                                for item in self.workspace.todos)
+            parts.append(f"{CHECKLIST_LEAD}\n{listed}")
+        if self.done:
+            parts.append(f"{DONE_LEAD}\n" + "\n".join(f"- {step}" for step in self.done[-MAX_LISTED_DONE:]))
+        return "\n\n".join(parts)
 
     def squeeze(self, messages: list[dict]) -> None:
         if not self.is_too_long(messages):
@@ -654,8 +785,14 @@ class Session:
         if instructions is None:
             return
         self.terminal.note("The conversation is long, so it's being summarised before the next step.")
-        summary = self.summary_of(messages, instructions)
-        messages[:] = self.fresh() + [{"role": "user", "content": f"{SUMMARY_LEAD}\n{summary}\n\n{CARRY_ON}"}]
+        try:
+            summary = f"{SUMMARY_LEAD}\n{self.summary_of(messages, instructions)}"
+        except providers.ERRORS as error:
+            self.terminal.note(f"{error} Carrying on from the request, the checklist and what was done instead.",
+                               "error")
+            summary = NO_SUMMARY_LEAD
+        carry_on = "\n\n".join(part for part in (summary, self.work_so_far(), CARRY_ON) if part)
+        messages[:] = self.fresh() + [{"role": "user", "content": carry_on}]
         self.turns = []
         self.turn_start, self.compacted_in_turn = len(messages) - 1, True
         self.remember()
@@ -1068,7 +1205,9 @@ def main(argv=None) -> int:
             if not tried_login:
                 terminal.note("arty-cli isn't logged in to Arty yet. Run `arty-cli login` first.", "error")
             return NOT_SET_UP
+        settings.positive_number(config, "context_tokens")
         workspace = tools.Workspace(arguments.project or Path.cwd())
+        workspace.max_command_seconds = settings.positive_number(config, "max_command_seconds") or tools.MAX_COMMAND_SECONDS
         try:
             return run_session(arguments, config, workspace, terminal)
         finally:
