@@ -21,11 +21,12 @@ from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VSpli
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.patch_stdout import StdoutProxy
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import SearchToolbar
 
-from arty_cli import prompt_line, remote, suggest, tools, waiting, wrap
+from arty_cli import look, permissions, prompt_line, remote, suggest, tools, waiting, wrap
 
 HISTORY_FOLDER = "history"
 PROJECT_KEY_CHARS = 16
@@ -52,9 +53,33 @@ POINTER = "❯"
 QUIT_HINT = "  Press Ctrl-C again to quit"
 CHOICE_HINT = "  ↑↓ or its letter to choose · enter to confirm · esc to refuse"
 LINE_HINT = "  enter to answer · esc to skip"
+SHORTCUTS_HINT = "  enter for every command (/help) · esc or ? to close"
+PLACEHOLDER = "Ask Arty to fix, explain or build something"
+SHORT_PLACEHOLDER = "Ask Arty anything"
+SHORT_CHOICE_HINT = "  ↑↓ · enter to confirm · esc to refuse"
+SHORT_SHORTCUTS_HINT = "  enter for /help · esc to close"
+CHOICE_HANG = 4
+SHORTEST_LABEL = 16
+BUSY_PLACEHOLDER = "Type your next message; it waits until Arty finishes"
+SHORTCUTS_MARK = "?"
+SHORTCUTS_LABEL = "? for shortcuts"
+HELP_COMMAND = "/help"
+MODE_HINT = "(shift+tab to cycle)"
+CONTEXT_LEFT = "{}% context left"
+BRANCH_MARK = "⎇ "
+FOOTER_GAP = "  "
+JOIN = " · "
+QUESTION_TITLE = " Arty asks "
+PANEL_PADDING = 1
+PANEL_LEAST_ROWS = 4
 ACCENT = "#e5383b"
-STYLE = Style.from_dict({"rule": "fg:ansibrightblack", "dim": "fg:ansibrightblack", "prompt": f"fg:{ACCENT}",
-                         "question": f"fg:{ACCENT}", "selected": "reverse", "meaning": "fg:ansibrightblack"})
+MODE_STYLES = {permissions.DEFAULT: "class:dim", permissions.AUTO_EDIT: "class:accent", permissions.PLAN: "class:accent",
+               permissions.ALLOW_ALL: "class:warning"}
+STYLE = Style.from_dict({"rule": "fg:ansibrightblack", "dim": "fg:ansibrightblack", "prompt": f"fg:{ACCENT} bold",
+                         "question": "bold", "selected": "reverse", "meaning": "fg:ansibrightblack",
+                         "accent": f"fg:{ACCENT}", "border": "fg:ansibrightblack", "panel-border": f"fg:{ACCENT}",
+                         "placeholder": "fg:ansibrightblack italic", "spinner": f"fg:{ACCENT} bold",
+                         "status-label": "bold", "key": "bold", "warning": "fg:ansiyellow bold"})
 
 
 class InterfaceError(Exception):
@@ -66,6 +91,7 @@ class Scroll:
         self.commit = commit
         self.changed = changed
         self.pending = ""
+        self.last_line = None
         self.lock = threading.Lock()
 
     def isatty(self) -> bool:
@@ -76,6 +102,7 @@ class Scroll:
             for piece in PIECES.split(text):
                 if piece == "\n":
                     self.commit(self.pending)
+                    self.last_line = self.pending
                     self.pending = ""
                 elif piece == "\b":
                     self.pending = self.pending[:-1]
@@ -180,6 +207,138 @@ def window_around(selected: int, count: int, rows: int) -> range:
     return range(start, min(start + rows, count))
 
 
+def reflowed_rows(widths: list[int], cursor_row: int, cursor_column: int, columns: int) -> int:
+    columns = max(columns, 1)
+    above = sum(max(-(-width // columns), 1) - 1 for width in widths[:cursor_row])
+    return above + cursor_column // columns
+
+
+def used_widths(screen, rows: int) -> list[int]:
+    widths = []
+    for row in range(rows):
+        cells = screen.data_buffer.get(row, {})
+        written = [column for column, cell in cells.items() if cell.char not in (" ", "")]
+        widths.append(max(written) + 1 if written else 0)
+    return widths
+
+
+class ReflowingApplication(Application):
+    def _on_resize(self) -> None:
+        self.climb_reflowed_rows()
+        super()._on_resize()
+
+    def climb_reflowed_rows(self) -> int:
+        renderer = self.renderer
+        screen, size = renderer._last_screen, renderer._last_size
+        columns = self.output.get_size().columns
+        if screen is None or size is None or columns >= size.columns:
+            return 0
+        cursor = renderer._cursor_pos
+        extra = reflowed_rows(used_widths(screen, cursor.y), cursor.y, cursor.x, columns)
+        if extra:
+            self.output.cursor_up(extra)
+        return extra
+
+
+class Placeholder(Processor):
+    def __init__(self, text):
+        self.text = text
+
+    def apply_transformation(self, transformation_input):
+        fragments = transformation_input.fragments
+        if transformation_input.document.text or transformation_input.lineno:
+            return Transformation(fragments)
+        wanted = self.text()
+        room = max(transformation_input.width - 1, 0)
+        shown = wanted if len(wanted) <= room else SHORT_PLACEHOLDER if len(SHORT_PLACEHOLDER) <= room else ""
+        return Transformation(fragments + [("class:placeholder", shown)])
+
+
+def fitted_hint(full: str, short: str, room: int) -> str:
+    return full if len(full) <= room else short[:room]
+
+
+def status_parts(frame: int, seconds: float, label: str, tokens: int, room: int) -> tuple[str, str, str]:
+    spinner = waiting.FRAMES[frame % len(waiting.FRAMES)]
+    elapsed = waiting.elapsed_text(seconds)
+    counted = f" · {waiting.TOKEN_MARK} {waiting.tokens_text(tokens)} tokens" if tokens > 0 else ""
+    choices = (f" ({elapsed}{counted} · {waiting.STOP_HINT})", f" ({elapsed} · {waiting.STOP_HINT})", f" ({elapsed})")
+    space = room - len(spinner) - 1
+    for details in choices:
+        if space - len(details) >= min(len(label), SHORTEST_LABEL):
+            return spinner, look.clipped(label, space - len(details)), details
+    return spinner, look.clipped(label, space - len(choices[-1])), choices[-1]
+
+
+def footer_pieces(mode: str, shared: bool, model: str, branch: str, left_percent: int | None, width: int):
+    mode_part = [(MODE_STYLES.get(mode, "class:accent"), f"{mode} mode")]
+    hint = [("class:dim", f" {MODE_HINT}")]
+    remote_part = [("class:accent", prompt_line.REMOTE_MARK)] if shared else []
+    shortcuts = [("class:dim", JOIN + SHORTCUTS_LABEL)]
+    context_part = [("class:dim", CONTEXT_LEFT.format(left_percent))] if left_percent is not None else []
+    branch_part = [("class:dim", BRANCH_MARK + branch)] if branch else []
+    model_part = [("class:dim", model)] if model else []
+    optional = {"model": model_part, "branch": branch_part, "shortcuts": shortcuts, "hint": hint}
+    for dropped in (None, "hint", "model", "branch", "shortcuts"):
+        if dropped:
+            optional[dropped] = []
+        left = [("", prompt_line.BAR_INDENT), *mode_part, *optional["hint"], *remote_part, *optional["shortcuts"]]
+        right = joined([optional["model"], optional["branch"], context_part])
+        if fragment_width(left) + len(FOOTER_GAP) + fragment_width(right) <= width:
+            return left, right
+    return left, []
+
+
+def joined(parts: list[list]) -> list:
+    pieces = []
+    for part in (part for part in parts if part):
+        if pieces:
+            pieces.append(("class:dim", JOIN))
+        pieces.extend(part)
+    return pieces
+
+
+def fragment_width(fragments) -> int:
+    return sum(len(text) for _style, text, *_rest in fragments)
+
+
+def panel_lines(title: str, body: list, width: int) -> list:
+    inner = max(width - 2 - 2 * PANEL_PADDING, 1)
+    head = look.clipped(QUESTION_TITLE, inner)
+    rows = [[("class:panel-border", f"{look.BOX['top_left']}{look.BOX['line']}{head}"
+              f"{look.BOX['line'] * max(inner + 2 * PANEL_PADDING - len(head) - 1, 0)}{look.BOX['top_right']}")]]
+    pad = " " * PANEL_PADDING
+    for row in body:
+        used = fragment_width(row)
+        clipped_row = row if used <= inner else clipped_fragments(row, inner)
+        filler = " " * max(inner - fragment_width(clipped_row), 0)
+        rows.append([("class:panel-border", look.BOX["side"]), ("", pad), *clipped_row, ("", filler + pad),
+                     ("class:panel-border", look.BOX["side"])])
+    rows.append([("class:panel-border",
+                  f"{look.BOX['bottom_left']}{look.BOX['line'] * (inner + 2 * PANEL_PADDING)}{look.BOX['bottom_right']}")])
+    return rows
+
+
+def clipped_fragments(fragments, room: int) -> list:
+    kept, used = [], 0
+    for style, text, *_rest in fragments:
+        if used + len(text) >= room:
+            kept.append((style, text[:max(room - used - 1, 0)] + look.ELLIPSIS))
+            return kept
+        kept.append((style, text))
+        used += len(text)
+    return kept
+
+
+def lines_to_fragments(rows: list) -> list:
+    fragments = []
+    for number, row in enumerate(rows):
+        if number:
+            fragments.append(("", "\n"))
+        fragments.extend(row)
+    return fragments
+
+
 class Interface:
     def __init__(self, host, history_file: Path | None = None, commit=None, interrupt=remote.interrupt_main_thread,
                  clock=time.monotonic):
@@ -202,6 +361,8 @@ class Interface:
         self.stray = None
         self.commit_line = commit
         self.scroll = Scroll(self.committed, self.redraw)
+        self.partial = ""
+        self.shortcuts_open = False
         self.app = None
         self.thread = None
 
@@ -223,30 +384,50 @@ class Interface:
         history = FileHistory(str(self.history_file)) if self.history_file else InMemoryHistory()
         self.buffer = Buffer(multiline=True, completer=ThreadedCompleter(Suggestions(self.host)),
                              complete_while_typing=True, history=history)
+        self.buffer.on_text_changed += lambda _buffer: self.close_shortcuts()
         search = SearchToolbar()
-        typed = BufferControl(buffer=self.buffer, search_buffer_control=search.control)
+        typed = BufferControl(buffer=self.buffer, search_buffer_control=search.control,
+                              input_processors=[Placeholder(self.placeholder)])
         menu_open = Condition(self.menu_is_open)
+        choosing = Condition(self.is_choosing)
+        shortcuts_open = Condition(lambda: self.shortcuts_open)
         rows = [
-            self.shown_when(self.pending_text, lambda: bool(self.scroll.pending), wraps=True),
-            self.shown_when(self.question_text, lambda: self.question is not None, wraps=True),
+            self.shown_when(self.pending_text, lambda: bool(self.scroll.pending or self.partial), wraps=True),
             self.shown_when(self.queued_text, lambda: bool(self.queued)),
             self.shown_when(self.status_text, lambda: self.status is not None),
-            Window(char=prompt_line.RULE, height=1, style="class:rule"),
-            VSplit([Window(FormattedTextControl(self.prompt_text), width=len(prompt_line.PROMPT_MARK),
-                           dont_extend_height=True),
-                    Window(typed, wrap_lines=True, dont_extend_height=True, height=Dimension(min=1))]),
-            Window(char=prompt_line.RULE, height=1, style="class:rule"),
+            self.shown_when(self.question_text, lambda: self.question is not None, wraps=True),
+            ConditionalContainer(self.input_box(typed), filter=~choosing),
             ConditionalContainer(Window(FormattedTextControl(self.menu_text), dont_extend_height=True),
                                  filter=menu_open),
+            ConditionalContainer(Window(FormattedTextControl(self.shortcuts_text), dont_extend_height=True),
+                                 filter=shortcuts_open & ~menu_open),
             search,
             ConditionalContainer(Window(FormattedTextControl(self.bar_text), height=1),
                                  filter=~menu_open & ~is_searching),
         ]
-        self.app = Application(layout=Layout(HSplit(rows), focused_element=typed), key_bindings=self.bindings(),
-                               style=STYLE, full_screen=False, erase_when_done=True,
-                               refresh_interval=REFRESH_SECONDS)
+        self.app = ReflowingApplication(layout=Layout(HSplit(rows), focused_element=typed),
+                                        key_bindings=self.bindings(), style=STYLE, full_screen=False,
+                                        erase_when_done=True, refresh_interval=REFRESH_SECONDS)
         self.app.timeoutlen = KEY_PREFIX_SECONDS
         self.app.ttimeoutlen = ESCAPE_SECONDS
+
+    def input_box(self, typed):
+        side = look.BOX["side"]
+        edge = "class:border"
+        return HSplit([
+            VSplit([Window(char=look.BOX["top_left"], width=1, height=1, style=edge),
+                    Window(char=look.BOX["line"], height=1, style=edge),
+                    Window(char=look.BOX["top_right"], width=1, height=1, style=edge)]),
+            VSplit([Window(char=side, width=1, style=edge),
+                    Window(FormattedTextControl(self.prompt_text), width=len(prompt_line.PROMPT_MARK) + 1,
+                           dont_extend_height=True),
+                    Window(typed, wrap_lines=True, dont_extend_height=True, height=Dimension(min=1)),
+                    Window(width=1),
+                    Window(char=side, width=1, style=edge)]),
+            VSplit([Window(char=look.BOX["bottom_left"], width=1, height=1, style=edge),
+                    Window(char=look.BOX["line"], height=1, style=edge),
+                    Window(char=look.BOX["bottom_right"], width=1, height=1, style=edge)]),
+        ])
 
     def shown_when(self, text, wanted, wraps: bool = False):
         return ConditionalContainer(Window(FormattedTextControl(text), wrap_lines=wraps, dont_extend_height=True),
@@ -268,6 +449,13 @@ class Interface:
         keys.add("escape", filter=~is_searching)(lambda event: self.escape())
         keys.add("c-c", filter=~is_searching)(lambda event: self.control_c())
         keys.add("c-d", filter=typing & nothing_typed)(lambda event: self.quit())
+        keys.add("c-o", filter=~is_searching)(lambda event: self.expand())
+        shortcuts_open = Condition(lambda: self.shortcuts_open)
+        composing = typing & Condition(lambda: not self.wants_line)
+        keys.add(SHORTCUTS_MARK, filter=composing & nothing_typed & ~shortcuts_open)(lambda event: self.open_shortcuts())
+        keys.add(SHORTCUTS_MARK, filter=typing & shortcuts_open)(lambda event: self.close_shortcuts())
+        keys.add("escape", filter=typing & shortcuts_open)(lambda event: self.close_shortcuts())
+        keys.add("enter", filter=typing & shortcuts_open)(lambda event: self.ask_for_help())
         keys.add("up", filter=asking)(lambda event: self.move_choice(-1))
         keys.add("down", filter=asking)(lambda event: self.move_choice(1))
         keys.add("enter", filter=asking)(lambda event: self.confirm_choice())
@@ -357,6 +545,32 @@ class Interface:
     def move_menu(self, step: int) -> None:
         state = self.buffer.complete_state
         self.buffer.go_to_completion(((state.complete_index or 0) + step) % len(state.completions))
+
+    def open_shortcuts(self) -> None:
+        self.shortcuts_open = True
+
+    def close_shortcuts(self) -> None:
+        self.shortcuts_open = False
+
+    def ask_for_help(self) -> None:
+        self.close_shortcuts()
+        self.submit(HELP_COMMAND)
+
+    def expand(self) -> None:
+        shown = getattr(self.host, "expand", None)
+        if shown is not None:
+            threading.Thread(target=shown, daemon=True).start()
+
+    def ring(self) -> None:
+        self.in_loop(self.bell)
+
+    def bell(self) -> None:
+        self.app.output.bell()
+        self.app.output.flush()
+
+    def show_partial(self, text: str) -> None:
+        self.partial = text
+        self.redraw()
 
     def submit(self, text: str) -> None:
         with self.lock:
@@ -502,18 +716,26 @@ class Interface:
         with self.lock:
             if text in self.queued:
                 self.queued.remove(text)
-        first, *rest = text.split("\n")
-        shown = [self.host.paint(prompt_line.PROMPT_MARK, "accent") + first, *(f"  {line}" for line in rest)]
-        self.scroll.write("\n".join(shown) + "\n")
+        theme = getattr(self.host, "theme", look.Theme(colour=False))
+        shown = look.user_block(text, self.room(), theme)
+        gap = [""] if self.scroll.last_line else []
+        self.scroll.write("\n".join(gap + shown) + "\n")
 
     def room(self) -> int:
+        if self.app is not None and self.app.is_running:
+            return max(self.app.output.get_size().columns - 1, 1)
         return wrap.room()
 
     def prompt_text(self):
-        return [("class:prompt", prompt_line.PROMPT_MARK)]
+        return [("", " "), ("class:prompt", prompt_line.PROMPT_MARK)]
+
+    def placeholder(self) -> str:
+        if self.wants_line:
+            return ""
+        return BUSY_PLACEHOLDER if self.busy else PLACEHOLDER
 
     def pending_text(self):
-        return ANSI(self.scroll.pending)
+        return ANSI(self.scroll.pending or self.partial)
 
     def queued_text(self):
         room = self.room()
@@ -525,20 +747,27 @@ class Interface:
         if status is None:
             return []
         frame = int(self.clock() * FRAMES_PER_SECOND)
-        return [("class:dim", waiting.status_text(frame, self.clock() - status.started_at, status.label,
-                                                  status.tokens(), self.room()))]
+        spinner, label, details = status_parts(frame, self.clock() - status.started_at, status.label,
+                                               status.tokens(), self.room())
+        return [("class:spinner", spinner), ("", " "), ("class:status-label", label), ("class:dim", details)]
 
     def question_text(self):
         question = self.question
         if question is None:
             return []
-        rows = [("class:question", question.text)]
+        if not question.choices:
+            return [("class:accent", question.text)]
+        width = self.room()
+        inner = max(width - 2 - 2 * PANEL_PADDING, 1)
+        body = [[("class:question", line)] for line in wrap.wrapped_line(question.text, inner)]
+        body.append([])
         for index in window_around(question.selected, len(question.choices), CHOICE_ROWS):
             key, meaning = question.choices[index]
             chosen = index == question.selected
-            rows.append(("", "\n"))
-            rows.append(("class:selected" if chosen else "", f"{POINTER if chosen else ' '} {key}  {meaning}"))
-        return rows
+            choice = f"{POINTER if chosen else ' '} {key}  {meaning}"
+            hang = " " * (len(key) + CHOICE_HANG)
+            body.extend([("class:selected" if chosen else "", line)] for line in wrap.wrapped_line(choice, inner, hang))
+        return lines_to_fragments(panel_lines(QUESTION_TITLE, body, width))
 
     def menu_text(self):
         state = self.buffer.complete_state
@@ -557,13 +786,33 @@ class Interface:
         return rows[:-1]
 
     def bar_text(self):
+        room = self.room()
         if self.quit_is_armed():
             return [("class:dim", QUIT_HINT)]
         if self.wants_line:
             return [("class:dim", LINE_HINT)]
         if self.question is not None:
-            return [("class:dim", CHOICE_HINT)]
-        shared = prompt_line.REMOTE_MARK if self.host.shared() else ""
-        bar = f"{prompt_line.BAR_INDENT}{self.host.mode()} {prompt_line.BAR_HINTS}{shared}"
-        return [("class:dim", bar[:self.room()])]
+            return [("class:dim", fitted_hint(CHOICE_HINT, SHORT_CHOICE_HINT, room))]
+        if self.shortcuts_open:
+            return [("class:dim", fitted_hint(SHORTCUTS_HINT, SHORT_SHORTCUTS_HINT, room))]
+        details = getattr(self.host, "footer_details", lambda: ("", "", None))
+        model, branch, left_percent = details()
+        width = self.room()
+        left, right = footer_pieces(self.host.mode(), self.host.shared(), model, branch, left_percent, width)
+        filler = " " * max(width - fragment_width(left) - fragment_width(right), 0)
+        return left + [("", filler)] + right
+
+    def shortcuts_text(self):
+        columns = look.shortcut_columns(self.room())
+        key_width = max(len(key) for key, _meaning in look.SHORTCUTS) + 1
+        meaning_width = max(len(meaning) for _key, meaning in look.SHORTCUTS) + look.SHORTCUT_GAP
+        rows = []
+        for row in range(len(columns[0])):
+            line = [("", prompt_line.BAR_INDENT)]
+            for column in columns:
+                if row < len(column):
+                    key, meaning = column[row]
+                    line += [("class:key", key.ljust(key_width)), ("class:dim", meaning.ljust(meaning_width))]
+            rows.append(line)
+        return lines_to_fragments(rows)
 

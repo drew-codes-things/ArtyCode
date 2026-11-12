@@ -268,7 +268,7 @@ def test_in_the_interface_the_welcome_goes_above_the_box_and_names_its_own_keys(
     interface = FakeInterface()
     cli.chat_in_interface(session, interface, share=False)
     shown = interface.scroll.getvalue()
-    assert shown.startswith("◆ ArtyCode")
+    assert shown.startswith("╭─ ◆ ArtyCode") and "│ model   arty/qwen3:14b" in shown
     assert "Esc stops a request" in shown and "Enter while Arty works queues" in shown
     assert "Ctrl-C stops a request" not in shown
 
@@ -286,3 +286,99 @@ def test_the_answer_is_noted_after_an_arrow(interactive):
     console.answers = ["y"]
     terminal.ask("Run: python3 calc.py")
     assert "Run: python3 calc.py → Yes" in terminal.err.getvalue()
+
+
+class RingingInterface(FakeInterface):
+    def __init__(self, *lines):
+        super().__init__(*lines)
+        self.rung, self.partials = [], []
+
+    def ring(self):
+        self.rung.append(True)
+
+    def show_partial(self, text):
+        self.partials.append(text)
+
+
+def test_answers_in_the_interface_are_drawn_as_markdown_under_one_mark(interactive, tmp_path):
+    session = session_for(tmp_path)
+    interface = RingingInterface("hello")
+
+    def reply(messages, tools, on_text):
+        on_text("Use **bold** and `code`.\n- one\n")
+        return {"role": "assistant", "content": "Use **bold** and `code`.\n- one\n", "tool_calls": []}
+
+    session.client.reply = reply
+    cli.chat_in_interface(session, interface, share=False)
+    shown = interface.scroll.getvalue()
+    assert "● Use bold and code.\n  • one\n" in shown and "**" not in shown
+    assert session.terminal.view is None
+
+
+def test_a_step_in_the_interface_is_drawn_with_its_result_and_kept_for_slash_last(interactive, tmp_path):
+    session = session_for(tmp_path)
+    interface = RingingInterface("count", "/last")
+    command = {"id": "c1", "type": "function",
+               "function": {"name": "run_command", "arguments": '{"command": "seq 1 9"}'}}
+    replies = [{"role": "assistant", "content": "", "tool_calls": [command]},
+               {"role": "assistant", "content": "Done.", "tool_calls": []}]
+    session.client.reply = lambda messages, tools, on_text: replies.pop(0)
+    session.gate.mode = permissions.ALLOW_ALL
+    cli.chat_in_interface(session, interface, share=False)
+    shown = interface.scroll.getvalue()
+    assert "● Run seq 1 9\n  └ 9 (exit code 0)\n    1\n    2\n    3\n    … +6 lines" in shown
+    assert shown.rstrip().endswith("● Run seq 1 9\n    1\n    2\n    3\n    4\n    5\n    6\n    7\n    8\n    9")
+
+
+def test_slash_last_at_the_plain_prompt_prints_the_whole_output(interactive, tmp_path):
+    session = session_for(tmp_path)
+    session.command("/last")
+    assert cli.view.NO_STEP_YET in session.terminal.err.getvalue()
+    session.terminal.last_step = cli.view.Step("Run ls", "run_command", {"command": "ls"}, "a.py\nb.py\n[exit code 0]")
+    session.command("/last")
+    assert session.terminal.err.getvalue().endswith("● Run ls\n    a.py\n    b.py\n")
+
+
+def test_a_permission_question_in_the_interface_rings_and_its_diff_is_numbered(interactive):
+    terminal, console = console_terminal()
+    console.ring = lambda: console.rung.append(True)
+    console.rung = []
+    terminal.view = cli.view.View(terminal.err, cli.look.Theme(colour=False),
+                                  notifier=cli.notify.Notifier(console.ring, command=lambda title, text: None))
+    console.answers = ["y"]
+    terminal.ask("Edit calc.py?", "--- calc.py\n+++ calc.py\n@@ -1,1 +1,1 @@\n-x = 1\n+x = 2")
+    assert console.rung == [True]
+    assert "    1 -x = 1\n    1 +x = 2\n" in terminal.err.getvalue()
+
+
+def test_notices_follow_the_setting(interactive, tmp_path):
+    session = session_for(tmp_path)
+    assert cli.interface_notifier(session, RingingInterface()) is not None
+    assert cli.interface_notifier(session, FakeInterface()) is None
+    session.client.settings = settings.Settings(notify="off")
+    assert cli.interface_notifier(session, RingingInterface()) is None
+
+
+def test_the_footer_gets_the_model_branch_and_context_left(interactive, tmp_path):
+    session = session_for(tmp_path)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    host = cli.SessionHost(session)
+    assert host.footer_details() == ("arty/qwen3:14b", "main", None)
+    host.measure()
+    model, branch, left = host.footer_details()
+    assert 50 <= left < 100
+    session.messages.append({"role": "user", "content": "x" * 200_000})
+    host.measure()
+    assert host.footer_details()[2] == 0
+
+
+def test_slash_last_prefers_the_last_step_with_output_over_a_later_checklist(interactive, tmp_path):
+    session = session_for(tmp_path)
+    terminal = session.terminal
+    run = {"id": "c1", "function": {"name": "run_command", "arguments": '{"command": "ls"}'}}
+    checklist = {"id": "c2", "function": {"name": "todo_write", "arguments": '{"items": []}'}}
+    terminal.show_tool_result(run, "a.py\n[exit code 0]")
+    terminal.show_tool_result(checklist, "No items")
+    session.command("/last")
+    assert terminal.err.getvalue().endswith("● Run ls\n    a.py\n")

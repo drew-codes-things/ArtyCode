@@ -128,4 +128,4 @@ def test_the_readme_gives_a_one_line_install_that_matches_the_installer():
 
 def test_the_interface_library_is_installed_with_it():
     project = tomllib.loads((PROJECT / "pyproject.toml").read_text())["project"]
-    assert [name.split(">")[0] for name in project["dependencies"]] == ["prompt_toolkit"]
+    assert [name.split(">")[0] for name in project["dependencies"]] == ["prompt_toolkit", "pygments"]

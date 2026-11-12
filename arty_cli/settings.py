@@ -10,7 +10,7 @@ CONFIG_NAME = "config.json"
 DEFAULT_MODEL = "arty/qwen3:14b"
 RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
-OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with")
+OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with", "notify")
 TEMPORARY_NAME_BYTES = 8
 ENVIRONMENT_NAMES = {
     "base_url": "ARTY_URL",
@@ -22,6 +22,7 @@ ENVIRONMENT_NAMES = {
     "context_tokens": "ARTY_CLI_CONTEXT_TOKENS",
     "max_command_seconds": "ARTY_CLI_MAX_COMMAND_SECONDS",
     "search_with": "ARTY_CLI_SEARCH_WITH",
+    "notify": "ARTY_CLI_NOTIFY",
 }
 
 
@@ -40,6 +41,7 @@ class Settings:
     context_tokens: str = ""
     max_command_seconds: str = ""
     search_with: str = ""
+    notify: str = ""
 
     def is_ready(self) -> bool:
         return bool(self.api_key and (self.base_url or self.remote_url))

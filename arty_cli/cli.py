@@ -23,6 +23,7 @@ from arty_cli import (__version__, agent, authorise, brain, commands, context, h
                        settings, skills, stopkey, suggest, tools, waiting, webfetch,
                        websearch, wrap)
 from arty_cli import upkeep
+from arty_cli import look, notify, view
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -93,6 +94,7 @@ HELP_GROUPS = (
     }),
     ("Looking at the setup", {
         "/todos": "the current checklist",
+        "/last": "everything the last step gave back (only a few lines are shown)",
         "/memory": "which ARTY.md notes are loaded",
         "/mcp, /skills": "MCP servers and skills",
         "/helpers, /hooks": "your own helpers and hooks",
@@ -106,6 +108,7 @@ HELP_GROUPS = (
         "Alt+Enter": "start another line (so does a line ending in \\)",
         "Up, Down, Ctrl-R": "earlier requests in this project, and searching them",
         "Tab, Enter": "take the highlighted /command, model or @file from the menu",
+        "Ctrl-O": "everything the last step gave back, like /last",
         "?, /help": "this list",
     }),
 )
@@ -136,9 +139,9 @@ MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
 WELCOME_TIPS = ('Ask in plain words, e.g. "why does the login test fail?" or "add a --dry-run flag"',
                 "@file attaches a file · !command runs one yourself · # note saves a project note",
                 "? or /help for commands · Ctrl-C stops a request · Ctrl-D leaves")
-INTERFACE_TIPS = (*WELCOME_TIPS[:2],
-                  "? or /help for commands · Esc stops a request · Ctrl-C twice or Ctrl-D leaves",
-                  "Enter while Arty works queues your next message · Alt+Enter starts another line")
+CARD_TIPS = ("Esc stops a request · Enter while Arty works queues your next message",
+             "? for shortcuts · /help for every command · @ attaches a file")
+BRANCH_CHECK_SECONDS = 5.0
 NO_NOTES_TIP = "No ARTY.md here yet: /init looks through the project and writes notes Arty reads every time."
 ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO,
            "a": permissions.ALWAYS, "always": permissions.ALWAYS}
@@ -207,6 +210,9 @@ class Terminal:
         self.flow = wrap.Flow()
         self.clock = time.monotonic
         self.thinking_since = None
+        self.view = None
+        self.measure = None
+        self.last_step = self.last_output_step = None
         self.start_turn()
 
     def start_turn(self) -> None:
@@ -223,9 +229,14 @@ class Terminal:
         self.streamed_chars = 0
 
     def finish_turn(self) -> None:
+        seconds = time.monotonic() - self.turn_started
+        if self.view:
+            self.view.turn_finished(seconds, f"Worked for {waiting.elapsed_text(seconds)}")
         if not self.steps:
             return
-        seconds = time.monotonic() - self.turn_started
+        if self.view:
+            self.view.settle()
+            self.view.gap()
         counted = f" · {waiting.TOKEN_MARK} {waiting.tokens_text(self.turn_tokens)} tokens" if self.turn_tokens else ""
         self.note(f"Worked for {waiting.elapsed_text(seconds)} · {self.steps} step{'' if self.steps == 1 else 's'}"
                   f"{counted}")
@@ -275,6 +286,9 @@ class Terminal:
             return
         self.end_line()
         thought = f"{THOUGHT_MARK} Thought for {waiting.elapsed_text(self.clock() - since)}"
+        if self.view:
+            self.view.thought(thought)
+            return
         self.err.write(self.paint(thought, "dim") + "\n")
         self.err.flush()
 
@@ -289,6 +303,8 @@ class Terminal:
 
     def end_line(self) -> None:
         self.stop_thinking()
+        if self.view:
+            self.view.settle()
         if self.mid_line:
             self.out.write("\n")
             self.out.flush()
@@ -308,14 +324,19 @@ class Terminal:
         if text:
             self.show_thought()
             self.stop_thinking()
-        self.out.write(self.flow.feed(text) if self.out.isatty() else text)
-        self.out.flush()
+        if self.view:
+            self.view.text(text)
+        else:
+            self.out.write(self.flow.feed(text) if self.out.isatty() else text)
+            self.out.flush()
+            self.mid_line = not text.endswith("\n")
         self.streamed_chars += len(text)
-        self.mid_line = not text.endswith("\n")
         if self.events and text:
             self.events.write({"type": "text", "text": text})
 
     def show_tool_call(self, call: dict) -> None:
+        if self.view:
+            self.view.tool_call(call)
         if not self.events:
             return
         name, arguments, _problem = agent.call_parts(call)
@@ -324,6 +345,14 @@ class Terminal:
                            "input": given if arguments is None else arguments})
 
     def show_tool_result(self, call: dict, result: str) -> None:
+        name, arguments = view.call_details(call)
+        self.last_step = view.Step(agent.step_line(name, arguments), name, arguments, result)
+        if name in view.OUTPUT_TOOLS:
+            self.last_output_step = self.last_step
+        if self.view:
+            self.view.tool_result(call, result)
+        if self.measure:
+            self.measure()
         if self.events:
             self.events.write({"type": "tool_result", "tool_use_id": call.get("id") or "",
                                "name": (call.get("function") or {}).get("name", ""), "content": result,
@@ -333,6 +362,9 @@ class Terminal:
         self.show_thought()
         self.end_line()
         self.steps += 1
+        if self.view:
+            self.view.step(line)
+            return
         first, *rest = self.err_lines(f"{STEP_MARK} {line}", STEP_HANG)
         marked = self.paint(STEP_MARK, "accent") + first[len(STEP_MARK):]
         self.err.write("\n".join([marked, *rest]) + "\n")
@@ -348,6 +380,10 @@ class Terminal:
         self.err.flush()
 
     def show_outcome(self, line: str, is_problem: bool) -> None:
+        if self.view:
+            self.stop_thinking()
+            self.view.outcome(line, is_problem)
+            return
         self.end_line()
         for shown in self.err_lines(f"  {OUTCOME_MARK} {line}", OUTCOME_HANG):
             self.err.write(self.paint(shown, "error" if is_problem else "dim") + "\n")
@@ -371,6 +407,9 @@ class Terminal:
 
     def show_diff(self, preview: str) -> None:
         self.stop_thinking()
+        if self.view:
+            self.view.question_diff(preview)
+            return
         for line in preview.splitlines():
             colour = "green" if line.startswith("+") else "removed" if line.startswith("-") else "dim"
             self.err.write(self.paint(line, colour) + "\n")
@@ -406,6 +445,8 @@ class Terminal:
         if self.console:
             self.offered = dict(choices)
             self.console.open_question(question, choices)
+            if self.view:
+                self.view.alert(NOTIFICATION_LEADS[PERMISSION_PROMPT], question)
             return ""
         self.note(question, "accent")
         for key, meaning in choices:
@@ -444,7 +485,7 @@ class Terminal:
         if not self.console:
             return
         meaning = next((self.offered[key] for key in self.offered if answers.get(key) == choice), choice)
-        self.note(f"{question} {ANSWER_ARROW} {meaning}", "accent")
+        self.note(f"{question} {ANSWER_ARROW} {meaning}", "dim" if self.view else "accent")
 
     def answer_lines(self):
         return self.console.answer_lines() if self.console else remote.answer_lines(is_interactive)
@@ -457,6 +498,19 @@ class Terminal:
     def review_plan(self, plan: str) -> tuple[str, str]:
         with self.keys_paused():
             return plan_review(self, plan)
+
+    def show_last(self) -> None:
+        step = self.last_output_step or self.last_step
+        if step is None:
+            self.note(view.NO_STEP_YET)
+            return
+        if self.view:
+            self.view.full_step(step)
+            return
+        self.note(f"{STEP_MARK} {step.label}", "accent")
+        output, _failed = view.output_of(step.name, step.result)
+        for line in view.readable(output).splitlines() or ["(no output)"]:
+            self.note(f"{OUTCOME_HANG}{line}", "reset")
 
 
 def shortened_value(value):
@@ -1133,6 +1187,7 @@ class Session:
             "/skills": self.show_skills,
             "/helpers": self.show_helpers,
             "/hooks": self.show_hooks,
+            "/last": self.terminal.show_last,
             "/help": lambda: self.show_help({k: v for k, v in custom.items() if k not in commands.BUILT_IN}),
         }
         if name in ("/exit", "/quit"):
@@ -1300,17 +1355,63 @@ def welcome(session: Session, tips: tuple = WELCOME_TIPS) -> None:
     terminal.note("")
 
 
+def welcome_card(session: Session, theme: look.Theme, width: int) -> None:
+    terminal = session.terminal
+    mode = session.gate.mode
+    level = rules_level(session.workspace)
+    rows = [("model", session.client.model), ("folder", shown_folder(session.workspace.root, Path.home())),
+            ("mode", f"{mode}: {MODE_MEANINGS.get(mode, '')}"), ("rules", f"{level}: {rules.MEANINGS[level]}")]
+    for line in look.card(f"{WORDMARK} {__version__}", rows, width, theme):
+        terminal.err.write(line + "\n")
+    if mode == permissions.ALLOW_ALL:
+        terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
+    for tip in CARD_TIPS:
+        terminal.note(f"  {tip}")
+    if not memory.project_note_files(session.workspace.root):
+        terminal.note(f"  {NO_NOTES_TIP}")
+
+
 def nothing_written(_text: str) -> None:
     return None
 
 
+def context_left(session: Session) -> int | None:
+    limit = session.compact_limit()
+    if limit <= 0:
+        return None
+    used = context.estimated_tokens(session.messages, session.client)
+    return max(0, min(100, round(100 * (1 - used / limit))))
+
+
 class SessionHost:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, clock=time.monotonic):
         self.session = session
         self.root = session.workspace.root
         self.commands = session.slash_choices
         self.models = session.model_choices
         self.paint = session.terminal.paint
+        self.theme = look.theme_for(session.terminal.colour)
+        self.clock = clock
+        self.left = None
+        self.branch, self.branch_checked = "", None
+
+    def measure(self) -> None:
+        try:
+            self.left = context_left(self.session)
+        except providers.ERRORS:
+            self.left = None
+
+    def current_branch(self) -> str:
+        now = self.clock()
+        if self.branch_checked is None or now - self.branch_checked >= BRANCH_CHECK_SECONDS:
+            self.branch, self.branch_checked = look.git_branch(self.root) or "", now
+        return self.branch
+
+    def footer_details(self) -> tuple[str, str, int | None]:
+        return self.session.client.model, self.current_branch(), self.left
+
+    def expand(self) -> None:
+        self.session.terminal.show_last()
 
     def mode(self) -> str:
         return self.session.gate.mode
@@ -1347,8 +1448,14 @@ def chat_in_interface(session: Session, interface, share: bool) -> None:
     terminal.out = terminal.err = interface.scroll
     sys.stdout = sys.stderr = interface.stray
     terminal.console = interface
+    host = getattr(interface, "host", None) or SessionHost(session)
+    terminal.view = view.View(interface.scroll, host.theme, session.workspace, interface_notifier(session, interface),
+                              room=getattr(interface, "room", wrap.room))
+    terminal.view.partial = getattr(interface, "show_partial", None)
+    terminal.measure = host.measure
     try:
-        welcome(session, INTERFACE_TIPS)
+        welcome_card(session, host.theme, terminal.view.room())
+        host.measure()
         if share:
             session.start_remote()
         talk_in_interface(session, interface)
@@ -1357,10 +1464,19 @@ def chat_in_interface(session: Session, interface, share: bool) -> None:
             session.stop_remote()
         terminal.end_line()
         terminal.console = None
+        terminal.view = None
+        terminal.measure = None
         interface.stop()
         terminal.out, terminal.err, sys.stdout, sys.stderr = before
     if interface.failure is not None:
         terminal.note(f"The interface stopped unexpectedly: {interface.failure}", "error")
+
+
+def interface_notifier(session: Session, interface) -> notify.Notifier | None:
+    ring = getattr(interface, "ring", None)
+    if ring is None or not notify.wanted(getattr(session.client, "settings", None)):
+        return None
+    return notify.Notifier(ring)
 
 
 def talk_in_interface(session: Session, interface) -> None:
@@ -1381,6 +1497,9 @@ def talk_in_interface(session: Session, interface) -> None:
         except KeyboardInterrupt:
             session.terminal.note("Stopped.", "error")
             continue
+        finally:
+            if session.terminal.measure:
+                session.terminal.measure()
         if not carries_on:
             return
 
