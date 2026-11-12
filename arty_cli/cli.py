@@ -56,8 +56,8 @@ MANUAL, AUTOMATIC = "manual", "auto"
 STARTUP, RESUME, CLEAR = "startup", "resume", "clear"
 MAX_TURN_CHARS = 80
 PERMISSION_PROMPT, PLAN_APPROVAL = "permission_prompt", "plan_approval"
-NOTIFICATION_LEADS = {PERMISSION_PROMPT: "Arty CLI needs your permission",
-                      PLAN_APPROVAL: "Arty CLI has a plan for you to approve"}
+NOTIFICATION_LEADS = {PERMISSION_PROMPT: "ArtyCode needs your permission",
+                      PLAN_APPROVAL: "ArtyCode has a plan for you to approve"}
 NOTE_LEAD = "(I added this note to the project's ARTY.md; follow it from now on:)"
 NOTE_ACK = "Noted."
 UNDO_LEAD = "(I undid your last file change with /undo:)"
@@ -110,7 +110,7 @@ PALETTE_ACCENT = "\033[38;5;167m"
 TRUE_COLOUR_NAMES = ("truecolor", "24bit")
 ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
-WORDMARK = "◆ Arty"
+WORDMARK = "◆ ArtyCode"
 STEP_MARK = "●"
 OUTCOME_MARK = "└"
 HOME_MARK = "~"
@@ -419,7 +419,7 @@ def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
 
 
 def parse_arguments(argv):
-    parser = argparse.ArgumentParser(prog="arty-cli", description="Arty CLI: reads, edits and runs code in the "
+    parser = argparse.ArgumentParser(prog="arty-cli", description="ArtyCode: reads, edits and runs code in the "
                                      "current folder, asking before it changes anything. Runs on your Arty.")
     parser.add_argument("words", nargs="*", help="`login` to connect to Arty, or a question to ask once")
     parser.add_argument("-p", "--print", dest="once", help="ask once, print the answer and exit")
@@ -440,11 +440,11 @@ def parse_arguments(argv):
                         help="built-in working rules for this run: on (told and checked), tell-only or off")
     parser.add_argument("--sandbox", action="store_true",
                         help="run commands in a sandbox: only the project folder is writable, no network")
-    parser.add_argument("--version", action="version", version=f"arty-cli {__version__}")
+    parser.add_argument("--version", action="version", version=f"ArtyCode {__version__}")
     return parser.parse_args(argv)
 
 
-NO_ADDRESS = ("arty-cli doesn't know where your Arty brain is yet, so nothing was saved. Set its address, then run "
+NO_ADDRESS = ("ArtyCode doesn't know where your Arty brain is yet, so nothing was saved. Set its address, then run "
               "arty-cli login again:")
 HOME_ADDRESS = "http://<brain address>:8081/v1"
 ANYWHERE_ADDRESS = "https://<your address>/v1"
@@ -503,7 +503,7 @@ LOGIN_CHOICES = (
 
 
 def chosen_login(terminal: Terminal):
-    terminal.note("How should arty-cli log in to Arty?", "accent")
+    terminal.note("How should ArtyCode log in to Arty?", "accent")
     for number, (label, _handler) in enumerate(LOGIN_CHOICES, 1):
         terminal.note(f"  {number}. {label}")
     while True:
@@ -565,7 +565,7 @@ def project_notes_allowed(workspace, personal: Path, terminal: Terminal) -> bool
     if not is_interactive():
         reason = "its hooks or MCP servers changed since it was trusted" if state == memory.CHANGED else "this folder isn't trusted yet"
         terminal.note(f"Not following this project's ARTY.md or AGENTS.md, /commands, skills, helpers, hooks or MCP servers: {reason}. "
-                      "Start arty-cli here in a terminal to trust it.", "error")
+                      "Start ArtyCode here in a terminal to trust it.", "error")
         return False
     if state == memory.CHANGED:
         terminal.note("This folder's hooks or MCP servers changed since you trusted it.", "error")
@@ -709,7 +709,7 @@ class Session:
 
     def list_turns(self, turns: list[Turn]) -> None:
         if not turns:
-            self.terminal.note("No requests to go back to since arty-cli started (or since /clear or a summary).")
+            self.terminal.note("No requests to go back to since ArtyCode started (or since /clear or a summary).")
             return
         for number, turn in enumerate(turns, 1):
             first_line = turn.text.strip().splitlines()[0] if turn.text.strip() else ""
@@ -1149,7 +1149,7 @@ def rules_level(workspace) -> str:
 def welcome(session: Session) -> None:
     terminal = session.terminal
     mode = session.gate.mode
-    terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(f'CLI {__version__}', 'dim')}", "reset")
+    terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(__version__, 'dim')}", "reset")
     welcome_row(terminal, "Folder", shown_folder(session.workspace.root, Path.home()))
     welcome_row(terminal, "Model", session.client.model, "accent")
     welcome_row(terminal, "Mode", f"{mode}: {MODE_MEANINGS.get(mode, '')} (Shift+Tab to change)")
@@ -1197,7 +1197,7 @@ def ready_settings(arguments, terminal: Terminal) -> tuple[settings.Settings, bo
     config = settings.load()
     tried_login = not config.is_ready() and is_interactive()
     if tried_login:
-        terminal.note("First run: choose how arty-cli connects.", "accent")
+        terminal.note("First run: choose how ArtyCode connects.", "accent")
         login(terminal)
         config = settings.load()
     if arguments.model:
@@ -1225,7 +1225,7 @@ def main(argv=None) -> int:
         config, tried_login = ready_settings(arguments, terminal)
         if not config.is_ready():
             if not tried_login:
-                terminal.note("arty-cli isn't logged in to Arty yet. Run `arty-cli login` first.", "error")
+                terminal.note("ArtyCode isn't logged in to Arty yet. Run `arty-cli login` first.", "error")
             return NOT_SET_UP
         settings.positive_number(config, "context_tokens")
         workspace = tools.Workspace(arguments.project or Path.cwd())

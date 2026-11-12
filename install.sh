@@ -44,7 +44,7 @@ uninstall() {
     rm -f "$APP_HOME/$MARKER"
     rmdir "$APP_HOME" 2>/dev/null || say "Left $APP_HOME in place: it holds files arty-cli didn't put there."
   fi
-  say "Removed arty-cli. Your settings and conversations in ~/.config/arty-cli were kept."
+  say "Removed ArtyCode. Your settings and conversations in ~/.config/arty-cli were kept."
 }
 
 link_command() {
@@ -110,7 +110,7 @@ install() {
   "$python" -c "import venv, ensurepip" 2>/dev/null || fail "Python's venv module is missing. On Debian: sudo apt install python3-venv"
   source="$(chosen_source)"
   spec="$(package_spec "$source")"
-  say "Installing arty-cli from $source into $APP_HOME"
+  say "Installing ArtyCode from $source into $APP_HOME"
   if [ -e "$APP_HOME" ] && [ -n "$(ls -A "$APP_HOME" 2>/dev/null)" ] && ! is_arty_install; then
     fail "$APP_HOME already holds other files; choose an empty folder with ARTY_CLI_HOME."
   fi

@@ -9,7 +9,7 @@ from pathlib import Path
 from arty_cli import tools
 
 PROFILE_NAME = "arty-cli.sandbox"
-PROFILE_DESCRIPTION = "Arty CLI command sandbox"
+PROFILE_DESCRIPTION = "ArtyCode command sandbox"
 INTERNET_CLIENT = "S-1-15-3-1"
 PRIVATE_NETWORK_CLIENT_SERVER = "S-1-15-3-3"
 PROFILE_ALREADY_EXISTS = -2147024713

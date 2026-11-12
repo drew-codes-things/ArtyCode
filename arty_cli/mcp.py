@@ -200,7 +200,7 @@ def answer_to(server_message: dict) -> dict:
     if server_message.get("method") == "ping":
         return {"jsonrpc": "2.0", "id": server_message["id"], "result": {}}
     return {"jsonrpc": "2.0", "id": server_message["id"],
-            "error": {"code": METHOD_NOT_FOUND, "message": "arty-cli doesn't offer that"}}
+            "error": {"code": METHOD_NOT_FOUND, "message": "ArtyCode doesn't offer that"}}
 
 
 def initialize_params() -> dict:

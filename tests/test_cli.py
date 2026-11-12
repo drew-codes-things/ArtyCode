@@ -58,7 +58,7 @@ def test_a_one_shot_prompt_prints_the_answer(ready, capsys):
     assert cli.main(["-p", "hello"]) == 0
     assert "Hi there." in capsys.readouterr().out
     sent = FakeBrain.made[0].calls[0]
-    assert sent[0]["role"] == "system" and "arty-cli" in sent[0]["content"]
+    assert sent[0]["role"] == "system" and "ArtyCode" in sent[0]["content"]
     assert sent[-1] == {"role": "user", "content": "hello"}
 
 

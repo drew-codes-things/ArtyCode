@@ -69,7 +69,7 @@ LOOKING_TOOLS = (eyes.SCREENSHOT, eyes.HTTP_CHECK)
 LOOK_QUESTIONS = {eyes.SCREENSHOT: "Open {url} in a headless browser?", eyes.HTTP_CHECK: "Check {url}?"}
 OUTSIDE_PAGE_QUESTION = "Open a file outside the project in a headless browser: {path}?"
 PROTECTED_FOLDERS = (".arty", ".git")
-PROTECTED_NOTE = "it is part of the project's arty-cli or git setup, which can run programs"
+PROTECTED_NOTE = "it is part of the project's ArtyCode or git setup, which can run programs"
 PLAN_REFUSAL = ("Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan "
                 "step by step with present_plan so the user can approve it and switch plan mode off.")
 PLAN_TOOL = "present_plan"
