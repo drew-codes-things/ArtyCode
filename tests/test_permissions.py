@@ -571,6 +571,15 @@ def test_a_git_revision_and_path_is_not_a_drive_off_windows(workspace, monkeypat
     assert asked_about(workspace, "git show HEAD:a.py") == []
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="drive letters are Windows paths")
+@pytest.mark.parametrize("form", ["{drive}\\secret.txt", "{drive}/secret.txt", "{drive}secret.txt"])
+def test_a_file_on_another_drive_is_outside_the_project(workspace, form):
+    drive = "E:" if workspace.root.drive.upper() == "D:" else "D:"
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("read_file", {"path": form.format(drive=drive)})
+    assert "outside" in ask.questions[0][0]
+
+
 def test_an_overwrite_is_asked_about_as_an_overwrite(workspace):
     ask = Asker("n")
     gate = permissions.Gate(workspace, ask)
