@@ -161,6 +161,11 @@ address never sees it.
 These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `ARTY_API_KEY`,
 `ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`.
 
+When something goes wrong the message says what to do next. A refused key says to run `arty-cli login` again; a
+model the brain doesn't have says so and points at `/model` (or `--model` for one run); neither suggests waiting.
+A brain that can't be reached, or a connection that drops, names the address and asks you to try again once it's
+back.
+
 ## Use
 
 ```bash

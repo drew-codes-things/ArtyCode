@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from arty_cli import brain, settings
+from tests.fake_servers import serving
 
 
 def sse(*chunks):
@@ -371,3 +372,53 @@ def test_a_secure_connection_failing_mid_reply_is_a_brain_error(remote, monkeypa
     client = brain.Brain(settings.Settings(remote_url=remote, api_key="key"))
     with pytest.raises(brain.BrainError, match="record layer failure"):
         client.reply([{"role": "user", "content": "hi"}], tools=[], on_text=lambda text: None)
+
+
+def brain_at(url, model=settings.DEFAULT_MODEL):
+    found = brain.Brain(settings.Settings(remote_url=f"{url}/v1", api_key="k", model=model))
+    found.route = brain.Route(f"{url}/v1", {})
+    return found
+
+
+def error_body(message):
+    return json.dumps({"error": {"message": message}})
+
+
+def asked(client):
+    return client.reply([{"role": "user", "content": "hi"}], tools=[], on_text=lambda text: None)
+
+
+def test_a_refused_key_is_a_setup_problem_that_names_the_login_command():
+    with serving([(401, error_body("bad key"))], "text/event-stream") as (url, _recorder):
+        with pytest.raises(brain.SetupProblem, match="arty-cli login"):
+            asked(brain_at(url))
+
+
+@pytest.mark.parametrize("status, message", [
+    (400, "arty/qwen9:1b isn't downloaded on the AI server; pick one from /v1/models?all=1"),
+    (404, "model 'arty/qwen9:1b' not found"),
+])
+def test_a_model_the_brain_does_not_have_says_how_to_pick_another(status, message):
+    with serving([(status, error_body(message))], "text/event-stream") as (url, _recorder):
+        with pytest.raises(brain.SetupProblem) as raised:
+            asked(brain_at(url, "arty/qwen9:1b"))
+    said = str(raised.value)
+    assert "arty/qwen9:1b" in said and "/model" in said and "--model" in said
+    assert "/v1/models" not in said
+
+
+def test_any_other_brain_error_is_not_a_setup_problem():
+    with serving([(500, error_body("boom"))], "text/event-stream") as (url, _recorder):
+        with pytest.raises(brain.BrainError) as raised:
+            asked(brain_at(url))
+    assert not isinstance(raised.value, brain.SetupProblem)
+    assert "boom" in str(raised.value)
+
+
+def test_a_dropped_connection_is_described_without_python_internals():
+    client = brain_at("http://127.0.0.1:9")
+    with pytest.raises(brain.BrainError) as raised:
+        asked(client)
+    said = str(raised.value)
+    assert said.startswith("Lost the connection to Arty's brain at http://127.0.0.1:9/v1")
+    assert "<urlopen error" not in said and "[Errno" not in said

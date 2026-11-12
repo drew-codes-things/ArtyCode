@@ -30,6 +30,10 @@ PLAIN_HTTP = "http"
 SEARCH_TOOL = "research__web_search"
 SEARCH_SECONDS = 60
 NOT_FOUND = 404
+REFUSED_KEY = 401
+MISSING_MODEL_CODES = (400, 404)
+MISSING_MODEL = re.compile(r"isn't downloaded|model\b.*\bnot found|no such model", re.I)
+ERRNO_LEAD = re.compile(r"^\[Errno -?\d+\]\s*")
 
 
 SHARED_TURN_KEYS = ("role", "content", "tool_calls", "tool_call_id")
@@ -41,6 +45,20 @@ WRITTEN_CALL_ID = "written_call_{}"
 
 class BrainError(Exception):
     pass
+
+
+class SetupProblem(BrainError):
+    pass
+
+
+def missing_model_message(model: str) -> str:
+    return (f"Arty's brain doesn't have the model {model}. /model lists the ones it has; arty-cli --model <name> "
+            "picks one for a single run.")
+
+
+def plain_reason(error: Exception) -> str:
+    reason = getattr(error, "reason", None) or error
+    return ERRNO_LEAD.sub("", str(getattr(reason, "strerror", None) or reason)) or type(reason).__name__
 
 
 @dataclass(frozen=True)
@@ -326,13 +344,17 @@ class Brain:
         try:
             reply = retry.with_retries(lambda: self.streamed_reply(route, body, on_text), busy_of)
         except urllib.error.HTTPError as error:
-            if error.code == 401:
-                raise BrainError("Arty's brain refused the API key. Run `arty-cli login` to change it.") from None
+            if error.code == REFUSED_KEY:
+                raise SetupProblem("Arty's brain refused the API key. Run `arty-cli login` to log in again.") from None
+            detail = error_detail(error)
+            if error.code in MISSING_MODEL_CODES and MISSING_MODEL.search(detail):
+                raise SetupProblem(missing_model_message(self.model)) from None
             if error.code in BUSY_CODES:
-                raise BrainError(f"Arty's brain is busy right now ({error_detail(error) or error.code}). "
+                raise BrainError(f"Arty's brain is busy right now ({detail or error.code}). "
                                  "Try again in a minute.") from None
-            raise BrainError(f"Arty's brain hit an error: {error_detail(error) or error.code}") from None
+            raise BrainError(f"Arty's brain hit an error: {detail or error.code}") from None
         except (OSError, http.client.HTTPException) as error:
             self.route = None
-            raise BrainError(f"Lost the connection to Arty's brain at {route.url}: {error}") from None
+            raise BrainError(f"Lost the connection to Arty's brain at {route.url} ({plain_reason(error)}). "
+                             "Is the server still on?") from None
         return with_written_calls(reply, tools)

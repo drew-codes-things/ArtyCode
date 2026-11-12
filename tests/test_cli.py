@@ -1058,3 +1058,22 @@ def test_what_you_say_instead_reaches_the_model_with_the_refusal(ready, monkeypa
     result = [m for m in FakeBrain.made[0].calls[1] if m["role"] == "tool"][0]["content"]
     assert result.startswith(cli.permissions.REFUSED_LEAD) and "create it with python instead" in result
     assert not (ready / "made.txt").exists()
+
+
+class RefusingBrain(FakeBrain):
+    def reply(self, messages, tools, on_text):
+        self.calls.append([dict(m) for m in messages])
+        raise cli.brain.SetupProblem("Arty's brain refused the API key. Run `arty-cli login` to log in again.")
+
+
+def test_a_problem_that_waiting_will_not_fix_does_not_say_to_ask_again(ready, monkeypatch, capsys):
+    monkeypatch.setattr(cli.brain, "Brain", RefusingBrain)
+    assert cli.main(["-p", "hello"]) == cli.FAILED
+    shown = capsys.readouterr().err
+    assert "arty-cli login" in shown and "Ask again when it's back" not in shown
+
+
+def test_a_lost_connection_still_says_to_ask_again_when_it_is_back(ready, monkeypatch, capsys):
+    monkeypatch.setattr(cli.brain, "Brain", FlakyBrain)
+    assert cli.main(["-p", "hello"]) == cli.FAILED
+    assert "Ask again when it's back" in capsys.readouterr().err

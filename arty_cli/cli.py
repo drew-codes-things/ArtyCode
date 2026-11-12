@@ -30,6 +30,7 @@ SUMMARY_LEAD = "Summary of our conversation so far:"
 SUMMARY_ACK = "Got it, carrying on from there."
 CARRY_ON = "Carry on with the work from there."
 STOPPED = "That request stopped before it finished."
+ASK_AGAIN = "Ask again when it's back."
 TRUST_QUESTION = ("This folder has its own Arty setup: notes Arty would follow (ARTY.md or AGENTS.md), /commands, skills, helpers, "
                   "or hooks and MCP servers that run programs on this computer. Only say yes if you trust whoever wrote them. "
                   "Trust this folder? [y/n]: ")
@@ -525,7 +526,7 @@ class Session:
             self.abandon_turn(done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
             return False
         except providers.ERRORS as error:
-            self.abandon_turn(done, f"{error} Ask again when it's back.")
+            self.abandon_turn(done, str(error) if isinstance(error, brain.SetupProblem) else f"{error} {ASK_AGAIN}")
             return False
         finally:
             self.tell_mode()
