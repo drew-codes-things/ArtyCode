@@ -20,7 +20,7 @@ from arty_cli import rules
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
                        settings, skills, stopkey, suggest, tools, waiting, webfetch,
-                       websearch)
+                       websearch, wrap)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -112,6 +112,10 @@ ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
 WORDMARK = "◆ ArtyCode"
 STEP_MARK = "●"
+STEP_HANG = "  "
+OUTCOME_HANG = "    "
+CHECKBOX_INDENT = "    "
+CHECKBOX_HANG = "      "
 OUTCOME_MARK = "└"
 HOME_MARK = "~"
 WELCOME_LABEL_WIDTH = 8
@@ -181,6 +185,7 @@ class Terminal:
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
         self.stop_key = None
+        self.flow = wrap.Flow()
         self.start_turn()
 
     def start_turn(self) -> None:
@@ -252,11 +257,21 @@ class Terminal:
             self.out.write("\n")
             self.out.flush()
             self.mid_line = False
+        self.flow.reset()
+
+    def err_lines(self, text: str, hang: str | None = None) -> list[str]:
+        return wrap.wrapped_line(text, wrap.room(), hang) if self.err.isatty() else [text]
+
+    def show_output(self, text: str) -> None:
+        self.end_line()
+        self.out.write(text)
+        self.out.flush()
+        self.mid_line = not text.endswith("\n")
 
     def show_text(self, text: str) -> None:
         if text:
             self.stop_thinking()
-        self.out.write(text)
+        self.out.write(self.flow.feed(text) if self.out.isatty() else text)
         self.out.flush()
         self.streamed_chars += len(text)
         self.mid_line = not text.endswith("\n")
@@ -280,7 +295,9 @@ class Terminal:
     def show_step(self, line: str) -> None:
         self.end_line()
         self.steps += 1
-        self.err.write(f"{self.paint(STEP_MARK, 'accent')} {line}\n")
+        first, *rest = self.err_lines(f"{STEP_MARK} {line}", STEP_HANG)
+        marked = self.paint(STEP_MARK, "accent") + first[len(STEP_MARK):]
+        self.err.write("\n".join([marked, *rest]) + "\n")
         self.err.flush()
 
     def show_todos(self, items: list[dict]) -> None:
@@ -288,24 +305,31 @@ class Terminal:
         for item in items:
             status = item.get("status", "pending")
             box = CHECKBOXES.get(status, CHECKBOXES["pending"])
-            self.err.write("    " + self.paint(f"{box} {item.get('text', '')}", CHECKBOX_COLOURS.get(status, "reset"))
-                           + "\n")
+            for line in self.err_lines(f"{CHECKBOX_INDENT}{box} {item.get('text', '')}", CHECKBOX_HANG):
+                self.err.write(self.paint(line, CHECKBOX_COLOURS.get(status, "reset")) + "\n")
         self.err.flush()
 
     def show_outcome(self, line: str, is_problem: bool) -> None:
         self.end_line()
-        self.err.write(self.paint(f"  {OUTCOME_MARK} {line}", "error" if is_problem else "dim") + "\n")
+        for shown in self.err_lines(f"  {OUTCOME_MARK} {line}", OUTCOME_HANG):
+            self.err.write(self.paint(shown, "error" if is_problem else "dim") + "\n")
         self.err.flush()
 
     def show_activity(self, line: str) -> None:
         self.end_line()
-        self.err.write(self.paint(f"  · {line}", "dim") + "\n")
+        for shown in self.err_lines(f"  · {line}", OUTCOME_HANG):
+            self.err.write(self.paint(shown, "dim") + "\n")
         self.err.flush()
 
     def note(self, line: str, colour: str = "dim") -> None:
         self.end_line()
-        self.err.write(self.paint(line, colour) + "\n")
+        for shown in self.err_lines(line):
+            self.err.write(self.paint(shown, colour) + "\n")
         self.err.flush()
+
+    def show_plan(self, plan: str) -> None:
+        flow = wrap.Flow()
+        self.err.write((flow.feed(plan.rstrip()) + flow.flush() if self.err.isatty() else plan.rstrip()) + "\n")
 
     def show_diff(self, preview: str) -> None:
         self.stop_thinking()
@@ -410,7 +434,7 @@ def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
         return permissions.NO, ""
     terminal.end_line()
     terminal.note("Arty's plan:", "accent")
-    terminal.err.write(plan.rstrip() + "\n")
+    terminal.show_plan(plan)
     prompt = terminal.show_choices(PLAN_QUESTION, PLAN_CHOICES)
     choice, by = terminal.answer(prompt, PLAN_ANSWERS, PLAN_QUESTION, plan)
     if choice != permissions.NO or by or not is_interactive():
@@ -811,7 +835,7 @@ class Session:
 
     def run_shell(self, command: str) -> None:
         output = tools.run("run_command", {"command": command}, self.workspace)
-        self.terminal.show_text(output + "\n")
+        self.terminal.show_output(output + "\n")
         self.messages.append({"role": "user", "content": f"(I ran `{command}` myself. Output:)\n{output}"})
         self.messages.append({"role": "assistant", "content": "Noted."})
         self.remember()
