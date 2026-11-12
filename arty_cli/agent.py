@@ -8,8 +8,12 @@ from arty_cli import extras as extra_tools
 from arty_cli import hooks, permissions, tools
 
 STUCK_REPEATS = 3
-ANNOUNCED_STEP = re.compile(r"\b(let'?s|let me|i'?ll|i will|i'?m going to|next,? i)\b[^.?!]{0,80}\b(check|look|read|open|run|"
-                            r"search|find|inspect|examine|fix|edit|change|update|try|see)\b", re.I)
+ANNOUNCED_STEP = re.compile(r"\b(let'?s|let me(?! know)|i'?ll|i will|i'?m going to|next,? i)\b[^.?!]{0,80}\b(check|look|"
+                            r"read|open|run|search|find|inspect|examine|fix|edit|change|update|try|see|test|start|"
+                            r"create|write|install|build|add|implement|verify|download|launch|serve)\b", re.I)
+NOT_DONE_YET = re.compile(r"\bI (?:did not|didn't|have not|haven't) (?:yet |actually )?(?:test|try|tried|run|ran|check|"
+                          r"start|install|create|write|download|open|verify)", re.I)
+NOT_DONE_ANSWER = "You said you haven't done that yet. Do it now with your tools, then report what it showed."
 ANNOUNCED_STEP_TAIL_CHARS = 300
 DO_IT_NOW = "Do that now with your tools rather than describing it."
 ASKS_TO_CARRY_ON = re.compile(r"\b(?:(?:shall|should|can|may) i|would you like me to|do you want me to|want me to|"
@@ -24,8 +28,8 @@ CUT_SHORT_ANSWER = ("Your last reply was cut off at the reply length limit, so n
                     "where you were in smaller steps: write a long file in parts (create it with the first part, "
                     "then add the rest with edit_file).")
 CUT_REPLY_KEPT_CHARS = 600
-CUT_SHORT, ANNOUNCED, ASKED, UNFINISHED = "cut short", "announced", "asked", "unfinished"
-NUDGES_PER_STRETCH = {CUT_SHORT: 3, ANNOUNCED: 1, ASKED: 1, UNFINISHED: 1}
+CUT_SHORT, ANNOUNCED, NOT_DONE, ASKED, UNFINISHED = "cut short", "announced", "not done", "asked", "unfinished"
+NUDGES_PER_STRETCH = {CUT_SHORT: 3, ANNOUNCED: 1, NOT_DONE: 1, ASKED: 1, UNFINISHED: 1}
 UNFINISHED_STATUSES = ("pending", "in_progress")
 MAX_EXPLORE_ANSWER_CHARS = 8_000
 MAX_RESULT_CHARS = 60_000
@@ -501,6 +505,10 @@ def asks_to_carry_on(content: str) -> bool:
     return bool(ASKS_TO_CARRY_ON.search(content.strip()[-ANNOUNCED_STEP_TAIL_CHARS:]))
 
 
+def says_it_is_not_done(content: str) -> bool:
+    return bool(NOT_DONE_YET.search(content.strip()[-ANNOUNCED_STEP_TAIL_CHARS:]))
+
+
 def is_cut_short(content: str) -> bool:
     return content.rstrip().endswith(CUT_SHORT_NOTE)
 
@@ -518,6 +526,7 @@ def nudge_for(content: str, workspace, gate, carries_the_job: bool, used: list[s
     keeps_working = carries_the_job and gate.mode != permissions.PLAN
     checks = ((CUT_SHORT, is_cut_short(content), CUT_SHORT_ANSWER),
               (ANNOUNCED, announces_a_next_step(content), DO_IT_NOW),
+              (NOT_DONE, says_it_is_not_done(content), NOT_DONE_ANSWER),
               (ASKED, keeps_working and asks_to_carry_on(content), CARRY_ON_ANSWER),
               (UNFINISHED, keeps_working and bool(unfinished_items(workspace.todos)), ""))
     for reason, applies, answer in checks:

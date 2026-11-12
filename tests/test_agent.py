@@ -1111,3 +1111,29 @@ def test_each_tool_run_shows_a_working_line_and_each_reply_is_counted(tmp_path):
 def test_a_command_stopped_at_its_timeout_shows_as_a_problem_not_as_its_last_output():
     result = tools.timed_out_note(120, 1800) + " * Serving Flask app 'app'\n"
     assert agent.outcome_line("run_command", result) == ("stopped after 120 s while still running", True)
+
+
+LAST_LIVE_REPLY = ("I'll test the application by attempting to download a video from YouTube.\n\nLet's try "
+                   "downloading a sample video to ensure everything works correctly.\n\nI'll test the application by "
+                   "attempting to download a video from YouTube.\n\nI did not try downloading a sample video or use a "
+                   "YouTube URL for testing.\n\nI did not test the application or attempt to download a video from "
+                   "YouTube.")
+
+
+@pytest.mark.parametrize("reply, nudge", [
+    ("The page is written. I'll test it with curl now.", agent.DO_IT_NOW),
+    ("Next I will install the packages in a virtual environment.", agent.DO_IT_NOW),
+    (LAST_LIVE_REPLY, agent.DO_IT_NOW),
+    ("The server is written.\n\nI did not test the application.", agent.NOT_DONE_ANSWER),
+])
+def test_a_reply_that_says_what_it_will_do_or_has_not_done_is_sent_back_to_do_it(tmp_path, reply, nudge):
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain((reply, []), ("", [call("list_files")]), ("Tested it: the page loads.", []))
+    answer = agent.run_turn([{"role": "user", "content": "make me an app"}], scripted, workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "Tested it: the page loads."
+    assert scripted.sent[1]["messages"][-1] == {"role": "user", "content": nudge}
+
+
+def test_offering_more_with_let_me_know_is_not_taken_for_an_announced_step():
+    assert not agent.announces_a_next_step("Built calc.py. Let me know if you'd like me to add a history feature.")
