@@ -1457,11 +1457,11 @@ def chat_in_interface(session: Session, interface, share: bool) -> None:
     sys.stdout = sys.stderr = interface.stray
     terminal.console = interface
     host = getattr(interface, "host", None) or SessionHost(session)
-    terminal.view = view.View(interface.scroll, host.theme, session.workspace, interface_notifier(session, interface),
-                              room=getattr(interface, "room", wrap.room))
-    terminal.view.partial = getattr(interface, "show_partial", None)
-    terminal.measure = host.measure
     try:
+        terminal.view = view.View(interface.scroll, host.theme, session.workspace,
+                                  interface_notifier(session, interface), room=getattr(interface, "room", wrap.room))
+        terminal.view.partial = getattr(interface, "show_partial", None)
+        terminal.measure = host.measure
         welcome_card(session, host.theme, terminal.view.room())
         host.measure()
         if share:

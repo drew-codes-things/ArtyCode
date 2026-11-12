@@ -382,3 +382,14 @@ def test_slash_last_prefers_the_last_step_with_output_over_a_later_checklist(int
     terminal.show_tool_result(checklist, "No items")
     session.command("/last")
     assert terminal.err.getvalue().endswith("● Run ls\n    a.py\n")
+
+
+def test_a_bad_notify_setting_still_puts_the_terminal_back_and_stops_the_interface(interactive, tmp_path):
+    session = session_for(tmp_path)
+    session.client.settings = settings.Settings(notify="sometimes")
+    interface = RingingInterface()
+    terminal = session.terminal
+    before = (terminal.out, terminal.err)
+    with pytest.raises(settings.SettingsError):
+        cli.chat_in_interface(session, interface, share=False)
+    assert interface.stopped and (terminal.out, terminal.err) == before and terminal.view is None
