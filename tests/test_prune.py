@@ -84,3 +84,20 @@ def test_paths_whose_reads_were_all_dropped_are_reported_as_out_of_view():
         if message["role"] == "tool":
             message["content"] = prune.stub_for("read_file", {"path": "a.py"})
     assert prune.paths_out_of_view(messages) == {"a.py"}
+
+
+def test_a_hidden_result_keeps_its_outcome():
+    assert prune.stub_for("run_command", {"command": "pytest -q"}, "....F\n3 failed, 9 passed\n[exit code 1]") == (
+        "[Hidden to save room: run_command pytest -q (3 failed, 9 passed, exit code 1). Do it again if you need it.]")
+    assert prune.stub_for("read_file", {"path": "calc.py"}, "1\ta\n2\tb\n3\tc") == (
+        "[Hidden to save room: read_file calc.py (3 lines). Do it again if you need it.]")
+
+
+def test_the_newest_rounds_are_kept_whole_when_hiding_older_ones_is_enough():
+    rounds = [round_of(number, "search", f"hit {number} " * 600, pattern=f"p{number}") for number in range(1, 10)]
+    messages = conversation(*rounds)
+    limit = prune.estimated(messages, Client()) - 100
+    prune.prune(messages, limit, Client())
+    contents = tool_contents(messages)
+    assert all(not text.startswith(prune.STUB_LEAD) for text in contents[-prune.KEPT_ROUNDS:])
+    assert contents[0].startswith(prune.STUB_LEAD)

@@ -18,6 +18,12 @@ from arty_cli import webfetch
 
 DEFAULT_RESULT_CHARS = 16_000
 AVERAGE_LINE_CHARS = 40
+DEFAULT_READ_LINES = 250
+MAX_OUTLINE_ENTRIES = 60
+MAX_OUTLINE_LINE_CHARS = 90
+OUTLINE_LEAD = "Outline (line: definition; read from one with offset):"
+DEFINITION_LINE = re.compile(r"^ {0,4}(?:export\s+(?:default\s+)?)?(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?"
+                             r"(?:def|class|function\*?|func|fn|struct|enum|trait|interface|impl|module)\s+[A-Za-z_$]")
 MAX_LINE_CHARS = 2000
 MAX_LISTED_FILES = 500
 MAX_SEARCH_MATCHES = 200
@@ -285,6 +291,26 @@ def is_notebook(path: Path) -> bool:
     return path.suffix.lower() == NOTEBOOK_SUFFIX
 
 
+def outline_of(text: str) -> list[str]:
+    entries = [(number, line) for number, line in enumerate(text.splitlines(), start=1) if DEFINITION_LINE.match(line)]
+    top_level = [(number, line) for number, line in entries if not line[:1].isspace()]
+    chosen = entries if len(entries) <= MAX_OUTLINE_ENTRIES else top_level
+    listed = [f"{number}: {line.strip()[:MAX_OUTLINE_LINE_CHARS]}" for number, line in chosen[:MAX_OUTLINE_ENTRIES]]
+    more = len(chosen) - len(listed)
+    return [OUTLINE_LEAD, *listed, *([f"... and {more} more"] if more > 0 else [])] if listed else []
+
+
+def numbered_window(lines: list[str], start: int, count: int, budget: int) -> list[str]:
+    shown, used = [], 0
+    for number, line in enumerate(lines[start - 1:start - 1 + count], start=start):
+        entry = f"{number}\t{line[:MAX_LINE_CHARS]}"
+        if shown and used + len(entry) > budget:
+            break
+        shown.append(entry)
+        used += len(entry) + 1
+    return shown
+
+
 def read_file(workspace, path, offset=1, limit=0):
     target = workspace.resolve(path)
     if is_notebook(target):
@@ -295,27 +321,22 @@ def read_file(workspace, path, offset=1, limit=0):
     workspace.note_seen(target, whole)
     lines = whole.splitlines()
     start = max(int(offset), 1)
-    chosen = lines[start - 1:start - 1 + line_count(limit, workspace.result_chars)]
-    if not chosen and lines:
+    if start > len(lines) and lines:
         raise ToolError(f"{path} has only {len(lines)} lines")
-    shown, used = [], 0
-    for number, line in enumerate(chosen, start=start):
-        entry = f"{number}\t{line[:MAX_LINE_CHARS]}"
-        if shown and used + len(entry) > workspace.result_chars:
-            shown.append(f"... stopped at about {workspace.result_chars} characters; read on with offset={number}")
-            return "\n".join(shown)
-        shown.append(entry)
-        used += len(entry) + 1
-    next_line = start + len(chosen)
-    lines_left = len(lines) - (next_line - 1)
-    if lines_left > 0:
-        shown.append(f"... {lines_left} more lines; read on with offset={next_line}")
-    return "\n".join(shown)
+    count = line_count(limit, workspace.result_chars)
+    outline = outline_of(whole) if start == 1 and len(lines) > count else []
+    budget = max(workspace.result_chars - len("\n".join(outline)), MAX_LINE_CHARS)
+    numbered = numbered_window(lines, start, count, budget)
+    end = start + len(numbered) - 1
+    left = len(lines) - end
+    header = [f"[{workspace.shown(target)}: lines {start}-{end} of {len(lines)}; {start - 1} above, {left} below]"]
+    tail = [f"... {left} more lines; read on with offset={end + 1}"] if left > 0 else []
+    return "\n".join((header if start > 1 or left > 0 else []) + outline + numbered + tail)
 
 
 def line_count(limit, result_chars: int) -> int:
     asked = int(limit or 0)
-    return asked if asked > 0 else max(result_chars // AVERAGE_LINE_CHARS, 1)
+    return asked if asked > 0 else max(min(DEFAULT_READ_LINES, result_chars // AVERAGE_LINE_CHARS), 1)
 
 
 WRITTEN_OUT_ESCAPES = {"\\n": "\n", "\\t": "\t", '\\"': '"'}
@@ -937,7 +958,9 @@ def function(name, description, properties, required):
 TEXT = {"type": "string"}
 NUMBER = {"type": "integer"}
 DEFINITIONS = [
-    function("read_file", "Read a text file in the project. Lines come back numbered. A Jupyter notebook (.ipynb) "
+    function("read_file", "Read a text file in the project. Lines come back numbered. A long file comes back "
+                          f"{DEFAULT_READ_LINES} lines at a time with a header and, first time, an outline of its "
+                          "definitions with line numbers; read on or jump with offset. A Jupyter notebook (.ipynb) "
                           "comes back as numbered cells with their text output.",
              {"path": TEXT, "offset": {**NUMBER, "description": "first line, from 1"},
               "limit": {**NUMBER, "description": "how many lines"}}, ["path"]),

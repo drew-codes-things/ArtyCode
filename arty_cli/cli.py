@@ -745,10 +745,11 @@ class Session:
     def is_too_long(self, messages: list[dict]) -> bool:
         return context.estimated_tokens(messages, self.client) > self.compact_limit()
 
-    def pruned_enough(self, messages: list[dict]) -> bool:
-        prune.prune(messages, self.compact_limit(), self.client)
+    def pruned_enough(self, messages: list[dict], limit: int | None = None) -> bool:
+        limit = self.compact_limit() if limit is None else limit
+        prune.prune(messages, limit, self.client)
         self.forget_unseen(messages)
-        return not self.is_too_long(messages)
+        return context.estimated_tokens(messages, self.client) <= limit
 
     def forget_unseen(self, messages: list[dict]) -> None:
         for path in prune.paths_out_of_view(messages):
@@ -950,11 +951,15 @@ class Session:
         self.workspace.seen.clear()
         return "\n\n".join(part for part in (output, self.last_changed_file()) if part)
 
-    def squeeze(self, messages: list[dict]) -> None:
-        prune.cut_newest(messages, self.compact_limit(), self.client)
-        if not self.is_too_long(messages):
+    def squeeze(self, messages: list[dict], overflowed: bool = False) -> None:
+        limit = self.compact_limit()
+        limit = prune.overflow_limit(messages, self.client, limit) if overflowed else limit
+        if context.estimated_tokens(messages, self.client) <= limit:
             return
-        if self.pruned_enough(messages):
+        pruned = self.pruned_enough(messages, limit)
+        if not pruned:
+            prune.cut_newest(messages, limit, self.client)
+        if pruned or context.estimated_tokens(messages, self.client) <= limit:
             self.terminal.note(PRUNED_NOTE)
             return
         instructions = self.compact_instructions(AUTOMATIC)

@@ -25,7 +25,8 @@ def test_reading_a_file_numbers_its_lines(workspace):
 
 
 def test_reading_part_of_a_file(workspace):
-    assert tools.run("read_file", {"path": "src/app.py", "offset": 2, "limit": 1}, workspace) == "2\t    return a - b"
+    assert tools.run("read_file", {"path": "src/app.py", "offset": 2, "limit": 1}, workspace) == (
+        "[src/app.py: lines 2-2 of 2; 1 above, 0 below]\n2\t    return a - b")
 
 
 def test_editing_replaces_the_one_matching_text(workspace):
@@ -372,7 +373,7 @@ def test_a_zero_or_negative_limit_reads_the_default_amount(tmp_path):
 def test_a_partial_read_says_how_many_lines_are_left(tmp_path):
     (tmp_path / "three.txt").write_text("one\ntwo\nthree\n")
     shown = tools.read_file(tools.Workspace(tmp_path), "three.txt", limit=1).splitlines()
-    assert shown[0] == "1\tone"
+    assert shown[0] == "[three.txt: lines 1-1 of 3; 0 above, 2 below]" and shown[1] == "1\tone"
     assert shown[-1] == "... 2 more lines; read on with offset=2"
 
 
@@ -764,3 +765,20 @@ def test_a_made_edit_shows_the_changed_lines_with_a_few_around_them(tmp_path):
     assert first.startswith("Edited steps.py")
     assert "46\t    doubled = value * 2" in shown and "47\t    return doubled" in shown
     assert "45\tdef step_12(value):" in shown and len(shown) <= 12
+
+
+def test_a_default_read_of_a_long_file_is_a_window_with_a_header_and_an_outline(tmp_path):
+    (tmp_path / "steps.py").write_text(FUNCTIONS * 4)
+    shown = tools.read_file(tools.Workspace(tmp_path), "steps.py").splitlines()
+    assert shown[0] == f"[steps.py: lines 1-{tools.DEFAULT_READ_LINES} of 464; 0 above, 214 below]"
+    assert "Outline" in shown[1] and "1: def step_1(value):" in shown and "45: def step_12(value):" in shown
+    numbered = [line for line in shown if line[:1].isdigit() and "\t" in line]
+    assert len(numbered) == tools.DEFAULT_READ_LINES
+    assert shown[-1] == f"... 214 more lines; read on with offset={tools.DEFAULT_READ_LINES + 1}"
+
+
+def test_a_later_window_has_a_header_but_no_outline(tmp_path):
+    (tmp_path / "steps.py").write_text(FUNCTIONS * 4)
+    shown = tools.read_file(tools.Workspace(tmp_path), "steps.py", offset=301, limit=50).splitlines()
+    assert shown[0] == "[steps.py: lines 301-350 of 464; 300 above, 114 below]"
+    assert shown[1].startswith("301\t") and not any("Outline" in line for line in shown)

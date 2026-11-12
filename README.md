@@ -27,7 +27,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 
 | Tool | What it does | Asks first? |
 |---|---|---|
-| `read_file`, `list_files`, `search` | Read and find code in the project; a Jupyter notebook reads as numbered cells with their text output. Big files and searches stop at a size limit and say where to read on | Only outside the project folder |
+| `read_file`, `list_files`, `search` | Read and find code in the project; a Jupyter notebook reads as numbered cells with their text output. A long file is read 250 lines at a time, headed with the lines shown and how many are above and below; the first window also lists the file's functions and classes with their line numbers so the next read can jump there. Searches stop at a size limit and say so | Only outside the project folder |
 | `edit_file`, `write_file` | Change or create files, keeping each file's line endings. An existing file has to be read first, and is refused if it changed on disk since; every write is atomic (a temporary file, then a swap). `write_file` only creates new files: for an existing one it answers with how to use `edit_file` instead, unless the call sets `overwrite: true` (the question then says Overwrite). When `old_text` doesn't match exactly, `edit_file` tries again ignoring spaces at line ends, then indentation, then curly quotes and long dashes, uses a match only if it is the only one, keeps the file's indentation, and says which way it matched. A made edit answers with the changed lines and three either side, numbered; a miss answers with the closest lines in the file, numbered, and a second miss on the same file adds advice to replace the whole function (or, for a file of up to 200 lines, rewrite it) | Yes, showing the diff (`--auto-edit` skips this inside the project, except for anything in a `.arty` or `.git` folder: that is always asked about, because those files can make programs run) |
 | `multi_edit` | Several edits to one file in one step, applied in order; all or nothing, so if one edit doesn't match exactly once nothing is changed. One question with the whole diff, and one `/undo` puts it all back | Yes, like an edit |
 | `notebook_edit` | Replace, insert or delete one cell of a `.ipynb` notebook (a replaced code cell's old output is cleared) | Yes, like an edit |
@@ -51,7 +51,7 @@ stopping, and Enter on its own just says no. "Always" lasts until you quit: for 
 command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
 written to `.arty/settings.json` as an allow rule (below) for that exact command, that file, that site or that tool, so
 later sessions don't ask either. When no rule fits (a chained command, say), **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
-Every tool result the model sees is cut to about a quarter of the room the conversation has before it is summarised (about 16,000 characters, or 400 lines of a file, on a 24,576-token window); `read_file` says where to read on, so a long file is read in pages. An `@file` attachment uses the same limit.
+Every tool result the model sees is cut to about a quarter of the room the conversation has before it is summarised (about 16,000 characters on a 24,576-token window); `read_file` says where to read on, so a long file is read in windows. An `@file` attachment is read the same way.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project
 without asking, apart from `.arty` and `.git` folders); `plan` (look and plan only, nothing changed or run; `/plan` switches it; when the model has a plan it
@@ -415,10 +415,14 @@ show the state.
 
 The conversation size is estimated in tokens. When it no longer leaves room in the model's context
 window (`context_tokens` if set, otherwise the size the brain reports, otherwise 12288 tokens) for the tool list and a full reply, older
-content is dropped first, with no model call: earlier reads of a file that was read again or changed since, all but the
-newest run of a command, the long text of past writes and edits, then the oldest results, until the conversation is at
-60% of that point. Calls and their results stay in place, the newest step is never touched, and a file whose reads were
-all dropped has to be read again before it is edited. Only if that is not enough is it summarised. `/status` shows the
+results are hidden first, with no model call: each becomes one line naming the step and what it showed (`[Hidden to
+save room: run_command pytest -q (3 failed, 9 passed, exit code 1). ...]`). Earlier reads of the same lines of a file
+that was read again or changed since go first, then all but the newest run of a command and the long text of past
+writes and edits, then the oldest results outside the newest five steps, until the conversation is at 60% of that
+point; only if that is not enough are the newer steps hidden too. Calls and their results stay in place, the newest
+step is never touched, and a file whose reads were all hidden has to be read again before it is edited. Only if that
+is not enough is it summarised. If the brain still refuses a conversation as longer than the model's window, it is
+cut down harder and sent once more. `/status` shows the
 estimate. A summary in the middle of a request keeps the request itself, the checklist, the changes made and the
 commands run with what each showed, the end of the last command's output and the file changed last (numbered, so it
 can be edited at once), then the work carries on; the conversation sent to be summarised has big tool results and file

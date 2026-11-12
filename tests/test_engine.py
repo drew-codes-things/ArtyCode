@@ -47,7 +47,7 @@ def test_command_output_and_search_follow_the_budget(project):
 
 def test_a_newest_result_too_big_for_the_window_is_cut_not_summarised(project, monkeypatch):
     monkeypatch.setattr(context, "RESULT_SHARE", 3.0)
-    brain = ScriptedBrain([[("read_file", {"path": "big.py"})], "Read it."])
+    brain = ScriptedBrain([[("read_file", {"path": "big.py", "limit": 5_000})], "Read it."])
     copy_of_arty_cli_source(project)
     session = session_for(project, brain)
     session.ask("read big.py")
@@ -125,7 +125,7 @@ def test_an_explore_helper_reading_a_big_file_page_after_page_stays_inside_the_w
 
 def test_a_long_job_is_pruned_without_a_summary_call_when_that_makes_room(project):
     copy_of_arty_cli_source(project)
-    pages = [[("read_file", {"path": "big.py", "offset": offset})] for offset in (1, 401, 801, 1201, 1)]
+    pages = [[("read_file", {"path": "big.py", "offset": offset, "limit": 400})] for offset in (1, 401, 801, 1201, 1)]
     brain = ScriptedBrain([*pages, "Read it all."])
     session = session_for(project, brain)
     session.ask("read all of big.py")
@@ -235,3 +235,23 @@ def test_a_message_queued_while_arty_works_reaches_the_model_at_the_next_step(pr
     assert brain.prompts[1][-2]["role"] == "tool"
     assert session.terminal.console.texts == ["/status"]
     assert "also check b.txt" in session.request
+
+
+class OverflowOnce(ScriptedBrain):
+    def reply(self, messages, tools, on_text):
+        if self.window_refused == 0 and len(messages) > 4:
+            self.window_refused += 1
+            raise cli.brain.BrainError("Arty's brain hit an error: the conversation is longer than the model's "
+                                       "context window")
+        return super().reply(messages, tools, on_text)
+
+
+def test_a_prompt_the_brain_refuses_as_too_long_is_pruned_harder_and_sent_again_once(project):
+    copy_of_arty_cli_source(project)
+    reads = [[("read_file", {"path": "big.py", "offset": offset})] for offset in (1, 251, 501)]
+    brain = OverflowOnce(reads + ["Done."])
+    brain.window_refused = 0
+    session = session_for(project, brain)
+    assert session.ask("read big.py")
+    assert brain.window_refused == 1 and session.messages[-1]["content"] == "Done."
+    assert any(result.startswith(prune.STUB_LEAD) for result in brain.tool_results())

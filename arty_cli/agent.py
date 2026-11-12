@@ -38,6 +38,7 @@ STUCK_NOTE = ("You have made the same tool calls several times in a row with the
               "again: answer now with what you have, or say what is blocking you.")
 STUCK_STOPPED = "I stopped because I kept repeating the same step. Tell me how you'd like to go on."
 STUCK_WINDOW = 8
+WINDOW_OVERFLOW = re.compile(r"context (?:window|length|size)|too long|too many tokens|exceeds", re.I)
 STUCK_FAILING_NOTE = ("You have made the same tool calls several times and they keep failing with the same error. "
                       "Don't make that call again: do it another way (for an edit that keeps missing, replace the "
                       "whole function or rewrite the file), or say what is blocking you.")
@@ -304,9 +305,10 @@ class Helpers:
     def kept_in_room(self, offered: list[dict]):
         limit = context.compact_limit(self.brain, offered)
 
-        def squeeze(messages: list[dict]) -> None:
-            prune.cut_newest(messages, limit, self.brain)
-            prune.prune(messages, limit, self.brain)
+        def squeeze(messages: list[dict], overflowed: bool = False) -> None:
+            tightest = prune.overflow_limit(messages, self.brain, limit) if overflowed else limit
+            prune.prune(messages, tightest, self.brain)
+            prune.cut_newest(messages, tightest, self.brain)
 
         return squeeze
 
@@ -604,6 +606,20 @@ def kept_reply(content: str, reason: str) -> str:
     return content[:CUT_REPLY_KEPT_CHARS] + "…"
 
 
+def is_window_overflow(error: Exception) -> bool:
+    return bool(WINDOW_OVERFLOW.search(str(error)))
+
+
+def replied(brain, messages: list[dict], offered: list[dict], screen, squeeze) -> dict:
+    try:
+        return brain.reply(messages, tools=offered, on_text=screen.show_text)
+    except Exception as error:
+        if squeeze is None or not is_window_overflow(error):
+            raise
+    squeeze(messages, True)
+    return brain.reply(messages, tools=offered, on_text=screen.show_text)
+
+
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
              squeeze=None, extras=None, stop_hooks=True, stopped=None, steer=None) -> str:
     extras = extras or extra_tools.NONE
@@ -619,7 +635,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
         with thinking(screen):
-            reply = brain.reply(messages, tools=offered, on_text=screen.show_text)
+            reply = replied(brain, messages, offered, screen, squeeze)
         tell(screen, "count_reply", reply)
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
