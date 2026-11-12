@@ -352,7 +352,7 @@ class Terminal:
 
     def show_plan(self, plan: str) -> None:
         flow = wrap.Flow()
-        self.err.write((flow.feed(plan.rstrip()) + flow.flush() if self.err.isatty() else plan.rstrip()) + "\n")
+        self.err.write((flow.feed(plan.rstrip()) if self.err.isatty() else plan.rstrip()) + "\n")
 
     def show_diff(self, preview: str) -> None:
         self.stop_thinking()
