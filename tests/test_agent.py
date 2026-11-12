@@ -1,3 +1,4 @@
+import _thread
 import json
 import shlex
 import sys
@@ -386,6 +387,61 @@ def test_several_explore_helpers_run_at_the_same_time_and_report_in_order(tmp_pa
     assert answer == "Both found."
     results = [(m["tool_call_id"], m["content"]) for m in brain.sent[1] if m["role"] == "tool"]
     assert results == [("e1", "answer to find A"), ("e2", "answer to find B")]
+
+
+class OutsideReadingHelperBrain:
+    def __init__(self, outside):
+        self.outside = outside
+        self.main_replies = [("", [call("explore", "e1", task="read it"), call("explore", "e2", task="look")])]
+
+    def reply(self, messages, tools, on_text):
+        if messages[0].get("content") == agent.EXPLORER_PROMPT:
+            if messages[1]["content"] == "read it" and len(messages) == 2:
+                return {"role": "assistant", "content": "", "tool_calls": [call("read_file", "r1", path=str(self.outside))]}
+            return {"role": "assistant", "content": "done", "tool_calls": []}
+        content, calls = self.main_replies.pop(0)
+        return {"role": "assistant", "content": content, "tool_calls": calls}
+
+
+def test_ctrl_c_while_a_parallel_helper_asks_leaves_no_question_behind(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret\n")
+    workspace = tools.Workspace(project)
+    reads, asking_threads, typed_later = [], [], threading.Event()
+    monkeypatch.setitem(tools.HANDLERS, "read_file", lambda workspace, **arguments: reads.append(arguments) or "read")
+
+    def ask(question, preview=""):
+        asking_threads.append(threading.current_thread())
+        if threading.current_thread() is threading.main_thread():
+            raise KeyboardInterrupt
+        _thread.interrupt_main()
+        typed_later.wait(5)
+        return permissions.YES
+
+    running_before = set(threading.enumerate())
+    with pytest.raises(KeyboardInterrupt):
+        agent.run_turn([{"role": "user", "content": "go"}], OutsideReadingHelperBrain(outside), workspace,
+                       permissions.Gate(workspace, ask), Screen())
+    typed_later.set()
+    for thread in set(threading.enumerate()) - running_before:
+        thread.join(5)
+    assert reads == []
+    assert asking_threads == [threading.main_thread()]
+
+
+def test_a_parallel_helpers_question_is_asked_on_the_main_thread_and_a_yes_lets_it_run(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = tools.Workspace(project)
+    reads, asking_threads = [], []
+    monkeypatch.setitem(tools.HANDLERS, "read_file", lambda workspace, **arguments: reads.append(arguments) or "read")
+    gate = permissions.Gate(workspace, lambda q, p="": asking_threads.append(threading.current_thread()) or "y")
+    brain = OutsideReadingHelperBrain(tmp_path / "secret.txt")
+    brain.main_replies.append(("Read.", []))
+    assert agent.run_turn([{"role": "user", "content": "go"}], brain, workspace, gate, Screen()) == "Read."
+    assert asking_threads == [threading.main_thread()] and len(reads) == 1
 
 
 class FloodingHub(StubHub):

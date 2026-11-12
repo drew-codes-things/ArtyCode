@@ -1,4 +1,5 @@
 import json
+import queue
 import re
 import threading
 
@@ -102,6 +103,14 @@ class Quiet:
             self.screen.show_activity(f"  {line}")
 
 
+class WaitingQuestion:
+    def __init__(self, question: str, preview: str):
+        self.question = question
+        self.preview = preview
+        self.answer = permissions.NO
+        self.answered = threading.Event()
+
+
 class Helpers:
     def __init__(self, brain, workspace, gate, screen, extras):
         self.brain = brain
@@ -111,12 +120,30 @@ class Helpers:
         self.extras = extras.without_stop_hooks()
         self.lock = threading.Lock()
         self.stopped = threading.Event()
+        self.asking_thread = threading.current_thread()
+        self.waiting = queue.Queue()
 
     def ask(self, question: str, preview: str = "") -> str:
         if self.stopped.is_set():
             return permissions.NO
+        if threading.current_thread() is not self.asking_thread:
+            return self.asked_for_helper(question, preview)
         with self.lock:
             return permissions.NO if self.stopped.is_set() else self.gate.ask(question, preview)
+
+    def asked_for_helper(self, question: str, preview: str) -> str:
+        waiting = WaitingQuestion(question, preview)
+        self.waiting.put(waiting)
+        while not waiting.answered.wait(HELPER_JOIN_SECONDS):
+            if self.stopped.is_set():
+                return permissions.NO
+        return permissions.NO if self.stopped.is_set() else waiting.answer
+
+    def answer_waiting_questions(self) -> None:
+        while not self.waiting.empty():
+            waiting = self.waiting.get_nowait()
+            waiting.answer = self.ask(waiting.question, waiting.preview)
+            waiting.answered.set()
 
     def helper_gate(self, mode: str):
         found = permissions.Gate(self.workspace, self.ask, mode=mode)
@@ -274,6 +301,7 @@ def results_of_helpers(calls: list[dict], exploring: list[int], helpers: Helpers
         thread.start()
     for thread in threads:
         while thread.is_alive():
+            helpers.answer_waiting_questions()
             thread.join(HELPER_JOIN_SECONDS)
 
 
