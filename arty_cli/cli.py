@@ -19,7 +19,7 @@ from arty_cli import rules
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
-                       settings, skills, stopkey, tools, waiting, webfetch)
+                       settings, skills, stopkey, suggest, tools, waiting, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -975,9 +975,16 @@ class Session:
                 return
             message = self.remote.next_message()
 
+    def custom_meanings(self, custom: dict) -> dict[str, str]:
+        return {name: f"{command.template.strip().splitlines()[0][:60]} ({command.source})"
+                for name, command in custom.items() if name not in commands.BUILT_IN}
+
+    def slash_choices(self) -> dict[str, str]:
+        custom = commands.find(self.workspace, self.personal, self.project_trusted)
+        return suggest.slash_choices(HELP_GROUPS, self.custom_meanings(custom))
+
     def show_help(self, custom: dict) -> None:
-        mine = {name: f"{command.template.strip().splitlines()[0][:60]} ({command.source})"
-                for name, command in custom.items()}
+        mine = self.custom_meanings(custom)
         groups = HELP_GROUPS + (((CUSTOM_HELP_HEADING, mine),) if mine else ())
         width = max(len(usage) for _heading, rows in groups for usage in rows) + HELP_GAP
         for number, (heading, rows) in enumerate(groups):
@@ -1020,7 +1027,7 @@ class Session:
         elif name in custom:
             self.ask(custom[name].prompt(rest))
         else:
-            self.terminal.note(f"Unknown command {name}. Type /help for the list.", "error")
+            self.terminal.note(unknown_command_note(name, self.slash_choices()), "error")
         return True
 
     def set_rules(self, wanted: str) -> None:
@@ -1069,6 +1076,12 @@ class Session:
         self.client.model = choice.model
         settings.remember(model=choice.model)
         self.terminal.note(f"Model: {choice.model}, kept for next time.")
+
+
+def unknown_command_note(name: str, choices: dict) -> str:
+    guess = suggest.closest(name, choices)
+    hint = f" Did you mean {guess}?" if guess else ""
+    return f"Unknown command {name}.{hint} Type /help for the list."
 
 
 def first_line(session, reader) -> str:
@@ -1145,7 +1158,7 @@ def welcome(session: Session) -> None:
 
 def chat(session: Session, share: bool = False) -> None:
     welcome(session)
-    reader = prompt_line.line_reader(is_interactive)
+    reader = prompt_line.line_reader(is_interactive, session.slash_choices)
     if share:
         session.start_remote()
     try:

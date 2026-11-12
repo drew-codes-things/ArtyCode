@@ -5,7 +5,7 @@ import shutil
 import sys
 import time
 
-from arty_cli import permissions
+from arty_cli import permissions, suggest
 
 PROMPT_MARK = "› "
 REMOTE_MARK = " · remote"
@@ -26,6 +26,11 @@ BACKSPACE = "\x08"
 NEW_LINE = "\r\n"
 MAX_HISTORY = 200
 KEY_POLL_SECONDS = 0.03
+TAB = "\t"
+SLASH = "/"
+COMMAND_DELIMITERS = " \t\n"
+SLASH_SHOWS_COMMANDS = '"/": "\\C-v/\\t"'
+COMPLETION_SETTINGS = ("tab: complete", "set show-all-if-ambiguous on", "set bell-style none", SLASH_SHOWS_COMMANDS)
 
 
 def shown_at_once(text: str) -> None:
@@ -53,15 +58,41 @@ def readline_safe(prompt: str) -> str:
     return for_readline(prompt) if "readline" in sys.modules else prompt
 
 
+def terminal_columns() -> int:
+    return shutil.get_terminal_size().columns
+
+
 class ReadlineLine:
-    def __init__(self, module, read=None, write=None, columns=None):
+    def __init__(self, module, read=None, write=None, columns=None, choices=None):
         self.module = module
         self.read_input = read or (lambda prompt: input(prompt))
         self.write = write or shown_at_once
-        self.columns = columns or (lambda: shutil.get_terminal_size().columns)
+        self.columns = columns or terminal_columns
+        self.choices = choices
+        self.prompt = ""
+        self.found = []
         module.parse_and_bind(f'"{SHIFT_TAB_SEQUENCE}": "{MODE_MARK}\\n"')
+        if choices:
+            self.offer_commands()
+
+    def offer_commands(self) -> None:
+        for setting in COMPLETION_SETTINGS:
+            self.module.parse_and_bind(setting)
+        self.module.set_completer_delims(COMMAND_DELIMITERS)
+        self.module.set_completer(self.complete)
+        self.module.set_completion_display_matches_hook(self.show_matches)
+
+    def complete(self, _text: str, state: int) -> str | None:
+        if state == 0:
+            self.found = suggest.matching(self.module.get_line_buffer(), self.choices())
+        return self.found[state] if state < len(self.found) else None
+
+    def show_matches(self, _substitution, matches, _longest) -> None:
+        lines = suggest.menu_lines(list(matches), self.choices(), self.columns())
+        self.write("\n" + "\n".join(lines) + "\n" + self.prompt + self.module.get_line_buffer())
 
     def read(self, prompt: str, width: int, kept: str) -> tuple[str, bool]:
+        self.prompt = prompt
         self.module.set_startup_hook((lambda: self.module.insert_text(kept)) if kept else None)
         try:
             line = self.read_input(for_readline(prompt))
@@ -75,12 +106,16 @@ class ReadlineLine:
 
 
 class ConsoleLine:
-    def __init__(self, key, write=None):
+    def __init__(self, key, write=None, choices=None, columns=None):
         self.key = key
         self.write = write or shown_at_once
+        self.choices = choices
+        self.columns = columns or terminal_columns
         self.history = []
+        self.prompt = ""
 
     def read(self, prompt: str, width: int, kept: str) -> tuple[str, bool]:
+        self.prompt = prompt
         self.write(prompt + kept)
         self.typed, self.cursor, self.recalled = list(kept), len(kept), len(self.history)
         while True:
@@ -117,8 +152,29 @@ class ConsoleLine:
             self.cursor -= 1
             self.write("\b")
             self.remove_at_cursor()
+        elif key == TAB:
+            self.complete()
         elif key.isprintable():
             self.insert(key)
+            if key == SLASH and self.typed == [SLASH]:
+                self.complete()
+
+    def complete(self) -> None:
+        if not self.choices:
+            return
+        typed = "".join(self.typed)
+        found = suggest.matching(typed, self.choices())
+        if len(found) == 1:
+            self.move_end()
+            for letter in found[0][len(typed):] + " ":
+                self.insert(letter)
+        elif found:
+            self.show_menu(found)
+
+    def show_menu(self, found: list[str]) -> None:
+        lines = suggest.menu_lines(found, self.choices(), self.columns())
+        tail = len(self.typed) - self.cursor
+        self.write(NEW_LINE + NEW_LINE.join(lines) + NEW_LINE + self.prompt + "".join(self.typed) + "\b" * tail)
 
     def extended(self, code: str) -> None:
         moves = {LEFT: self.move_left, RIGHT: self.move_right, HOME: self.move_home, END: self.move_end,
@@ -189,13 +245,13 @@ def console_keys():
     return polled_keys(msvcrt.kbhit, msvcrt.getwch)
 
 
-def line_reader(is_interactive):
+def line_reader(is_interactive, choices=None):
     if not is_interactive():
         return None
     if os.name == "nt":
-        return ConsoleLine(console_keys())
+        return ConsoleLine(console_keys(), choices=choices)
     try:
         import readline
     except ImportError:
         return None
-    return ReadlineLine(readline)
+    return ReadlineLine(readline, choices=choices)

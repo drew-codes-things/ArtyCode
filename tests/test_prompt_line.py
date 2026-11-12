@@ -19,6 +19,19 @@ def test_the_mode_key_cycles_and_never_reaches_allow_all(mode, following):
 class FakeReadline:
     def __init__(self):
         self.bound, self.hooks, self.inserted = [], [], []
+        self.buffer, self.completer, self.display_hook, self.delimiters = "", None, None, None
+
+    def set_completer(self, completer):
+        self.completer = completer
+
+    def set_completer_delims(self, delimiters):
+        self.delimiters = delimiters
+
+    def set_completion_display_matches_hook(self, hook):
+        self.display_hook = hook
+
+    def get_line_buffer(self):
+        return self.buffer
 
     def parse_and_bind(self, line):
         self.bound.append(line)
@@ -32,7 +45,7 @@ class FakeReadline:
         self.inserted.append(text)
 
 
-def readline_reader(*answers):
+def readline_reader(*answers, choices=None):
     module, written, given = FakeReadline(), io.StringIO(), list(answers)
     prompts = []
 
@@ -40,7 +53,7 @@ def readline_reader(*answers):
         prompts.append(prompt)
         return given.pop(0)
 
-    reader = prompt_line.ReadlineLine(module, read=read, write=written.write, columns=lambda: 80)
+    reader = prompt_line.ReadlineLine(module, read=read, write=written.write, columns=lambda: 80, choices=choices)
     return reader, module, written, prompts
 
 
@@ -70,9 +83,9 @@ def test_readline_prompts_mark_colour_codes_as_taking_no_room():
     assert prompt_line.for_readline(painted) == "\001\033[38;5;167m\002plan\001\033[0m\002 › "
 
 
-def console_reader(keys, history=None):
+def console_reader(keys, history=None, choices=None):
     given, written = list(keys), io.StringIO()
-    reader = prompt_line.ConsoleLine(lambda: given.pop(0), written.write)
+    reader = prompt_line.ConsoleLine(lambda: given.pop(0), written.write, choices=choices, columns=lambda: 80)
     reader.history = list(history or [])
     return reader, written
 
@@ -191,3 +204,45 @@ def test_while_remote_control_is_on_the_prompt_says_so(ready_session):
     reader = CyclingReader(("hi", False))
     cli.read_request(ready_session, reader)
     assert reader.calls[0][0] == "default · remote › "
+
+
+COMMANDS = {"/model": "switch model", "/mode": "how much is asked", "/help": "this list"}
+
+
+def test_on_linux_slash_at_the_start_lists_commands_and_tab_completes_them():
+    reader, module, written, _prompts = readline_reader("/model", choices=lambda: COMMANDS)
+    assert {prompt_line.SLASH_SHOWS_COMMANDS, "tab: complete", "set show-all-if-ambiguous on"} <= set(module.bound)
+    assert module.delimiters == prompt_line.COMMAND_DELIMITERS
+    reader.read("default › ", 10, "")
+    module.buffer = "/mo"
+    offered = [module.completer("/mo", state) for state in range(3)]
+    assert offered == ["/model", "/mode", None]
+    module.display_hook("/mo", ["/model", "/mode"], 6)
+    shown = written.getvalue()
+    assert "/model  switch model" in shown and "/mode   how much is asked" in shown
+    assert shown.endswith("default › /mo")
+
+
+def test_on_linux_a_slash_inside_a_request_offers_nothing():
+    _reader, module, _written, _prompts = readline_reader(choices=lambda: COMMANDS)
+    module.buffer = "look in src/"
+    assert module.completer("src/", 0) is None
+
+
+def test_on_linux_without_choices_nothing_extra_is_bound():
+    _reader, module, _written, _prompts = readline_reader()
+    assert module.completer is None
+
+
+def test_on_windows_slash_first_shows_the_menu_and_tab_finishes_a_single_match():
+    reader, written = console_reader(["/", "h", "\t", "\r"], choices=lambda: COMMANDS)
+    assert reader.read("› ", 2, "") == ("/help ", False)
+    shown = written.getvalue()
+    assert "/model  switch model" in shown and "/help   this list" in shown
+
+
+def test_on_windows_tab_with_several_matches_shows_only_those():
+    reader, written = console_reader(["/", "m", "o", "\t", "\r"], choices=lambda: COMMANDS)
+    assert reader.read("› ", 2, "") == ("/mo", False)
+    after_tab = written.getvalue().split("› ")[-2]
+    assert "/model" in after_tab and "/help" not in after_tab
