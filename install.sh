@@ -6,6 +6,7 @@ APP_HOME="${ARTY_CLI_HOME:-$HOME/.local/share/arty-cli}"
 BIN_DIR="${ARTY_CLI_BIN:-$HOME/.local/bin}"
 SOURCE="${ARTY_CLI_SOURCE:-}"
 MARKER=".arty-cli-install"
+DEFAULT_SOURCE="https://github.com/drew-codes-things/ArtyCode/archive/refs/heads/main.tar.gz"
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'arty-cli install: %s\n' "$*" >&2; exit 1; }
@@ -84,8 +85,7 @@ chosen_source() {
   fi
   local here
   here="$(script_folder)"
-  [ -n "$here" ] || fail "no source to install from. Run install.sh from an arty-cli folder, or set ARTY_CLI_SOURCE to a folder, a .tar.gz/.zip URL or a git URL."
-  printf '%s' "$here"
+  printf '%s' "${here:-$DEFAULT_SOURCE}"
 }
 
 package_spec() {

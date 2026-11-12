@@ -82,3 +82,45 @@ def test_the_debian_installer_refuses_plain_http_sources(tmp_path):
 def test_the_windows_installer_refuses_plain_http_sources():
     script = (PROJECT / "install.ps1").read_text()
     assert "'^http://'" in script and "'^git\\+http://'" in script
+
+
+FAKE_PYTHON = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_PYTHON_LOG"
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
+  mkdir -p "$3/bin"
+  cp "$0" "$3/bin/python"
+  printf '#!/usr/bin/env bash\\necho "ArtyCode 9.9.9"\\n' > "$3/bin/arty-cli"
+  cp "$3/bin/arty-cli" "$3/bin/arty"
+  chmod +x "$3/bin/python" "$3/bin/arty-cli" "$3/bin/arty"
+fi
+exit 0
+"""
+
+
+@debian_installer
+def test_piped_from_the_web_the_installer_fetches_the_project_itself(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    fake = tools / "python3.13"
+    fake.write_text(FAKE_PYTHON)
+    fake.chmod(0o755)
+    log = tmp_path / "python.log"
+    environment = {"PATH": f"{tools}:/usr/bin:/bin", "HOME": str(tmp_path / "home"), "FAKE_PYTHON_LOG": str(log),
+                   "ARTY_CLI_HOME": str(tmp_path / "app"), "ARTY_CLI_BIN": str(tmp_path / "bin")}
+    script = (PROJECT / "install.sh").read_text()
+    ran = subprocess.run(["bash"], input=script, capture_output=True, text=True, env=environment, cwd=tmp_path)
+    assert ran.returncode == 0, ran.stderr
+    installed = [line for line in log.read_text().splitlines() if "pip install" in line and "arty-cli @" in line]
+    assert installed and installed[0].endswith("arty-cli @ https://github.com/drew-codes-things/ArtyCode/archive/refs/heads/main.tar.gz")
+    assert "Installed ArtyCode 9.9.9" in ran.stdout
+    assert (tmp_path / "bin" / "arty").is_symlink()
+
+
+def test_the_readme_gives_a_one_line_install_that_matches_the_installer():
+    readme = (PROJECT / "README.md").read_text()
+    script = (PROJECT / "install.sh").read_text()
+    one_liner = "curl -fsSL https://raw.githubusercontent.com/drew-codes-things/ArtyCode/main/install.sh | bash"
+    assert one_liner in readme
+    assert "sudo" not in one_liner
+    assert 'DEFAULT_SOURCE="https://github.com/drew-codes-things/ArtyCode/archive/refs/heads/main.tar.gz"' in script
+    assert "arty doctor" in readme and "arty update" in readme
