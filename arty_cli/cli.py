@@ -22,7 +22,7 @@ from arty_cli import (__version__, agent, authorise, brain, commands, context, h
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
                        settings, skills, stopkey, suggest, tools, waiting, webfetch,
                        websearch, wrap)
-from arty_cli import prune, upkeep
+from arty_cli import offering, prune, upkeep
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -716,6 +716,8 @@ class Session:
         client.on_thinking = terminal.count_thinking
         self.remote = None
         self.remote_name = ""
+        self.situational = set()
+        self.notice_situational_tools("")
         self.messages = self.restored(saved)
 
     def restored(self, saved) -> list[dict]:
@@ -748,7 +750,12 @@ class Session:
                         checkpoints=self.workspace.checkpoints)
 
     def offered(self) -> list[dict]:
-        return agent.offered_definitions(self.extras)
+        return agent.offered_definitions(self.extras, self.situational)
+
+    def notice_situational_tools(self, request: str) -> None:
+        if set(offering.SITUATIONAL_TOOLS) <= self.situational:
+            return
+        self.situational |= offering.wanted_tools(self.workspace.root, request)
 
     def compact_limit(self) -> int:
         return context.compact_limit(self.client, self.offered())
@@ -782,6 +789,7 @@ class Session:
             self.terminal.note(f"{error} The conversation wasn't summarised; carrying on as it is.", "error")
 
     def ask(self, text: str) -> bool:
+        self.notice_situational_tools(text)
         self.compact_before_asking()
         allowed = self.prompt_hook(text)
         if allowed is None:
@@ -798,7 +806,8 @@ class Session:
             with self.running(remote.IN_TURN), self.terminal.interruptible():
                 agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=self.done,
                                squeeze=self.squeeze, extras=self.extras, steer=self.steering_messages,
-                               on_round=self.remember)
+                               on_round=self.remember,
+                               offered=self.offered() + agent.planning_definitions(self.gate))
         except KeyboardInterrupt:
             self.abandon_turn(self.done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
             return False
@@ -944,7 +953,7 @@ class Session:
     def summary_of(self, messages: list[dict], instructions: str = "") -> str:
         asked = f"{SUMMARY_REQUEST}\n\n{instructions}" if instructions else SUMMARY_REQUEST
         request = self.fitted_for_summary(messages) + [{"role": "user", "content": asked}]
-        offered = agent.offered_definitions(self.extras)
+        offered = self.offered()
         summary = (self.client.reply(request, tools=offered, on_text=lambda text: None).get("content") or "").strip()
         if not summary:
             raise providers.ProviderError(NO_SUMMARY)
@@ -1747,7 +1756,7 @@ def answered_as_json(session: Session, request: str) -> int:
 
 def answered_as_stream(session: Session, request: str) -> int:
     events = JsonLines(session.terminal.out)
-    offered = [definition["function"]["name"] for definition in agent.offered_definitions(session.extras)]
+    offered = [definition["function"]["name"] for definition in session.offered()]
     events.write({"type": "system", "subtype": "init", "session_id": session.saved.id, "model": session.client.model,
                   "cwd": str(session.workspace.root), "permission_mode": session.gate.mode, "tools": offered})
     session.terminal.events = events

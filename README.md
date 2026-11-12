@@ -30,8 +30,8 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `read_file`, `list_files`, `search` | Read and find code in the project; a Jupyter notebook reads as numbered cells with their text output. A long file is read 250 lines at a time, headed with the lines shown and how many are above and below; the first window also lists the file's functions and classes with their line numbers so the next read can jump there. Searches stop at a size limit and say so | Only outside the project folder |
 | `edit_file`, `write_file` | Change or create files, keeping each file's line endings. An existing file has to be read first, and is refused if it changed on disk since; every write is atomic (a temporary file, then a swap). `write_file` only creates new files: for an existing one it answers with how to use `edit_file` instead, unless the call sets `overwrite: true` (the question then says Overwrite). When `old_text` doesn't match exactly, `edit_file` tries again ignoring spaces at line ends, then indentation, then curly quotes and long dashes, uses a match only if it is the only one, keeps the file's indentation, and says which way it matched. A made edit answers with the changed lines and three either side, numbered; a miss answers with the closest lines in the file, numbered, and a second miss on the same file adds advice to replace the whole function (or, for a file of up to 200 lines, rewrite it) | Yes, showing the diff (`--auto-edit` skips this inside the project, except for anything in a `.arty` or `.git` folder: that is always asked about, because those files can make programs run) |
 | `multi_edit` | Several edits to one file in one step, applied in order; all or nothing, so if one edit doesn't match exactly once nothing is changed. One question with the whole diff, and one `/undo` puts it all back | Yes, like an edit |
-| `notebook_edit` | Replace, insert or delete one cell of a `.ipynb` notebook (a replaced code cell's old output is cleared) | Yes, like an edit |
-| `run_command` | Tests, builds, git (bash on Linux, PowerShell on Windows). A command is stopped after `timeout_seconds` (120 unless the model asks for more, up to 1800, or `max_command_seconds`), and the result starts by saying it was stopped and isn't running any more, then says to run a server in the background or give a long build more time, before the output it printed. `background: true` starts it and returns at once | Yes, except look-only commands (below) |
+| `notebook_edit` | Replace, insert or delete one cell of a `.ipynb` notebook (a replaced code cell's old output is cleared). Offered once the project has a notebook or a request mentions one | Yes, like an edit |
+| `run_command` | Tests, builds, git (bash on Linux, PowerShell on Windows). A command is stopped after `timeout_seconds` (120 unless the model asks for more, up to 1800, or `max_command_seconds`), and the result starts by saying it was stopped and isn't running any more, then says to run a server in the background or give a long build more time, before the output it printed. The output includes stderr, and long output is trimmed to its start and end. `cwd` runs it in a folder inside the project instead of the project folder. `background: true` starts it and returns at once | Yes, except look-only commands (below) |
 | `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a watcher, a long build). `command_output` waits up to `wait_seconds` (5 unless asked for more) for the job to finish, then returns what it printed since the last read; background commands end when ArtyCode does | No |
 | `todo_write` | A checklist for jobs with several steps, drawn with boxes under the step each time it changes (☐ to do, ☑ done) and kept for `/todos` | No |
 | `web_fetch` | Read a public web page (documentation, an issue), marked as information rather than instructions | Yes, once per site with **a** |
@@ -332,7 +332,12 @@ time: when it only says what it will do next or that it hasn't done something ye
 items, and (up to three times) when its reply was cut off at the brain's reply length limit, with a note to write long
 files in parts. A real question for you, or a second stop in a row, ends the request as usual. The only thing that
 stops a job on its own is the same step with the same result over and over, or the same failing call three times in eight steps (a miss, a read, the same miss again; it is warned once first); waiting on a
-background build that is still running doesn't count.
+background build that is still running doesn't count. Every eight steps without a new checklist, the model is
+reminded of the request (shortened to 600 characters) and the checklist so far, so a small model keeps sight of the job
+deep into a long request.
+
+The model's instructions come in short labelled sections (looking, changing files, tests, commands, working through a
+job, finishing); guidance for tools that are only offered sometimes lives in those tools' own descriptions.
 
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
 long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
@@ -487,7 +492,11 @@ minutes.
 ## Pictures, pages and live checks
 
 Three look-only tools let the model see what it built and check that a service answers. None of them changes the
-project or sends anything but a plain request, and plan mode and helpers can use them too.
+project or sends anything but a plain request, and plan mode and helpers can use them too. `http_check` is always
+offered; `view_image` and `screenshot` are offered once the project has web pages or pictures (HTML, CSS, JSX, Vue,
+Svelte, PNG, JPEG and the like) or a request mentions a page, a picture, a screenshot, the layout or the like. A tool
+offered once stays offered for the rest of the session, and the list is only decided between requests, never in the
+middle of one, so the brain can keep reusing what it already read.
 
 - `view_image` reads a picture in the project and asks the brain's vision model about it directly (the
   `X-Arty-Direct-Vision` path, so the answer is about the picture, not a chat). Pictures over 1280 pixels on a side,

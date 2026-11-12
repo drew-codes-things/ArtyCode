@@ -5,7 +5,7 @@ import re
 import threading
 
 from arty_cli import extras as extra_tools
-from arty_cli import checks, context, hooks, permissions, prune, tools
+from arty_cli import checks, context, hooks, offering, permissions, prune, remote, tools
 
 STUCK_REPEATS = 3
 ANNOUNCED_STEP = re.compile(r"\b(let'?s|let me(?! know)|i'?ll|i will|i'?m going to|next,? i)\b[^.?!]{0,80}\b(check|look|"
@@ -38,6 +38,11 @@ STUCK_NOTE = ("You have made the same tool calls several times in a row with the
               "again: answer now with what you have, or say what is blocking you.")
 STUCK_STOPPED = "I stopped because I kept repeating the same step. Tell me how you'd like to go on."
 STUCK_WINDOW = 8
+ANCHOR_ROUNDS = 8
+ANCHOR_REQUEST_CHARS = 600
+ANCHOR_LEAD = "Carry on with the request. It was:"
+ANCHOR_CHECKLIST_LEAD = "Your checklist so far:"
+TODO_TOOL = "todo_write"
 NEAR_WINDOW_NOTE = ("The last prompt used {used} of the model's {window} tokens, near the end of the model's context "
                     "window; older results will be hidden to make room.")
 WINDOW_OVERFLOW = re.compile(r"context (?:window|length|size)|too long|too many tokens|exceeds", re.I)
@@ -214,9 +219,27 @@ def helper_definition(found: dict) -> dict:
         {"name": {"type": "string", "enum": list(found)}, "task": tools.TEXT}, ["name", "task"])
 
 
-def offered_definitions(extras) -> list[dict]:
+def request_of(messages: list[dict]) -> str:
+    last = messages[-1] if messages else {}
+    return remote.shown_content(last.get("content")).strip() if last.get("role") == "user" else ""
+
+
+def updates_checklist(calls: list[dict]) -> bool:
+    return any((call.get("function") or {}).get("name") == TODO_TOOL for call in calls)
+
+
+def anchor_note(request: str, todos: list[dict]) -> str:
+    shown = tools.clipped(request, ANCHOR_REQUEST_CHARS)
+    if not todos:
+        return f"{ANCHOR_LEAD}\n{shown}"
+    listed = "\n".join(f"{tools.TODO_MARKS.get(item.get('status'), '')} {item.get('text', '')}".strip()
+                       for item in todos)
+    return f"{ANCHOR_LEAD}\n{shown}\n{ANCHOR_CHECKLIST_LEAD}\n{listed}"
+
+
+def offered_definitions(extras, situational=None) -> list[dict]:
     custom = [helper_definition(extras.helpers)] if extras.helpers else []
-    return tools.DEFINITIONS + [EXPLORE_DEFINITION] + custom + extras.definitions()
+    return offering.kept(tools.DEFINITIONS + [EXPLORE_DEFINITION] + custom + extras.definitions(), situational)
 
 
 def planning_definitions(gate) -> list[dict]:
@@ -630,6 +653,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         checks.start_turn(workspace)
     done = [] if done is None else done
     helpers = Helpers(brain, workspace, gate, screen, extras)
+    request, since_anchor = request_of(messages), 0
     recent, continued, steered_from, nudges = [], 0, None, []
     approved_with, reminded = None, False
     failures, steered_failures, misses, warned_near_window = [], set(), {}, False
@@ -684,8 +708,9 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         steered = steer() if steer else []
         if steered:
             messages.extend(steered)
-            recent, failures = [], []
+            recent, failures, since_anchor = [], [], 0
             continue
+        since_anchor = 0 if updates_checklist(calls) else since_anchor + 1
         if waits_on_running_jobs(calls, results):
             continue
         signature = signature_of(calls, raw_results)
@@ -702,3 +727,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         if len(recent) == STUCK_REPEATS and len(set(recent)) == 1:
             messages.append({"role": "user", "content": STUCK_NOTE})
             steered_from, recent = signature, []
+            continue
+        if request and since_anchor >= ANCHOR_ROUNDS:
+            messages.append({"role": "user", "content": anchor_note(request, workspace.todos)})
+            since_anchor = 0

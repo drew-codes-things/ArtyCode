@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -70,7 +71,8 @@ NOT_FOUND = "old_text was not found"
 KEY_ALIASES = {"file_path": "path", "filepath": "path", "file": "path", "filename": "path", "file_name": "path",
                "old_string": "old_text", "old_str": "old_text", "new_string": "new_text", "new_str": "new_text",
                "cmd": "command", "todos": "items", "content": "text", "task": "text", "title": "text",
-               "timeout": "timeout_seconds", "glob_pattern": "glob", "regex": "pattern", "query": "pattern"}
+               "timeout": "timeout_seconds", "glob_pattern": "glob", "regex": "pattern", "query": "pattern",
+               "working_directory": "cwd", "workdir": "cwd", "working_dir": "cwd"}
 VALUE_ALIASES = {"completed": "done", "complete": "done", "finished": "done", "in-progress": "in_progress",
                  "in progress": "in_progress", "inprogress": "in_progress", "active": "in_progress",
                  "todo": "pending", "to do": "pending", "not_started": "pending", "open": "pending"}
@@ -848,9 +850,27 @@ def start_process(workspace, command: str) -> subprocess.Popen:
     return subprocess.Popen(arguments, **pipes, **options)
 
 
-def start_job(workspace, command: str) -> str:
+def command_folder(workspace, cwd: str) -> str:
+    folder = workspace.resolve(str(cwd))
+    if not folder.is_relative_to(workspace.root):
+        raise ToolError(f"cwd must be a folder inside the project, not {cwd}")
+    if not folder.is_dir():
+        raise ToolError(f"cwd {cwd} is not a folder in the project")
+    return workspace.shown(folder)
+
+
+def in_folder(command: str, folder: str) -> str:
+    if not folder or folder == ".":
+        return command
+    if sys.platform == "win32":
+        quoted = folder.replace("'", "''")
+        return f"Set-Location -LiteralPath '{quoted}' -ErrorAction Stop; {command}"
+    return f"cd -- {shlex.quote(folder)} && {command}"
+
+
+def start_job(workspace, command: str, run_as: str = "") -> str:
     job_id = str(len(workspace.jobs) + 1)
-    workspace.jobs[job_id] = Job(command, start_process(workspace, command))
+    workspace.jobs[job_id] = Job(command, start_process(workspace, run_as or command))
     return f"Job {job_id} started in the background. Read it with command_output, end it with stop_command."
 
 
@@ -915,12 +935,13 @@ def timed_out_note(seconds: int, most: int) -> str:
             f"again with a bigger timeout_seconds (up to {most}). Its output before it was stopped:]\n")
 
 
-def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, background=False):
+def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, background=False, cwd=""):
+    run_as = in_folder(command, command_folder(workspace, cwd) if cwd else "")
     if background:
-        return start_job(workspace, command)
+        return start_job(workspace, command, run_as)
     most = workspace.max_command_seconds
     seconds = min(max(int(timeout_seconds), 1), most)
-    process = start_process(workspace, command)
+    process = start_process(workspace, run_as)
     try:
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
@@ -991,11 +1012,14 @@ DEFINITIONS = [
              {"pattern": TEXT, "path": TEXT, "glob": {**TEXT, "description": "file name filter, e.g. *.py"}},
              ["pattern"]),
     function("run_command", "Run a shell command in the project folder (bash on Linux, PowerShell on Windows), "
-                            "e.g. tests, builds, git. Returns the output and exit code. It is stopped after "
+                            "e.g. tests, builds, git. Returns the output with stderr included, and the exit code; "
+                            "long output is trimmed to its start and end, so there is no need for 2>&1 or tail. "
+                            "To run it in a subfolder pass cwd instead of cd. It is stopped after "
                             f"timeout_seconds (default {DEFAULT_COMMAND_SECONDS}); give long installs and builds "
                             "more. Servers and watchers never end, so start them with background: true.",
              {"command": TEXT, "timeout_seconds": NUMBER,
-              "background": {"type": "boolean", "description": "start it and return at once, e.g. a dev server"}},
+              "background": {"type": "boolean", "description": "start it and return at once, e.g. a dev server"},
+              "cwd": {**TEXT, "description": "folder inside the project to run it in, default the project folder"}},
              ["command"]),
     function("command_output", "Read new output from a background job started by run_command. Waits up to "
                                f"wait_seconds (default {DEFAULT_OUTPUT_WAIT_SECONDS}) for the job to finish first; "

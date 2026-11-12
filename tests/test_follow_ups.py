@@ -17,7 +17,8 @@ AUTOMATIC_MESSAGES = [
     agent.DO_IT_NOW, agent.NOT_DONE_ANSWER, agent.CARRY_ON_ANSWER, agent.CUT_SHORT_ANSWER,
     agent.unfinished_note([{"text": "Write tests", "status": "pending"}]), f"{agent.STOP_HOOK_LEAD} keep going",
     f"{agent.SUBAGENT_STOP_LEAD} keep going", agent.NOTHING_CHANGED_YET, agent.STUCK_NOTE, agent.STUCK_FAILING_NOTE,
-    checks.FINISH_LEAD, cli.COMPACTED_LEAD,
+    checks.FINISH_LEAD, cli.COMPACTED_LEAD, agent.anchor_note("make calc.py", []),
+    agent.anchor_note("make calc.py", [{"text": "Write tests", "status": "pending"}]),
 ]
 
 
