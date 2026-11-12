@@ -35,6 +35,9 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `todo_write` | A checklist for jobs with several steps, shown as it goes (`/todos`) | No |
 | `web_fetch` | Read a public web page (documentation, an issue), marked as information rather than instructions | Yes, once per site with **a** |
 | `web_search` | Search the web through your Arty brain's own search (its `research__web_search` tool, so no other search key is needed); titles, links and snippets, marked as information rather than instructions. Helpers can search too | Yes, once per session with **a** (also in plan mode, since it changes nothing) |
+| `view_image` | Looks at a picture in the project (PNG, JPEG, WebP, GIF) with your Arty brain's vision model and answers a question about it (below) | Only outside the project folder |
+| `screenshot` | Opens a page (a local dev server, an HTML file in the project, any web address) in a headless browser, saves screenshots and reports the status, console errors and failed requests (below) | Not for this computer or a project file; other addresses yes, once per site with **a** |
+| `http_check` | GET or HEAD an address, including localhost and home-network services, with an optional expected status and text (below) | Not for this computer; other addresses yes, once per site with **a** |
 | `explore` | A helper with its own fresh conversation that looks through the project and reports back; up to four run at once | It can only look |
 | `helper` | Hands a job to one of your own helpers (below) | Depends on the helper's tools |
 | `skill` | Loads one of your skills (below) when the job matches it | No |
@@ -349,6 +352,34 @@ device key whose **Arty CLI** switch is on (off by default; switched on starfire
 app's device list), can see or steer a shared chat. The brain forgets a shared chat it hasn't heard from for 10
 minutes.
 
+## Pictures, pages and live checks
+
+Three look-only tools let the model see what it built and check that a service answers. None of them changes the
+project or sends anything but a plain request, and plan mode and helpers can use them too.
+
+- `view_image` reads a picture in the project and asks the brain's vision model about it directly (the
+  `X-Arty-Direct-Vision` path, so the answer is about the picture, not a chat). Pictures over 1280 pixels on a side,
+  over 5 MB, or GIFs (first frame) are first redrawn as a smaller PNG in the headless browser below, so a local 9B
+  vision model gets a sensible size; without a browser, a picture under 5 MB is sent as it is. The answer is marked
+  as information, not instructions.
+- `screenshot` opens an address (`localhost:8000` works without `http://`) or an HTML file in the project in headless
+  Chrome, Edge or Chromium, at 1280 by 800 and at a 390 by 844 phone size unless `width` (and `height`) is given.
+  The pictures go to `.arty/screenshots/` (that folder ignores itself in git), and the result gives the HTTP status,
+  the title, console errors, uncaught errors, failed or 4xx/5xx requests and the start of the visible text. With
+  `question`, each screenshot also goes through `view_image`. The browser runs with a throwaway profile in the temp
+  folder, never your own, with no extensions or sound, and the profile is deleted when the shot is done. The browser
+  is found on the PATH (Chrome, `chromium`, `microsoft-edge` and others), where Windows and macOS install Chrome,
+  Edge and Chromium, or at `ARTY_BROWSER`; without one, `screenshot` isn't offered.
+- `http_check` sends a GET or HEAD (no request body, no saved headers or keys) and returns the status, the time,
+  the main headers and the start of the body. `expect_status` and `expect_text` add a PASS or FAIL line, redirects
+  are reported instead of followed, and `verify_tls: false` accepts a home server's self-signed certificate.
+  Unlike `web_fetch`, it reaches home-network addresses.
+
+Addresses on this computer (`localhost`, `127.0.0.1`, `::1`) and files in the project need no OK. Home-network and
+public addresses ask like `web_fetch` (**a** covers that site for that tool until you quit, **s** saves a rule such
+as `http_check(http://192.168.1.16:5003/*)`), and a file outside the project asks too. Deny rules are matched
+against the full address, so `screenshot(http://localhost:9000/*)` also stops `localhost:9000/admin`.
+
 ## Skills
 
 A skill is a folder with a `SKILL.md`: saved instructions for one kind of job, plus any files it needs.
@@ -486,6 +517,8 @@ error colour. The model still gets the whole result. `NO_COLOR`, or output that 
 - Beta: tested on Debian; the Windows build and `install.ps1` have not been run on Windows yet.
 - `web_fetch` checks that an address is public before connecting; a name whose address changes in between could
   still reach a local one.
+- `screenshot` talks to the browser through its debugging port on 127.0.0.1 for the few seconds a shot takes, and a
+  page opened from a file can show other files on this computer the way any local page can.
 - A request sent from afar while you are typing at the prompt here clears the line you were typing.
 - Not yet: editor (IDE) integration.
 

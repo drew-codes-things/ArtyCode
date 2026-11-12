@@ -4,7 +4,8 @@ import threading
 
 import pytest
 
-from arty_cli import agent, brain, extras, helpers, hooks, permissions, skills, tools
+from arty_cli import agent, brain, extras, eyes, helpers, hooks, permissions, skills, tools
+from tests.fake_servers import serving
 from tests.portable import file_making_call, python_call
 
 MAKE_A_FILE = file_making_call("made")
@@ -933,3 +934,22 @@ def test_each_call_shows_a_step_then_its_outcome(tmp_path):
 def test_a_command_result_line_stays_short_enough_for_one_row():
     shown, _failed = agent.outcome_line("run_command", "x" * 300 + "\n[exit code 0]")
     assert len(f"  └ {shown}") <= 90 and shown.endswith("(exit code 0)")
+
+
+def test_looking_tools_come_through_the_extras_and_run_without_changing_anything(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    looks = eyes.Eyes(workspace, None, lambda: None)
+    with_looks = extras.Extras(looks=looks)
+    names = [definition["function"]["name"] for definition in agent.offered_definitions(with_looks)]
+    assert "http_check" in names and "http_check" not in [
+        definition["function"]["name"] for definition in agent.offered_definitions(extras.NONE)]
+    with serving([(200, "all good")], "text/plain") as (url, _recorder):
+        scripted = ScriptedBrain(("", [call("http_check", url=f"{url}/health", expect_text="good")]), ("Up.", []))
+        done = []
+        agent.run_turn([{"role": "user", "content": "is it up?"}], scripted, workspace,
+                       permissions.Gate(workspace, lambda q, p="": "n"), Screen(), extras=with_looks, done=done)
+    result = scripted.sent[-1]["messages"][-1]["content"]
+    assert "Status: 200" in result and "PASS" in result
+    assert done == []
+    assert with_looks.without_stop_hooks().handles("screenshot")
+    assert not extras.NONE.handles("view_image")

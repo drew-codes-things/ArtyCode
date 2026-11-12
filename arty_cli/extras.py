@@ -1,6 +1,6 @@
 import json
 
-from arty_cli import brain, hooks, permissions, skills, tools
+from arty_cli import brain, eyes, hooks, permissions, skills, tools
 
 SKILL_TOOL = "skill"
 MAX_ARGUMENT_PREVIEW_CHARS = 2_000
@@ -29,16 +29,18 @@ def search_count(arguments: dict) -> int:
 
 
 class Extras:
-    def __init__(self, hooks=None, skills=None, hub=None, search=None, helpers=None):
+    def __init__(self, hooks=None, skills=None, hub=None, search=None, helpers=None, looks=None):
         self.hooks = hooks
         self.skills = skills or {}
         self.hub = hub
         self.search = search
         self.helpers = helpers or {}
+        self.looks = looks
 
     def definitions(self) -> list[dict]:
         found = [skills.DEFINITION] if self.skills else []
         found += [SEARCH_DEFINITION] if self.search else []
+        found += self.looks.definitions() if self.looks else []
         return found + (self.hub.definitions() if self.hub else [])
 
     def handles(self, name: str) -> bool:
@@ -46,15 +48,17 @@ class Extras:
             return bool(self.skills)
         if name == permissions.WEB_SEARCH:
             return self.search is not None
+        if name in eyes.NAMES:
+            return self.looks is not None
         return self.hub is not None and self.hub.tool(name) is not None
 
     def may_change_things(self, name: str) -> bool:
-        return name not in (SKILL_TOOL, permissions.WEB_SEARCH) and not self.hub.tool(name).read_only
+        return name not in (SKILL_TOOL, permissions.WEB_SEARCH, *eyes.NAMES) and not self.hub.tool(name).read_only
 
     def check(self, name: str, arguments: dict, gate) -> str | None:
         if name == SKILL_TOOL:
             return None
-        if name == permissions.WEB_SEARCH:
+        if name == permissions.WEB_SEARCH or name in eyes.NAMES:
             return gate.check(name, arguments)
         tool = self.hub.tool(name)
         return gate.check_server(tool.server, name, tool.read_only, argument_preview(arguments), arguments)
@@ -64,6 +68,8 @@ class Extras:
             return skills.loaded(self.skills, str(arguments.get("name", "")))
         if name == permissions.WEB_SEARCH:
             return self.searched(arguments)
+        if name in eyes.NAMES:
+            return self.looks.run(name, arguments)
         return self.hub.run(name, arguments)
 
     def searched(self, arguments: dict) -> str:
@@ -85,7 +91,7 @@ class Extras:
         if self.hooks is not None:
             kept = hooks.Hooks([hook for hook in self.hooks.listed() if hook.event != "Stop"], self.hooks.workspace)
             kept.session_id = self.hooks.session_id
-        return Extras(hooks=kept, search=self.search)
+        return Extras(hooks=kept, search=self.search, looks=self.looks)
 
     def close(self) -> list[str]:
         return self.hub.close() if self.hub is not None else []

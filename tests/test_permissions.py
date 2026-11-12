@@ -614,3 +614,66 @@ def test_a_no_to_changing_the_git_setup_also_takes_what_to_do_instead(workspace)
     gate.instead = lambda: "leave .git alone"
     refusal = gate.check("write_file", {"path": ".git/config", "content": "x"})
     assert refusal.startswith(permissions.REFUSED_LEAD) and "leave .git alone" in refusal
+
+
+def test_looking_at_a_picture_in_the_project_is_free_and_outside_it_asks(workspace, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("elsewhere") / "photo.png"
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask, mode=permissions.PLAN)
+    assert gate.allows("view_image", {"path": "shot.png"})
+    assert not gate.allows("view_image", {"path": str(outside)})
+    assert ask.questions == [(f"Read outside the project: {outside}?", "")]
+
+
+@pytest.mark.parametrize("mode", permissions.MODES)
+@pytest.mark.parametrize("name, url", [("http_check", "http://localhost:8000/health"),
+                                       ("http_check", "127.0.0.1:5000"), ("screenshot", "http://[::1]:3000/"),
+                                       ("screenshot", "a.py")])
+def test_looking_at_this_computer_or_a_project_file_needs_no_ok_in_any_mode(workspace, mode, name, url):
+    ask = Asker()
+    assert permissions.Gate(workspace, ask, mode=mode).allows(name, {"url": url})
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("name, url, question", [
+    ("http_check", "http://192.168.1.16:5003/health", "Check http://192.168.1.16:5003/health?"),
+    ("http_check", "https://example.com/", "Check https://example.com/?"),
+    ("screenshot", "https://example.com/", "Open https://example.com/ in a headless browser?"),
+    ("screenshot", "192.168.1.16:8080", "Open http://192.168.1.16:8080 in a headless browser?"),
+])
+def test_looking_at_the_network_asks_like_a_fetch(workspace, name, url, question):
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask, mode=permissions.PLAN).allows(name, {"url": url})
+    assert ask.questions == [(question, "")]
+
+
+def test_a_page_file_outside_the_project_asks(workspace, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("elsewhere") / "page.html"
+    outside.write_text("<p>hi</p>")
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("screenshot", {"url": outside.as_uri()})
+    assert ask.questions == [(f"Open a file outside the project in a headless browser: {outside}?", "")]
+
+
+def test_always_for_a_checked_host_covers_that_host_and_that_tool_only(workspace):
+    ask = Asker("a", "n")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("http_check", {"url": "http://192.168.1.16:5003/health"})
+    assert gate.allows("http_check", {"url": "http://192.168.1.16:5003/other"})
+    assert not gate.allows("screenshot", {"url": "http://192.168.1.16:5003/"})
+    assert len(ask.questions) == 2
+
+
+def test_saving_a_check_allows_that_site_and_deny_rules_see_the_full_address(workspace):
+    gate, _told = saving_gate(workspace, permissions.SAVE)
+    assert gate.allows("http_check", {"url": "192.168.1.16:5003/health"})
+    assert saved_allow_rules(workspace) == ["http_check(http://192.168.1.16:5003/*)"]
+    gate.rules.deny.append("screenshot(http://localhost:9000/*)")
+    assert not gate.allows("screenshot", {"url": "localhost:9000/admin"})
+
+
+def test_a_bad_address_is_refused_before_anything_is_asked(workspace):
+    ask = Asker()
+    refusal = permissions.Gate(workspace, ask).check("screenshot", {"url": "ftp://example.com/"})
+    assert refusal.startswith("Error: only http, https and file")
+    assert ask.questions == []
