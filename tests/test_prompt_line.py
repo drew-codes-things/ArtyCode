@@ -1,4 +1,5 @@
 import io
+import sys
 
 import pytest
 
@@ -150,6 +151,7 @@ def test_the_reader_is_picked_for_the_platform(monkeypatch):
     assert prompt_line.line_reader(cli.is_interactive) is None
     monkeypatch.setattr(cli, "is_interactive", lambda: True)
     monkeypatch.setattr(prompt_line.os, "name", "posix")
+    monkeypatch.setitem(sys.modules, "readline", FakeReadline())
     assert isinstance(prompt_line.line_reader(cli.is_interactive), prompt_line.ReadlineLine)
     monkeypatch.setattr(prompt_line.os, "name", "nt")
     monkeypatch.setattr(prompt_line, "console_keys", lambda: lambda: "\r")
