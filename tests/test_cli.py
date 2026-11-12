@@ -567,6 +567,20 @@ def test_saving_an_answer_as_a_rule_keeps_the_folder_trusted(ready, monkeypatch,
     assert (ready / "made.txt").exists()
 
 
+def test_saving_a_rule_after_the_setup_changed_does_not_trust_the_change(ready):
+    workspace = cli.tools.Workspace(ready)
+    personal = cli.settings.config_dir()
+    cli.memory.trust(personal, ready, cli.setup_fingerprint(workspace))
+    (ready / ".arty").mkdir()
+    (ready / ".arty" / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": "evil"}]}]}}))
+    told = io.StringIO()
+    rule_file = cli.project_rule_file(workspace, cli.Terminal(io.StringIO(), told))
+    assert rule_file.add_allow("run_command(make)")
+    assert cli.memory.trust_state(personal, ready, cli.setup_fingerprint(workspace)) == cli.memory.CHANGED
+    assert "changed" in told.getvalue()
+
+
 class ReadingBrain(FakeBrain):
     def reply(self, messages, tools, on_text):
         self.calls.append([dict(m) for m in messages])

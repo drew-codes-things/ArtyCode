@@ -37,6 +37,8 @@ CHANGED_QUESTION = ("This folder's hooks, MCP servers or permission rules (.arty
                     "changed since you trusted it, so they may run different programs now. Trust it again? [y/n]: ")
 REPO_MAP_FOLDER = "repomap"
 FINGERPRINTED_FILES = (hooks.PROJECT_FOLDER / hooks.SETTINGS_FILE, mcp.PROJECT_FILE)
+SETUP_CHANGED_BEFORE_SAVE = ("This folder's settings or MCP servers changed since you trusted it, so you'll be "
+                             "asked about them again next time.")
 HOOK_CONTEXT_LEAD = "(Added by a hook:)"
 START_CONTEXT_LEAD = "(Added by a SessionStart hook:)"
 MANUAL, AUTOMATIC = "manual", "auto"
@@ -965,13 +967,30 @@ def notifying(ask, extras, terminal: Terminal, kind: str = PERMISSION_PROMPT):
     return asked
 
 
-def project_rule_file(workspace, terminal: Terminal) -> permissions.RuleFile:
-    def tell(line: str) -> None:
-        terminal.note(line)
-        memory.trust(settings.config_dir(), workspace.root, setup_fingerprint(workspace))
+class TrustKeepingRuleFile:
+    def __init__(self, workspace, terminal: Terminal):
+        self.workspace = workspace
+        self.tell = terminal.note
+        self.rules = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, terminal.note)
 
+    def setup_still_trusted(self) -> bool:
+        state = memory.trust_state(settings.config_dir(), self.workspace.root, setup_fingerprint(self.workspace))
+        return state == memory.TRUSTED
+
+    def add_allow(self, rule: str) -> bool:
+        trusted_before = self.setup_still_trusted()
+        if not self.rules.add_allow(rule):
+            return False
+        if trusted_before:
+            memory.trust(settings.config_dir(), self.workspace.root, setup_fingerprint(self.workspace))
+        else:
+            self.tell(SETUP_CHANGED_BEFORE_SAVE)
+        return True
+
+
+def project_rule_file(workspace, terminal: Terminal) -> TrustKeepingRuleFile:
     terminal.offers_rules = True
-    return permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, tell)
+    return TrustKeepingRuleFile(workspace, terminal)
 
 
 def answered_quietly(session: Session, request: str) -> bool:
