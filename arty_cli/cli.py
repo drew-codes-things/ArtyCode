@@ -21,6 +21,7 @@ from arty_cli import (__version__, agent, authorise, brain, commands, context, h
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
                        settings, skills, stopkey, suggest, tools, waiting, webfetch,
                        websearch, wrap)
+from arty_cli import upkeep
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -468,7 +469,8 @@ def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
 def parse_arguments(argv):
     parser = argparse.ArgumentParser(prog="arty-cli", description="ArtyCode: reads, edits and runs code in the "
                                      "current folder, asking before it changes anything. Runs on your Arty.")
-    parser.add_argument("words", nargs="*", help="`login` to connect to Arty, or a question to ask once")
+    parser.add_argument("words", nargs="*", help="`login` to connect to Arty, `doctor` to check the setup, `update` to "
+                        "get the newest version, or a question to ask once")
     parser.add_argument("-p", "--print", dest="once", help="ask once, print the answer and exit")
     parser.add_argument("--output-format", choices=OUTPUT_FORMATS, default=TEXT_OUTPUT,
                         help="with -p: text (streamed), json (one object with the answer at the end) or "
@@ -1293,7 +1295,10 @@ def saved_conversation(arguments, store: sessions.Store, project: Path, terminal
 
 
 def main(argv=None) -> int:
-    arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    if upkeep.handles(argv):
+        return upkeep.run(argv)
+    arguments = parse_arguments(argv)
     terminal = Terminal()
     try:
         if arguments.words in (["login"], ["setup"]):
