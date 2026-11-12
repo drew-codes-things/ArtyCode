@@ -241,7 +241,7 @@ address never sees it.
 These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `ARTY_API_KEY`,
 `ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`. Two optional limits can be set the same way,
 as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_TOKENS` and
-`ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (12288 tokens unless set, the brain's own default) and the
+`ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (unless set, the size the brain reports in its model list, or 12288 tokens for a brain that doesn't say) and the
 longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops ArtyCode at the start
 with a message saying where to fix it.
 
@@ -412,7 +412,7 @@ show the state.
 ### Long conversations
 
 The conversation size is estimated in tokens, and it is summarised when it no longer leaves room in the model's context
-window (12288 tokens unless `context_tokens` says otherwise) for the tool list and a full reply. `/status` shows the
+window (`context_tokens` if set, otherwise the size the brain reports, otherwise 12288 tokens) for the tool list and a full reply. `/status` shows the
 estimate. A summary in the middle of a request keeps the request itself, the checklist and the changes and commands
 that already ran, then the work carries on; the conversation sent to be summarised has big tool results and file
 contents shortened so it fits. If summarising fails at the start of a request, it carries on unsummarised; if it fails

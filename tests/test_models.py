@@ -246,3 +246,32 @@ def test_a_saved_default_that_was_retired_does_not_count_as_a_choice(tmp_path):
     path.write_text(json.dumps({"model": "arty/qwen3:14b"}))
     assert settings.model_was_chosen(path, environ={})
     assert settings.model_was_chosen(tmp_path / "none.json", environ={"ARTY_CLI_MODEL": "arty/x"})
+
+
+def test_the_context_size_comes_from_the_brain_and_is_asked_for_once():
+    listing = {"object": "list", "data": [{"id": "arty/qwen3:14b", "context_tokens": 24576},
+                                          {"id": "arty/mimo-v2.6:9b", "context_tokens": 24576}]}
+    with serving([(200, json.dumps(listing))], "application/json") as (url, recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
+        sizes = [client.context_tokens(), client.context_tokens()]
+    assert sizes == [24576, 24576]
+    assert [sent["path"] for sent in recorder.requests] == ["/models?all=1"]
+
+
+def test_a_context_size_set_by_hand_wins_over_the_brain():
+    client = brain.Brain(settings.Settings(remote_url="http://127.0.0.1:9/v1", api_key="k", context_tokens="16384"))
+    assert client.context_tokens() == 16384
+
+
+def test_an_older_brain_or_one_that_cannot_be_reached_leaves_the_default():
+    with serving([(200, json.dumps({"data": [{"id": "arty/qwen3:14b"}]}))], "application/json") as (url, _recorder):
+        assert brain.Brain(settings.Settings(remote_url=url, api_key="k")).context_tokens() is None
+    assert brain.Brain(settings.Settings(remote_url="http://127.0.0.1:9/v1", api_key="k")).context_tokens() is None
+
+
+def test_a_failed_look_up_is_tried_again_next_time():
+    listing = {"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576}]}
+    with serving([(500, json.dumps({"error": "down"})), (200, json.dumps(listing))], "application/json") as (url, _recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="k"))
+        assert client.context_tokens() is None
+        assert client.context_tokens() == 24576

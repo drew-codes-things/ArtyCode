@@ -33,6 +33,7 @@ AGENT_MODEL_PREFIXES = (MODEL_PREFIX, OWN_MODEL_PREFIX)
 DOWNLOADED_MODELS = "/models?all=1"
 OFFERED_MODELS = "/models"
 CODING_MARK = "coding"
+CONTEXT_MARK = "context_tokens"
 SKIPPED_GROUPS = "browser,screen,windows,computer,documents"
 DATA_PREFIX = "data: "
 DONE = "data: [DONE]"
@@ -338,6 +339,10 @@ def decoded_lines(response):
         yield raw.decode("utf-8", errors="replace").rstrip("\r\n")
 
 
+def is_token_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 class Brain:
     name = "arty"
 
@@ -347,6 +352,8 @@ class Brain:
         self.route = None
         self.reached = ""
         self.on_thinking = None
+        self.reported_context: int | None = None
+        self.asked_for_context = False
 
     def address(self) -> str:
         return self.route.url if self.route else ""
@@ -448,7 +455,21 @@ class Brain:
         return result
 
     def context_tokens(self) -> int | None:
-        return settings_module.positive_number(self.settings, "context_tokens")
+        chosen = settings_module.positive_number(self.settings, "context_tokens")
+        if chosen:
+            return chosen
+        if not self.asked_for_context:
+            self.ask_for_context()
+        return self.reported_context
+
+    def ask_for_context(self):
+        try:
+            entries = self.model_entries(DOWNLOADED_MODELS, QUICK_LIST_SECONDS)
+        except BrainError:
+            return
+        self.asked_for_context = True
+        sizes = [entry.get(CONTEXT_MARK) for entry in entries if is_token_count(entry.get(CONTEXT_MARK))]
+        self.reported_context = min(sizes, default=None)
 
     def streamed_reply(self, route: Route, body: dict, on_text) -> dict:
         with patient_opener().open(self.request(route, body), timeout=CHAT_CONNECT_SECONDS) as response:
