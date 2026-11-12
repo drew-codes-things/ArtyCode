@@ -15,13 +15,12 @@ from pathlib import Path
 
 from arty_cli import webfetch
 
-DEFAULT_READ_LINES = 2000
+DEFAULT_RESULT_CHARS = 16_000
+AVERAGE_LINE_CHARS = 40
 MAX_LINE_CHARS = 2000
 MAX_LISTED_FILES = 500
 MAX_SEARCH_MATCHES = 200
 MAX_SEARCHED_FILE_BYTES = 2_000_000
-MAX_OUTPUT_CHARS = 20_000
-MAX_READ_CHARS = 60_000
 OUTPUT_HEAD_SHARE = 0.4
 DEFAULT_COMMAND_SECONDS = 120
 MAX_COMMAND_SECONDS = 1800
@@ -130,6 +129,7 @@ class Workspace:
         self.repo_map = None
         self.sandbox = None
         self.rules = None
+        self.result_chars = DEFAULT_RESULT_CHARS
 
     def lint_note(self, path: Path, text: str) -> str:
         if self.lint is None:
@@ -261,33 +261,33 @@ def rendered_cell(number: int, cell: dict) -> str:
     return shown
 
 
-def rendered_notebook(notebook: dict) -> str:
+def rendered_notebook(notebook: dict, limit: int) -> str:
     cells = [rendered_cell(number, cell) for number, cell in enumerate(notebook["cells"], start=1) if isinstance(cell, dict)]
-    return clipped("\n\n".join(cells)) if cells else "The notebook has no cells."
+    return clipped("\n\n".join(cells), limit) if cells else "The notebook has no cells."
 
 
 def is_notebook(path: Path) -> bool:
     return path.suffix.lower() == NOTEBOOK_SUFFIX
 
 
-def read_file(workspace, path, offset=1, limit=DEFAULT_READ_LINES):
+def read_file(workspace, path, offset=1, limit=0):
     target = workspace.resolve(path)
     if is_notebook(target):
-        shown = rendered_notebook(read_notebook(target))
+        shown = rendered_notebook(read_notebook(target), workspace.result_chars)
         workspace.note_seen(target, read_text(target))
         return shown
     whole = read_text(target)
     workspace.note_seen(target, whole)
     lines = whole.splitlines()
     start = max(int(offset), 1)
-    chosen = lines[start - 1:start - 1 + line_count(limit)]
+    chosen = lines[start - 1:start - 1 + line_count(limit, workspace.result_chars)]
     if not chosen and lines:
         raise ToolError(f"{path} has only {len(lines)} lines")
     shown, used = [], 0
     for number, line in enumerate(chosen, start=start):
         entry = f"{number}\t{line[:MAX_LINE_CHARS]}"
-        if shown and used + len(entry) > MAX_READ_CHARS:
-            shown.append(f"... stopped at about {MAX_READ_CHARS} characters; read on with offset={number}")
+        if shown and used + len(entry) > workspace.result_chars:
+            shown.append(f"... stopped at about {workspace.result_chars} characters; read on with offset={number}")
             return "\n".join(shown)
         shown.append(entry)
         used += len(entry) + 1
@@ -298,9 +298,9 @@ def read_file(workspace, path, offset=1, limit=DEFAULT_READ_LINES):
     return "\n".join(shown)
 
 
-def line_count(limit) -> int:
-    asked = int(limit)
-    return asked if asked > 0 else DEFAULT_READ_LINES
+def line_count(limit, result_chars: int) -> int:
+    asked = int(limit or 0)
+    return asked if asked > 0 else max(result_chars // AVERAGE_LINE_CHARS, 1)
 
 
 WRITTEN_OUT_ESCAPES = {"\\n": "\n", "\\t": "\t", '\\"': '"'}
@@ -698,8 +698,8 @@ def search(workspace, pattern, path=".", glob="*"):
             if not expression.search(line):
                 continue
             found = f"{workspace.shown(candidate)}:{number}:{line[:MAX_LINE_CHARS]}"
-            if used + len(found) > MAX_OUTPUT_CHARS:
-                return "\n".join(matches) + f"\n... stopped at about {MAX_OUTPUT_CHARS} characters of matches"
+            if used + len(found) > workspace.result_chars:
+                return "\n".join(matches) + f"\n... stopped at about {workspace.result_chars} characters of matches"
             matches.append(found)
             used += len(found) + 1
             if len(matches) >= MAX_SEARCH_MATCHES:
@@ -707,7 +707,7 @@ def search(workspace, pattern, path=".", glob="*"):
     return "\n".join(matches) if matches else f"No matches for {pattern}"
 
 
-def clipped(output: str, limit: int = MAX_OUTPUT_CHARS) -> str:
+def clipped(output: str, limit: int) -> str:
     if len(output) <= limit:
         return output
     head = int(limit * OUTPUT_HEAD_SHARE)
@@ -775,7 +775,7 @@ def job_of(workspace, job) -> Job:
 def command_output(workspace, job, wait_seconds=DEFAULT_OUTPUT_WAIT_SECONDS):
     running = job_of(workspace, job)
     running.wait_for_end(min(max(float(wait_seconds), 0), workspace.max_command_seconds))
-    return clipped(running.unread()) + f"\n[job {job} {running.state()}]"
+    return clipped(running.unread(), workspace.result_chars) + f"\n[job {job} {running.state()}]"
 
 
 def stop_command(workspace, job):
@@ -783,7 +783,7 @@ def stop_command(workspace, job):
     if running.process.poll() is None:
         stop(running.process)
         running.process.wait()
-    return clipped(running.unread()) + f"\n[job {job} stopped]"
+    return clipped(running.unread(), workspace.result_chars) + f"\n[job {job} stopped]"
 
 
 def todo_write(workspace, items):
@@ -836,12 +836,12 @@ def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, bac
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
         stop(process)
-        return timed_out_note(seconds, most) + clipped(output_after_stop(process))
+        return timed_out_note(seconds, most) + clipped(output_after_stop(process), workspace.result_chars)
     except KeyboardInterrupt:
         stop(process)
         process.wait()
         raise
-    return clipped(output) + f"\n[exit code {process.returncode}]"
+    return clipped(output, workspace.result_chars) + f"\n[exit code {process.returncode}]"
 
 
 HANDLERS = {

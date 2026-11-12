@@ -454,7 +454,7 @@ def test_a_parallel_helpers_question_is_asked_on_the_main_thread_and_a_yes_lets_
 class FloodingHub(StubHub):
     def run(self, name, arguments):
         self.calls.append((name, arguments))
-        return "x" * (agent.MAX_RESULT_CHARS * 3)
+        return "x" * (tools.DEFAULT_RESULT_CHARS * 3)
 
 
 def test_a_huge_tool_result_is_cut_before_it_reaches_the_model(tmp_path):
@@ -463,7 +463,7 @@ def test_a_huge_tool_result_is_cut_before_it_reaches_the_model(tmp_path):
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
                    permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=extras.Extras(hub=FloodingHub()))
     result = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]
-    assert len(result) <= agent.MAX_RESULT_CHARS + 200 and "characters cut" in result
+    assert len(result) <= workspace.result_chars + 200 and "characters cut" in result
 
 
 def test_mcp_calls_that_ran_are_recorded_as_done(tmp_path):

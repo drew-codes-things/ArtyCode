@@ -726,8 +726,14 @@ class Session:
     def remember(self) -> None:
         self.saved.save(self.messages, self.client.model)
 
+    def offered(self) -> list[dict]:
+        return agent.offered_definitions(self.extras)
+
     def compact_limit(self) -> int:
-        return context.compact_limit(self.client, agent.offered_definitions(self.extras))
+        return context.compact_limit(self.client, self.offered())
+
+    def refresh_budget(self) -> None:
+        self.workspace.result_chars = context.result_chars(self.compact_limit())
 
     def is_too_long(self, messages: list[dict]) -> bool:
         return context.estimated_tokens(messages, self.client) > self.compact_limit()
@@ -747,6 +753,7 @@ class Session:
         if allowed is None:
             return False
         self.turn_start, self.compacted_in_turn = len(self.messages), False
+        self.refresh_budget()
         content = mentions.expand(allowed, self.workspace)
         self.messages.append({"role": "user", "content": content})
         self.turns.append(Turn(self.turn_start, len(self.workspace.checkpoints), text, content))
@@ -874,7 +881,25 @@ class Session:
             parts.append(f"{DONE_LEAD}\n" + "\n".join(f"- {step}" for step in self.done[-MAX_LISTED_DONE:]))
         return "\n\n".join(parts)
 
+    def newest_round(self, messages: list[dict]) -> int:
+        start = len(messages)
+        while start > 0 and messages[start - 1].get("role") == "tool":
+            start -= 1
+        return start
+
+    def cut_newest_results(self, messages: list[dict]) -> None:
+        start = self.newest_round(messages)
+        if start == len(messages) or not self.is_too_long(messages):
+            return
+        used = context.estimated_tokens(messages[:start], self.client)
+        share = context.room_chars(self.compact_limit(), used) // (len(messages) - start)
+        for index in range(start, len(messages)):
+            content = str(messages[index].get("content") or "")
+            if len(content) > share:
+                messages[index] = {**messages[index], "content": tools.clipped(content, share)}
+
     def squeeze(self, messages: list[dict]) -> None:
+        self.cut_newest_results(messages)
         if not self.is_too_long(messages):
             return
         instructions = self.compact_instructions(AUTOMATIC)

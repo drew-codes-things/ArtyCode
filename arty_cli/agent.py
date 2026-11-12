@@ -32,7 +32,6 @@ CUT_SHORT, ANNOUNCED, NOT_DONE, ASKED, UNFINISHED = "cut short", "announced", "n
 NUDGES_PER_STRETCH = {CUT_SHORT: 3, ANNOUNCED: 1, NOT_DONE: 1, ASKED: 1, UNFINISHED: 1}
 UNFINISHED_STATUSES = ("pending", "in_progress")
 MAX_EXPLORE_ANSWER_CHARS = 8_000
-MAX_RESULT_CHARS = 60_000
 REFUSED = permissions.REFUSED
 RECORDED_TOOLS = tools.CHANGING_TOOLS + ("run_command",)
 STUCK_NOTE = ("You have made the same tool calls several times in a row with the same results. Don't call them "
@@ -398,7 +397,7 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
     tell(helpers.screen, "show_outcome", *outcome_line(name, result))
     if name == "todo_write" and not result.startswith(ERROR_LEAD):
         tell(helpers.screen, "show_todos", helpers.workspace.todos)
-    result = tools.clipped(result, MAX_RESULT_CHARS)
+    result = tools.clipped(result, helpers.workspace.result_chars)
     if before.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {before.context}"
     after = extras.hook("PostToolUse", {"tool_name": name, "tool_input": arguments, "tool_response": result}, name)

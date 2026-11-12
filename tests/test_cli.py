@@ -323,21 +323,28 @@ class LongReadBrain(FakeBrain):
         self.calls.append([dict(m) for m in messages])
         if messages[-1]["content"] == cli.SUMMARY_REQUEST:
             return {"role": "assistant", "content": "read big.txt so far", "tool_calls": []}
-        if len(self.calls) == 1:
-            read = {"id": "r1", "type": "function", "function": {"name": "read_file",
-                                                                  "arguments": json.dumps({"path": "big.txt"})}}
+        reads = {1: "big.txt", 2: "big2.txt"}
+        if len(self.calls) in reads:
+            read = {"id": f"r{len(self.calls)}", "type": "function", "function": {
+                "name": "read_file", "arguments": json.dumps({"path": reads[len(self.calls)]})}}
             return {"role": "assistant", "content": "", "tool_calls": [read]}
         return super().reply(messages, tools, on_text)
 
 
+def roomy_results(monkeypatch, limit=3_000):
+    monkeypatch.setattr(cli.Session, "compact_limit", lambda self: limit)
+    monkeypatch.setattr(cli.Session, "refresh_budget", lambda self: setattr(self.workspace, "result_chars", 60_000))
+
+
 def test_a_conversation_that_grows_mid_request_is_summarised_before_the_next_step(ready, monkeypatch):
     (ready / "big.txt").write_text("word word word word\n" * 1000)
-    monkeypatch.setattr(cli.Session, "compact_limit", lambda self: 3_000)
+    (ready / "big2.txt").write_text("more more more more\n" * 1000)
+    roomy_results(monkeypatch)
     monkeypatch.setattr(cli.brain, "Brain", LongReadBrain)
     assert cli.main(["-p", "read big.txt"]) == 0
     calls = FakeBrain.made[0].calls
-    assert calls[1][-1]["content"] == cli.SUMMARY_REQUEST
-    after = calls[2]
+    assert calls[2][-1]["content"] == cli.SUMMARY_REQUEST
+    after = calls[3]
     assert [m["role"] for m in after] == ["system", "user"]
     assert "read big.txt so far" in after[1]["content"]
     assert cli.context.estimated_tokens(after, FakeBrain.made[0]) < 3_000
@@ -1093,7 +1100,8 @@ class ChecklistThenLongReadBrain(FakeBrain):
         steps = {1: ("todo_write", {"items": [{"text": "Write app.py", "status": "done"},
                                               {"text": "Try it", "status": "pending"}]}),
                  2: ("write_file", {"path": "app.py", "content": "print('hi')\n"}),
-                 3: ("read_file", {"path": "big.txt"})}
+                 3: ("read_file", {"path": "big.txt"}),
+                 4: ("read_file", {"path": "big2.txt"})}
         if len(self.calls) in steps:
             name, arguments = steps[len(self.calls)]
             made = {"id": f"s{len(self.calls)}", "type": "function",
@@ -1105,8 +1113,9 @@ class ChecklistThenLongReadBrain(FakeBrain):
 
 def squeezed_request(ready, monkeypatch, summary_fails):
     (ready / "big.txt").write_text("word word word word\n" * 1000)
+    (ready / "big2.txt").write_text("more more more more\n" * 1000)
     ChecklistThenLongReadBrain.summary_fails = summary_fails
-    monkeypatch.setattr(cli.Session, "compact_limit", lambda self: 3_000)
+    roomy_results(monkeypatch)
     monkeypatch.setattr(cli.brain, "Brain", ChecklistThenLongReadBrain)
     assert cli.main(["--permission-mode", "allow-all", "-p", "make me an app"]) == 0
     calls = FakeBrain.made[0].calls

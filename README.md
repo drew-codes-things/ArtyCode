@@ -51,7 +51,7 @@ stopping, and Enter on its own just says no. "Always" lasts until you quit: for 
 command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
 written to `.arty/settings.json` as an allow rule (below) for that exact command, that file, that site or that tool, so
 later sessions don't ask either. When no rule fits (a chained command, say), **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
-Every tool result the model sees is cut to 60,000 characters at most.
+Every tool result the model sees is cut to about a quarter of the room the conversation has before it is summarised (about 16,000 characters, or 400 lines of a file, on a 24,576-token window); `read_file` says where to read on, so a long file is read in pages. An `@file` attachment uses the same limit.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project
 without asking, apart from `.arty` and `.git` folders); `plan` (look and plan only, nothing changed or run; `/plan` switches it; when the model has a plan it

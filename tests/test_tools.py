@@ -357,7 +357,7 @@ def test_a_broken_notebook_file_is_reported_not_crashed_on(tmp_path):
 def test_reading_a_huge_file_stops_at_a_size_limit_and_says_where_to_go_on(tmp_path):
     (tmp_path / "big.txt").write_text(("y" * 1000 + "\n") * 1500)
     shown = tools.read_file(tools.Workspace(tmp_path), "big.txt")
-    assert len(shown) <= tools.MAX_READ_CHARS + 200
+    assert len(shown) <= tools.DEFAULT_RESULT_CHARS + 200
     last = int(shown.splitlines()[-2].split("\t")[0])
     assert f"offset={last + 1}" in shown.splitlines()[-1]
 
@@ -385,7 +385,7 @@ def test_search_output_has_a_size_limit(tmp_path):
     for number in range(50):
         (tmp_path / f"f{number}.txt").write_text(("match " + "z" * 1990 + "\n") * 3)
     found = tools.search(tools.Workspace(tmp_path), "match")
-    assert len(found) <= tools.MAX_OUTPUT_CHARS + 200 and "stopped" in found.splitlines()[-1]
+    assert len(found) <= tools.DEFAULT_RESULT_CHARS + 200 and "stopped" in found.splitlines()[-1]
 
 
 def test_windows_stops_jobs_with_the_system_taskkill_not_one_found_nearby(monkeypatch):

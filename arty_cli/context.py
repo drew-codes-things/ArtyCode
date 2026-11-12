@@ -5,6 +5,9 @@ DEFAULT_WINDOW_TOKENS = 12_288
 REPLY_ROOM_TOKENS = 2_048
 SAFETY_SHARE = 0.9
 SMALLEST_SHARE = 0.25
+RESULT_SHARE = 0.25
+SMALLEST_RESULT_CHARS = 2_000
+CUT_RESULT_SHARE = 0.9
 
 
 def counted_part(message: dict):
@@ -39,3 +42,11 @@ def compact_limit(client, offered: list[dict] | None = None) -> int:
     window = window_tokens(client)
     room = int((window - tool_tokens(offered or []) - REPLY_ROOM_TOKENS) * SAFETY_SHARE)
     return max(room, int(window * SMALLEST_SHARE))
+
+
+def result_chars(limit_tokens: int) -> int:
+    return max(SMALLEST_RESULT_CHARS, int(limit_tokens * RESULT_SHARE * CHARS_PER_TOKEN))
+
+
+def room_chars(limit_tokens: int, used_tokens: int) -> int:
+    return max(SMALLEST_RESULT_CHARS, int((limit_tokens - used_tokens) * CHARS_PER_TOKEN * CUT_RESULT_SHARE))

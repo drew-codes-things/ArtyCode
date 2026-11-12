@@ -7,7 +7,6 @@ from arty_cli import tools
 MENTION = re.compile(r"(?<![\w@])@([^\s@]+)")
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 MAX_IMAGE_BYTES = 5_000_000
-MAX_ATTACHED_CHARS = 60_000
 
 
 def mentioned_files(text: str, workspace):
@@ -29,12 +28,12 @@ def image_part(path) -> dict | None:
     return {"type": "image_url", "image_url": {"url": f"data:{kind};base64,{encoded}"}}
 
 
-def text_block(name: str, path) -> str | None:
+def text_block(name: str, path, limit: int) -> str | None:
     try:
         content = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return None
-    return f'<file path="{name}">\n{content[:MAX_ATTACHED_CHARS]}</file>'
+    return f'<file path="{name}">\n{content[:limit]}</file>'
 
 
 def expand(text: str, workspace):
@@ -44,7 +43,7 @@ def expand(text: str, workspace):
         if picture:
             pictures.append(picture)
             continue
-        block = text_block(name, path)
+        block = text_block(name, path, workspace.result_chars)
         if block:
             blocks.append(block)
     combined = "\n\n".join([text, *blocks])
