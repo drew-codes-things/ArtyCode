@@ -1117,13 +1117,21 @@ def unknown_command_note(name: str, choices: dict) -> str:
     return f"Unknown command {name}.{hint} Type /help for the list."
 
 
+def line_from(session, reader, kept: str) -> tuple[str, bool]:
+    terminal, mode, shared = session.terminal, session.gate.mode, bool(session.remote)
+    if not terminal.shows_status():
+        prompt, width = prompt_line.mode_prompt(terminal, mode, shared=shared)
+        return reader.read(prompt, width, kept)
+    prompt, width = prompt_line.box_prompt(terminal)
+    return reader.read(prompt, width, kept, prompt_line.mode_box(terminal, mode, shared))
+
+
 def first_line(session, reader) -> str:
     if reader is None:
         return input(PROMPT)
     kept = ""
     while True:
-        prompt, width = prompt_line.mode_prompt(session.terminal, session.gate.mode, shared=bool(session.remote))
-        kept, wants_next_mode = reader.read(prompt, width, kept)
+        kept, wants_next_mode = line_from(session, reader, kept)
         if not wants_next_mode:
             return kept
         session.gate.mode = prompt_line.next_mode(session.gate.mode)
