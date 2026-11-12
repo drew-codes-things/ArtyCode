@@ -353,7 +353,9 @@ turn it off.
 
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
 long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
-writes), and only five minutes of total silence counts as a lost connection.
+writes), so a long task that keeps sending that line is never cut off. If nothing at all arrives for 120 seconds,
+not even that line (the brain was restarted part way, say), the request ends with "Arty's brain stopped answering"
+instead of waiting forever; send it again once the brain is back.
 
 ### Checks after edits, project map and sandbox
 

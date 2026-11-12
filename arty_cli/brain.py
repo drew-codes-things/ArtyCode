@@ -15,7 +15,10 @@ from arty_cli import settings as settings_module
 
 CONNECT_SECONDS = 3
 CHAT_CONNECT_SECONDS = 30
-SILENCE_SECONDS = 300
+STREAM_IDLE_SECONDS = 120
+STOPPED_ANSWERING = ("Arty's brain stopped answering: nothing came from {url} for {seconds:g} s, not even the line it "
+                     "sends every 15 s to show it is still working. It may have restarted; send the request again "
+                     "once it's back.")
 BUSY_CODES = (429, 503)
 GATEWAY_CODES = (502, 504)
 FAULT_CODES = (500,)
@@ -87,13 +90,13 @@ class BrainFault(BrainError):
 class PatientConnection(http.client.HTTPConnection):
     def connect(self):
         super().connect()
-        self.sock.settimeout(SILENCE_SECONDS)
+        self.sock.settimeout(STREAM_IDLE_SECONDS)
 
 
 class PatientSecureConnection(http.client.HTTPSConnection):
     def connect(self):
         super().connect()
-        self.sock.settimeout(SILENCE_SECONDS)
+        self.sock.settimeout(STREAM_IDLE_SECONDS)
 
 
 class PatientHttp(urllib.request.HTTPHandler):
@@ -490,6 +493,9 @@ class Brain:
             return self.streamed_reply(route, body, on_text)
         except urllib.error.HTTPError:
             raise
+        except TimeoutError:
+            self.route = None
+            raise BrainError(STOPPED_ANSWERING.format(url=route.url, seconds=STREAM_IDLE_SECONDS)) from None
         except (OSError, http.client.HTTPException) as error:
             self.route = None
             raise Dropped(f"Lost the connection to Arty's brain at {route.url} ({plain_reason(error)}). "
