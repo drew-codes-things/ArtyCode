@@ -273,6 +273,14 @@ def test_in_the_interface_the_welcome_goes_above_the_box_and_names_its_own_keys(
     assert "Ctrl-C stops a request" not in shown
 
 
+def test_the_card_says_rules_off_once(interactive, tmp_path):
+    session = session_for(tmp_path)
+    interface = FakeInterface()
+    cli.chat_in_interface(session, interface, share=False)
+    shown = interface.scroll.getvalue()
+    assert "│ rules   off " in shown and "off: off" not in shown
+
+
 def test_help_names_the_keys_of_the_interface(interactive, tmp_path):
     session = session_for(tmp_path)
     session.command("/help")

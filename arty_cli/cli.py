@@ -1363,12 +1363,17 @@ def welcome(session: Session, tips: tuple = WELCOME_TIPS) -> None:
     terminal.note("")
 
 
+def rules_summary(level: str) -> str:
+    meaning = rules.MEANINGS[level]
+    return level if meaning == level else f"{level}: {meaning}"
+
+
 def welcome_card(session: Session, theme: look.Theme, width: int) -> None:
     terminal = session.terminal
     mode = session.gate.mode
     level = rules_level(session.workspace)
     rows = [("model", session.client.model), ("folder", shown_folder(session.workspace.root, Path.home())),
-            ("mode", f"{mode}: {MODE_MEANINGS.get(mode, '')}"), ("rules", f"{level}: {rules.MEANINGS[level]}")]
+            ("mode", f"{mode}: {MODE_MEANINGS.get(mode, '')}"), ("rules", rules_summary(level))]
     for line in look.card(f"{WORDMARK} {__version__}", rows, width, theme):
         terminal.err.write(line + "\n")
     if mode == permissions.ALLOW_ALL:
