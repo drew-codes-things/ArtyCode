@@ -15,11 +15,14 @@ class FakeBridge:
     lost = False
     given_answer = (permissions.YES, PHONE)
     reason = ""
+    title = "repo 2"
 
     def __init__(self, details=None, lines=None):
         self.details = details
         self.lines = lines
         self.sent = []
+        self.history = []
+        self.renamed = []
         self.modes = []
         self.asked = []
         self.stopped = False
@@ -35,6 +38,14 @@ class FakeBridge:
         shared = remote.relay_event(event)
         if shared:
             self.sent.append(shared)
+
+    def send_history(self, events):
+        self.history.extend(events)
+
+    def rename(self, wanted):
+        self.renamed.append(wanted)
+        self.title = f"{wanted} 2"
+        return self.title
 
     def tell_mode(self, mode):
         self.modes.append(mode)
@@ -238,3 +249,56 @@ def test_when_the_brain_turns_sharing_down_it_says_why_and_what_to_do(ready, mon
     chat_with(monkeypatch, "/remote")
     shown = capsys.readouterr().err
     assert next_step in shown and "Remote control stays off." in shown
+
+
+def test_turning_remote_on_sends_the_conversation_so_far_before_anything_new(bridged, monkeypatch):
+    chat_with(monkeypatch, "hello", "/remote", "again")
+    shared = FakeBridge.made[0]
+    assert shared.history == [{"type": "user", "text": "hello", "history": True},
+                              {"type": "assistant", "text": "Hi there.", "history": True}]
+    assert {"type": "user", "text": "again"} in shared.sent
+    assert not any(event.get("text") == "hello" for event in shared.sent)
+
+
+def test_compacting_while_shared_sends_a_marker_with_the_summary(bridged, monkeypatch):
+    chat_with(monkeypatch, "/remote", "hello", "/compact", "again")
+    sent = FakeBridge.made[0].sent
+    marker = next(event for event in sent if event["type"] == "compacted")
+    assert marker == {"type": "compacted", "text": "Hi there."}
+    assert sent.index(marker) < sent.index({"type": "user", "text": "again"})
+
+
+def test_a_chat_compacted_before_sharing_shows_the_marker_in_its_history(bridged, monkeypatch):
+    chat_with(monkeypatch, "hello", "/compact", "/remote")
+    assert FakeBridge.made[0].history == [{"type": "compacted", "text": "Hi there.", "history": True}]
+
+
+def test_the_chat_is_shared_under_the_title_the_brain_gave_this_terminal(bridged, monkeypatch, capsys):
+    chat_with(monkeypatch, "/remote", "/status")
+    err = capsys.readouterr().err
+    assert 'shared as "repo 2"' in err
+    assert 'Remote control: on as "repo 2"' in err
+
+
+def test_remote_name_renames_this_terminal_for_the_other_devices(bridged, monkeypatch, capsys):
+    chat_with(monkeypatch, "/remote name docs work", "/remote", "/remote name docs work", "/remote name", "/status")
+    err = capsys.readouterr().err
+    assert FakeBridge.made[0].renamed == ["docs work"]
+    assert cli.REMOTE_NAME_NEEDS_SHARING in err and cli.REMOTE_NAME_USAGE in err
+    assert 'Remote control: on as "docs work 2"' in err
+
+
+def test_end_to_end_a_saved_chat_reaches_the_relay_whole_then_live_then_compacted(ready, monkeypatch):
+    from tests import fake_relay
+    with fake_relay.Relay() as running:
+        running.title = "project 2"
+        monkeypatch.setattr(cli.remote, "relay_for", lambda client: remote.Relay(running.url, {"Authorization": "Bearer k"}))
+        monkeypatch.setattr(cli.remote, "answer_lines", lambda is_interactive: None)
+        assert chat_with(monkeypatch, "first question", "/remote", "second question", "/compact", "third question") == 0
+    kinds = [(event["type"], event.get("history", False)) for event in running.events]
+    assert kinds[:2] == [("user", True), ("assistant", True)]
+    assert [event["text"] for event in running.events if event["type"] == "user"] == [
+        "first question", "second question", "third question"]
+    live = [kind for kind, history in kinds if not history]
+    assert live.index("compacted") > live.index("user") and live[-2:] == ["user", "assistant"]
+    assert running.created[0]["folder"] == ready.name and running.ended

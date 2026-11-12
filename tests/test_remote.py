@@ -443,3 +443,68 @@ def test_an_unreachable_relay_is_described_without_python_internals():
                                                (404, "/remote starts"), (410, "/remote starts")])
 def test_why_a_relay_refusal_happened_comes_with_the_next_step(status, next_step):
     assert next_step in remote.next_step(status)
+
+
+TALK = [
+    {"role": "system", "content": "You are Arty."},
+    {"role": "user", "content": "fix the greet test"},
+    {"role": "assistant", "content": None,
+     "tool_calls": [{"id": "c1", "function": {"name": "read_file", "arguments": '{"path": "greet.py"}'}}]},
+    {"role": "tool", "tool_call_id": "c1", "content": "def greet(name): ..."},
+    {"role": "assistant", "content": "Fixed the typo."},
+]
+LEADS = ("Summary so far:", "Cleared to make room.")
+
+
+def test_the_conversation_so_far_becomes_history_events_in_order():
+    assert remote.history_events(TALK, LEADS, "Got it.") == [
+        {"type": "user", "text": "fix the greet test", "history": True},
+        {"type": "tool_call", "tool": "read_file", "text": '{"path": "greet.py"}', "history": True},
+        {"type": "tool_result", "tool": "read_file", "text": "def greet(name): ...", "history": True},
+        {"type": "assistant", "text": "Fixed the typo.", "history": True},
+    ]
+
+
+def test_a_summary_in_the_conversation_becomes_a_compacted_marker_without_its_stock_reply():
+    talk = [{"role": "system", "content": "You are Arty."},
+            {"role": "user", "content": "Summary so far:\nWe fixed greet()."},
+            {"role": "assistant", "content": "Got it."},
+            {"role": "user", "content": [{"type": "text", "text": "now the docs"}, {"type": "image_url", "image_url": {}}]},
+            {"role": "user", "content": "Cleared to make room.\n\nThe request: docs"}]
+    assert remote.history_events(talk, LEADS, "Got it.") == [
+        {"type": "compacted", "text": "We fixed greet().", "history": True},
+        {"type": "user", "text": "now the docs", "history": True},
+        {"type": "compacted", "text": "Cleared to make room.\n\nThe request: docs", "history": True},
+    ]
+
+
+def test_a_compaction_while_shared_is_passed_on_as_a_marker_with_the_summary():
+    assert remote.relay_event(remote.compacted_event("Summary so far:\nWe fixed greet().", LEADS)) == {
+        "type": "compacted", "text": "We fixed greet()."}
+
+
+def test_earlier_text_and_live_text_are_never_merged_into_one_event():
+    batches = remote.batched([{"type": "assistant", "text": "old", "history": True},
+                              {"type": "assistant", "text": " more", "history": True},
+                              {"type": "assistant", "text": "new"}])
+    assert batches == [[{"type": "assistant", "text": "old more", "history": True}, {"type": "assistant", "text": "new"}]]
+
+
+def test_starting_takes_the_title_the_brain_gave_and_sends_the_history_first(relay):
+    relay.title = "repo 2"
+    bridge = remote.Bridge(relay_client(relay))
+    bridge.start({"name": "laptop"})
+    bridge.send_history(remote.history_events(TALK, LEADS, "Got it."))
+    bridge.send({"type": "user", "text": "next"})
+    bridge.stop()
+    assert bridge.title == "repo 2"
+    assert [event.get("history", False) for event in relay.events] == [True, True, True, True, False]
+    assert relay.events[-1] == {"type": "user", "text": "next"}
+
+
+def test_a_terminal_can_be_renamed_and_keeps_the_name_the_brain_settled_on(relay):
+    bridge = remote.Bridge(relay_client(relay))
+    bridge.start({"name": "laptop"})
+    assert bridge.rename("docs") == "docs 2"
+    bridge.stop()
+    assert relay.renamed == ["docs"] and bridge.title == "docs 2"

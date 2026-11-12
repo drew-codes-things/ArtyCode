@@ -150,7 +150,11 @@ REMOTE_RULES = "  A phone needs its Arty CLI switch on to see it. /remote off st
 REMOTE_ANSWER_HINT = "  Or answer Allow or Deny on another device."
 REMOTE_OFF = "Remote control is off; this session is no longer shared."
 REMOTE_ALREADY_ON = "Remote control is already on. /remote off stops it."
-REMOTE_USAGE = "Use /remote to share this session, or /remote off to stop."
+REMOTE_USAGE = "Use /remote to share this session, /remote name <new name> to rename it, or /remote off to stop."
+REMOTE_NAME_USAGE = "Give the new name: /remote name <new name>."
+REMOTE_NAME_NEEDS_SHARING = "Turn remote control on with /remote first, then rename it."
+REMOTE_NAME = "name"
+SUMMARY_LEADS = (SUMMARY_LEAD, NO_SUMMARY_LEAD)
 REMOTE_ONLY_IN_CHAT = "--remote works in the chat, not with a single question."
 
 
@@ -797,6 +801,7 @@ class Session:
         self.turns = []
         self.turn_start, self.compacted_in_turn = len(messages) - 1, True
         self.remember()
+        self.tell_remote(remote.compacted_event(carry_on, SUMMARY_LEADS))
 
     def compact(self, trigger: str = MANUAL) -> bool:
         instructions = self.compact_instructions(trigger)
@@ -807,6 +812,7 @@ class Session:
                                         {"role": "assistant", "content": SUMMARY_ACK}]
         self.turns = []
         self.remember()
+        self.tell_remote(remote.compacted_event(summary, SUMMARY_LEADS))
         return True
 
     def run_shell(self, command: str) -> None:
@@ -923,6 +929,8 @@ class Session:
             self.start_remote()
         elif choice == "off":
             self.stop_remote()
+        elif choice.split()[0] == REMOTE_NAME:
+            self.rename_remote(choice[len(REMOTE_NAME):].strip())
         else:
             self.terminal.note(REMOTE_USAGE, "error")
 
@@ -942,10 +950,26 @@ class Session:
             self.terminal.note(f"{error} Remote control stays off.", "error")
             return
         self.remote = self.terminal.remote = self.terminal.events = bridge
-        self.remote_name = details["name"]
-        self.terminal.note(f'{REMOTE_ON_LEAD}: this chat is shared as "{self.remote_name}".', "accent")
+        self.remote_name = bridge.title or details["name"]
+        bridge.send_history(remote.history_events(self.messages, SUMMARY_LEADS, SUMMARY_ACK))
+        computer = "" if self.remote_name == details["name"] else f" from {details['name']}"
+        self.terminal.note(f'{REMOTE_ON_LEAD}: this chat is shared as "{self.remote_name}"{computer}.', "accent")
         self.terminal.note(REMOTE_OPEN_IN)
         self.terminal.note(REMOTE_RULES)
+
+    def rename_remote(self, wanted: str) -> None:
+        if not self.remote:
+            self.terminal.note(REMOTE_NAME_NEEDS_SHARING)
+            return
+        if not wanted:
+            self.terminal.note(REMOTE_NAME_USAGE, "error")
+            return
+        try:
+            self.remote_name = self.remote.rename(wanted)
+        except remote.RelayError as error:
+            self.terminal.note(f"{error}. The name stays \"{self.remote_name}\".", "error")
+            return
+        self.terminal.note(f'{REMOTE_ON_LEAD}: this chat is now shared as "{self.remote_name}".', "accent")
 
     def stop_remote(self) -> None:
         if not self.remote:

@@ -222,7 +222,7 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/review` | Review the uncommitted changes |
 | `/compact` | Swap the conversation for a summary (also done automatically when it gets long) |
 | `/mcp`, `/skills`, `/helpers`, `/hooks` | What's set up of each (below) |
-| `/remote`, `/remote off` | Share this chat with the Arty apps and starfire.ai, or stop sharing (below) |
+| `/remote`, `/remote name <new name>`, `/remote off` | Share this chat with the Arty apps and starfire.ai, rename it there, or stop sharing (below) |
 | `/rules`, `/rules on`, `/rules tell-only`, `/rules off` | Show or change the built-in working rules for this session (below) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |
 | `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/exit` | The rest |
@@ -359,6 +359,16 @@ it answers 500, it is tried three times in all before the error is shown.
 iPhone (**More > Computers**) and starfire.ai's admin **Arty CLI** page can follow it and steer it. The computer opens
 no port: it sends what happens to the brain and asks the brain for anything sent back. `/remote off` stops sharing,
 and so does leaving arty-cli.
+
+Sharing sends the whole conversation so far first (a chat you resumed, or one you had been working in for a while),
+so the other device opens on everything up to now and then follows live. When the conversation is summarised to
+free up room, by `/compact` or automatically, the other device shows a "Conversation compacted" marker that opens
+to the summary Arty carries on from, and the chat keeps working. The brain keeps the newest 2000 events of a shared
+chat (about 2 MB of text); anything older than that is dropped there, never on the computer.
+
+Several terminals can be shared at once. Each one is listed under its own name: the project folder, with a number
+added when another shared terminal already has that name (`greeter`, `greeter 2`). `/remote name <new name>` gives
+this terminal a name of your choice.
 
 Turning it on says the name the chat is shared as and where to open it, and reminds you that a phone's device key
 needs its **Arty CLI** switch on. While it is on, the prompt reads `default · remote ›` and `/status` says
