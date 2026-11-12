@@ -325,9 +325,22 @@ def parse_arguments(argv):
     return parser.parse_args(argv)
 
 
-NO_ADDRESS = ("arty-cli doesn't know where your Arty is yet. Set ARTY_URL (on your home network) or ARTY_REMOTE_URL "
-              "(from anywhere, with ARTY_ACCESS_CLIENT_ID and ARTY_ACCESS_CLIENT_SECRET if Cloudflare Access guards it), "
-              "then run arty login again. Nothing was saved.")
+NO_ADDRESS = ("arty-cli doesn't know where your Arty brain is yet, so nothing was saved. Set its address, then run "
+              "arty-cli login again:")
+HOME_ADDRESS = "http://<brain address>:8081/v1"
+ANYWHERE_ADDRESS = "https://<your address>/v1"
+ACCESS_NOTE = "with ARTY_ACCESS_CLIENT_ID and ARTY_ACCESS_CLIENT_SECRET too if Cloudflare Access guards it"
+
+
+def address_help(windows: bool) -> str:
+    if windows:
+        home, anywhere = f'$env:ARTY_URL = "{HOME_ADDRESS}"', f'$env:ARTY_REMOTE_URL = "{ANYWHERE_ADDRESS}"'
+        keep = f'To keep it for new terminals: setx ARTY_URL "{HOME_ADDRESS}"'
+    else:
+        home, anywhere = f"export ARTY_URL={HOME_ADDRESS}", f"export ARTY_REMOTE_URL={ANYWHERE_ADDRESS}"
+        keep = "To keep it, add the line to ~/.bashrc."
+    return "\n".join((NO_ADDRESS, f"  At home:        {home}", f"  From anywhere:  {anywhere}",
+                      f"                  {ACCESS_NOTE}", f"  {keep}"))
 
 
 def knows_where_arty_is(current: settings.Settings) -> bool:
@@ -383,7 +396,10 @@ def chosen_login(terminal: Terminal):
 def login(terminal: Terminal) -> int:
     current = settings.load()
     if not knows_where_arty_is(current):
-        terminal.note(NO_ADDRESS, "error")
+        first, *rest = address_help(os.name == "nt").splitlines()
+        terminal.note(first, "error")
+        for line in rest:
+            terminal.note(line, "reset")
         return FAILED
     handler = chosen_login(terminal)
     try:
@@ -979,15 +995,16 @@ def talk(session: Session, reader) -> None:
             return
 
 
-def ready_settings(arguments, terminal: Terminal):
+def ready_settings(arguments, terminal: Terminal) -> tuple[settings.Settings, bool]:
     config = settings.load()
-    if not config.is_ready() and is_interactive():
+    tried_login = not config.is_ready() and is_interactive()
+    if tried_login:
         terminal.note("First run: choose how arty-cli connects.", "accent")
         login(terminal)
         config = settings.load()
     if arguments.model:
         config = replace(config, model=arguments.model)
-    return config
+    return config, tried_login
 
 
 def saved_conversation(arguments, store: sessions.Store, project: Path, terminal: Terminal):
@@ -1007,9 +1024,10 @@ def main(argv=None) -> int:
     try:
         if arguments.words in (["login"], ["setup"]):
             return login(terminal)
-        config = ready_settings(arguments, terminal)
+        config, tried_login = ready_settings(arguments, terminal)
         if not config.is_ready():
-            terminal.note("arty-cli isn't logged in to Arty yet. Run `arty-cli login` first.", "error")
+            if not tried_login:
+                terminal.note("arty-cli isn't logged in to Arty yet. Run `arty-cli login` first.", "error")
             return NOT_SET_UP
         workspace = tools.Workspace(arguments.project or Path.cwd())
         try:

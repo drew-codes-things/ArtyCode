@@ -147,6 +147,35 @@ def test_login_without_a_known_address_says_how_to_set_one_and_asks_nothing(monk
     assert not settings.config_path().exists()
 
 
+@pytest.mark.parametrize("windows, home, anywhere, keep", [
+    (False, "export ARTY_URL=http://", "export ARTY_REMOTE_URL=https://", "~/.bashrc"),
+    (True, '$env:ARTY_URL = "http://', '$env:ARTY_REMOTE_URL = "https://', "setx ARTY_URL"),
+])
+def test_the_address_help_shows_lines_to_copy_for_this_kind_of_shell(windows, home, anywhere, keep):
+    shown = cli.address_help(windows)
+    assert home in shown and anywhere in shown and keep in shown
+    assert "arty-cli login" in shown.splitlines()[0]
+
+
+def test_login_without_a_known_address_shows_the_lines_for_this_computer(monkeypatch, tmp_path, capsys):
+    login_with(monkeypatch, tmp_path, [], [], expected=cli.FAILED)
+    assert cli.address_help(cli.os.name == "nt") in capsys.readouterr().err.replace(cli.COLOURS["reset"], "")
+
+
+def test_a_first_run_without_an_address_says_it_once(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))
+    for name in CONNECTION_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail(f"asked {prompt!r}"))
+    assert cli.main([]) == cli.NOT_SET_UP
+    shown = capsys.readouterr().err
+    assert "ARTY_URL" in shown
+    assert shown.count("arty-cli login") == 1
+    assert "isn't logged in" not in shown
+
+
 def test_a_failed_browser_login_saves_nothing(monkeypatch, tmp_path, capsys):
     def refused(url, headers, name=""):
         raise authorise.AuthoriseError("This Arty is too old to authorise devices.")

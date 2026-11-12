@@ -143,14 +143,19 @@ With [pipx](https://pipx.pypa.io) instead: `pipx install .`
 
 ## Logging in
 
-`arty login` (or `arty-cli login`) offers exactly two ways in:
+Login never asks for the brain's address: it comes from the saved settings or the environment, `ARTY_URL` for the
+address on your network (`http://<AI_ADDRESS>:8081/v1`) and `ARTY_REMOTE_URL` for the address from anywhere
+(`https://<your address>/v1`, with `ARTY_ACCESS_CLIENT_ID` and `ARTY_ACCESS_CLIENT_SECRET` if Cloudflare Access guards
+it). When neither is known, `arty login` (and the first run) shows the lines to copy for your shell (`export` on Linux,
+`$env:` and `setx` in PowerShell) and saves nothing.
 
-1. **API key.** The brain's address on your network (`http://<AI_ADDRESS>:8081/v1`), optionally the address from
-   anywhere (`https://<your address>/v1`) with its Cloudflare Access client id and secret, and an Arty API key.
-2. **Browser login.** Give the addresses as above, then arty-cli shows a short code and opens Arty in your browser.
-   Approve it there and arty-cli receives a key of its own for this computer. From outside your home network this
-   needs the Cloudflare Access id and secret first. Plain `http://` is only accepted for an address on your own
-   network; a public address has to use https.
+`arty login` (or `arty-cli login`) then offers exactly two ways in:
+
+1. **API key.** Paste an Arty API key.
+2. **Browser login.** arty-cli shows a short code and opens Arty in your browser. Approve it there and arty-cli
+   receives a key of its own for this computer. From outside your home network this needs the Cloudflare Access id
+   and secret first. Plain `http://` is only accepted for an address on your own network; a public address has to
+   use https.
 
 Everything is saved to `~/.config/arty-cli/config.json` (`%APPDATA%\arty-cli\config.json` on Windows), readable only
 by you. For Arty the home address is tried first, then the other. Before the key is sent to a plain `http://` home
