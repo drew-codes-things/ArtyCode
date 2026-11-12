@@ -216,6 +216,7 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/compact` | Swap the conversation for a summary (also done automatically when it gets long) |
 | `/mcp`, `/skills`, `/helpers`, `/hooks` | What's set up of each (below) |
 | `/remote`, `/remote off` | Share this chat with the Arty apps and starfire.ai, or stop sharing (below) |
+| `/rules`, `/rules on`, `/rules tell-only`, `/rules off` | Show or change the built-in working rules for this session (below) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |
 | `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/exit` | The rest |
 
@@ -265,6 +266,46 @@ It is off by default. When it can't run (no `bwrap`, or a container that blocks 
 without it; `"sandbox": "required"` refuses commands instead. A trusted project's `.arty/settings.json` can switch
 the sandbox on or make it required, never off, and can't turn the network on. Helpers' commands and the ones you type
 after `!` run in the sandbox too; hooks and MCP servers don't.
+
+### Built-in working rules
+
+Out of the box Arty works by a short set of engineering rules, added to what the model is told (about 2,000
+characters: 462 tokens for qwen3:14b, 473 for mimo-v2.6:9b):
+
+- read the code and its callers first, match the project's patterns, make the smallest change, never make things up;
+- no comments or docstrings in code it writes (shebangs, encoding lines, lint or type suppressions and license headers
+  are fine), and never the em dash character;
+- ask before anything destructive, otherwise decide, note the assumption and carry on;
+- nothing is done until a test, build, lint or run shows it, or the report says `UNVERIFIED`;
+- keep a scratchpad in `.arty/scratchpad.md` and add an entry to the end of `.arty/history.md` for each task that
+  changes files, then report with Outcome, Changed, Verification, Assumptions and Open items.
+
+They are also checked, not only told:
+
+- After every `write_file`, `edit_file`, `multi_edit` or `notebook_edit`, the lines that request added are checked for
+  comments (Python, shell and other `#` languages, and the `//` and `/* */` family: JavaScript, TypeScript, Go, Rust,
+  C, Java, Kotlin, Swift, C#, CSS and more) and for em dashes (in any file). The tool result names each line to fix.
+- When the model says it has finished a request that changed files, it is sent back if comments or em dashes it added
+  are still there (up to three times), once if nothing was run to check the work after the last change (a test,
+  build, lint or the program; looking around with `ls`, `cat` or `git` doesn't count) and the report doesn't say
+  `UNVERIFIED` (a command that wasn't found doesn't count), and once more if no entry was added to
+  `.arty/history.md`. Those two are asked for one at a time, and every send-back ends with the report shape.
+
+Arty writes `.arty/scratchpad.md` and `.arty/history.md` without asking, and `.arty/history.md` only at its end:
+a change that alters an earlier entry is refused. Everything else under `.arty` is still asked about every time, and
+plan mode still changes nothing. The scratchpad is working state, so leave it out of commits (add
+`.arty/scratchpad.md` to `.gitignore` if you like); the history is meant to be kept.
+
+A project's `ARTY.md` or `AGENTS.md` comes after the rules and wins where they differ. To change them:
+
+| Where | Setting |
+|---|---|
+| `settings.json` in the config folder (or a trusted project's `.arty/settings.json`) | `"builtInRules": true` (the default), `"tell-only"` (told, not checked) or `false` |
+| One run | `arty --rules on`, `--rules tell-only` or `--rules off` |
+| This session | `/rules on`, `/rules tell-only`, `/rules off`; `/rules` alone shows the state |
+
+A project's settings can turn the rules down but not back on; the command line wins for that run. The welcome lines
+show the state.
 
 ### Long conversations
 
