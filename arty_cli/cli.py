@@ -116,10 +116,15 @@ ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "n
 SAVE_ANSWERS = {"s": permissions.SAVE, "save": permissions.SAVE}
 PLAN_ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "a": permissions.ALWAYS, "auto": permissions.ALWAYS,
                 "n": permissions.NO, "no": permissions.NO}
-PLAN_QUESTION = "Approve the plan? [y]es / [a]pprove and auto-accept edits / [n]o, keep planning: "
+PLAN_QUESTION = "Approve the plan?"
+PLAN_CHOICES = (("y", "Yes, carry it out, asking before each change"),
+                ("a", "Yes, and make its edits without asking (auto-edit)"),
+                ("n", "No, keep planning"))
 PLAN_FEEDBACK_QUESTION = "What should change? (Enter to skip) "
-CHOICES = "[y]es / [n]o / [a]lways"
-SAVE_CHOICE = "[s]ave as a project rule"
+YES_CHOICE = ("y", "Yes")
+ALWAYS_CHOICE = ("a", "Yes, and don't ask again for this until you quit")
+SAVE_CHOICE = ("s", "Yes, and save it as an allow rule for this project")
+NO_CHOICE = ("n", "No")
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT = "text", "json", "stream-json"
 OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT)
@@ -240,8 +245,16 @@ class Terminal:
         if preview:
             self.show_diff(preview)
         answers = {**ANSWERS, **SAVE_ANSWERS} if self.offers_rules else ANSWERS
-        choices = f"{CHOICES} / {SAVE_CHOICE}" if self.offers_rules else CHOICES
-        return self.answer(f"{question} {choices}: ", answers, question, preview)[0]
+        saving = (SAVE_CHOICE,) if self.offers_rules else ()
+        prompt = self.show_choices(question, (YES_CHOICE, ALWAYS_CHOICE, *saving, NO_CHOICE))
+        return self.answer(prompt, answers, question, preview)[0]
+
+    def show_choices(self, question: str, choices: tuple) -> str:
+        self.note(question, "accent")
+        for key, meaning in choices:
+            self.note(f"  {self.paint(key, 'accent')}  {meaning}", "reset")
+        keys = [key for key, _meaning in choices]
+        return f"Choose {', '.join(keys[:-1])} or {keys[-1]}: "
 
     def answer(self, prompt: str, answers: dict, question: str, details: str = "") -> tuple[str, str]:
         if self.remote:
@@ -268,7 +281,8 @@ def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
     terminal.end_line()
     terminal.note("Arty's plan:", "accent")
     terminal.err.write(plan.rstrip() + "\n")
-    choice, by = terminal.answer(PLAN_QUESTION, PLAN_ANSWERS, "Approve the plan?", plan)
+    prompt = terminal.show_choices(PLAN_QUESTION, PLAN_CHOICES)
+    choice, by = terminal.answer(prompt, PLAN_ANSWERS, PLAN_QUESTION, plan)
     if choice != permissions.NO or by or not is_interactive():
         return choice, ""
     return permissions.NO, terminal.asked(PLAN_FEEDBACK_QUESTION).strip()

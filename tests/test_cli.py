@@ -653,7 +653,7 @@ def test_saving_an_answer_as_a_rule_keeps_the_folder_trusted(ready, monkeypatch,
     answers = iter(["y", "s"])
     monkeypatch.setattr("builtins.input", lambda prompt="": prompts_seen.append(prompt) or next(answers))
     assert cli.main(["-p", "make the file"]) == 0
-    assert "[s]ave" in prompts_seen[-1]
+    assert prompts_seen[-1] == "Choose y, a, s or n: "
     table = json.loads((ready / ".arty" / "settings.json").read_text())
     assert table["permissions"]["allow"] == ["run_command(touch made.txt)"]
     assert "run_command(touch made.txt)" in capsys.readouterr().err
@@ -975,3 +975,48 @@ def test_steps_go_to_standard_error_so_a_one_shot_answer_stays_plain(ready, monk
     shown = capsys.readouterr()
     assert shown.out == "Looking. \nHi there.\n"
     assert f"{cli.STEP_MARK} Read a.py" in shown.err and "1 line" in shown.err
+
+
+def asked_with(monkeypatch, *typed):
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    prompts_seen, answers = [], iter(typed)
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts_seen.append(prompt) or next(answers))
+    err = io.StringIO()
+    return cli.Terminal(io.StringIO(), err), err, prompts_seen
+
+
+def test_a_question_lists_each_answer_on_its_own_line_with_its_key(monkeypatch):
+    terminal, err, prompts_seen = asked_with(monkeypatch, "a")
+    assert terminal.ask("Run: make deploy") == cli.permissions.ALWAYS
+    rows = err.getvalue().splitlines()
+    assert rows[0] == "Run: make deploy"
+    assert [row.split()[0] for row in rows[1:]] == ["y", "a", "n"]
+    assert rows[1].split(maxsplit=1)[1] == "Yes"
+    assert "don't ask again" in rows[2]
+    assert prompts_seen == ["Choose y, a or n: "]
+
+
+def test_in_a_trusted_project_the_question_also_offers_saving_a_rule(monkeypatch):
+    terminal, err, prompts_seen = asked_with(monkeypatch, "s")
+    terminal.offers_rules = True
+    assert terminal.ask("Edit a.py?") == cli.permissions.SAVE
+    keys = [row.split()[0] for row in err.getvalue().splitlines()[1:]]
+    assert keys == ["y", "a", "s", "n"]
+    assert prompts_seen == ["Choose y, a, s or n: "]
+
+
+def test_an_answer_that_is_not_offered_asks_again_with_the_same_choices(monkeypatch):
+    terminal, err, prompts_seen = asked_with(monkeypatch, "maybe", "yes")
+    assert terminal.ask("Run: ls") == cli.permissions.YES
+    assert prompts_seen == ["Choose y, a or n: "] * 2
+
+
+def test_a_plan_is_approved_from_a_menu_with_keys(monkeypatch):
+    terminal, err, prompts_seen = asked_with(monkeypatch, "a")
+    assert cli.plan_review(terminal, "1. Fix it.") == (cli.permissions.ALWAYS, "")
+    rows = err.getvalue().splitlines()
+    question = rows.index("Approve the plan?")
+    assert [row.split()[0] for row in rows[question + 1:]] == ["y", "a", "n"]
+    assert "auto-edit" in rows[question + 2]
+    assert prompts_seen == ["Choose y, a or n: "]
