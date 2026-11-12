@@ -58,6 +58,8 @@ COMMAND_PARTS = re.compile(r"[;&|\n]+")
 SETTINGS_FILE = "settings.json"
 PROJECT_SETTINGS = Path(".arty") / SETTINGS_FILE
 PATH_TOOLS = ("read_file", "write_file", "edit_file", "multi_edit", "notebook_edit", "search")
+PROTECTED_FOLDERS = (".arty", ".git")
+PROTECTED_NOTE = "it is part of the project's arty-cli or git setup, which can run programs"
 PLAN_REFUSAL = ("Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan "
                 "step by step with present_plan so the user can approve it and switch plan mode off.")
 PLAN_TOOL = "present_plan"
@@ -330,6 +332,10 @@ class RuleFile:
         return True
 
 
+def is_protected_place(path: Path, root: Path) -> bool:
+    return path.is_relative_to(root) and any(part.lower() in PROTECTED_FOLDERS for part in path.relative_to(root).parts)
+
+
 def diff_preview(workspace, name: str, arguments: dict) -> str:
     try:
         path, before, after = tools.planned_change(name, arguments, workspace)
@@ -375,6 +381,19 @@ class Gate:
             return not self.workspace.contains(str(path))
         except tools.ToolError:
             return False
+
+    def protects(self, arguments: dict) -> bool:
+        path = str(arguments.get("path") or "")
+        if not path:
+            return False
+        root = self.workspace.root
+        as_written = Path(os.path.normpath(root / os.path.expanduser(path)))
+        return any(is_protected_place(candidate, root) for candidate in (as_written, self.workspace.resolve(path)))
+
+    def confirm_protected_change(self, name: str, arguments: dict) -> str | None:
+        verb = "Write" if name == "write_file" else "Edit"
+        question = f"{verb} {arguments.get('path')}? ({PROTECTED_NOTE})"
+        return None if self.ask(question, diff_preview(self.workspace, name, arguments)) in AGREEING else REFUSED
 
     def reaches_outside(self, path: str) -> bool:
         if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path):
@@ -431,6 +450,8 @@ class Gate:
             return denied
         if self.mode == ALLOW_ALL or name in FREE_TOOLS:
             return None
+        if name in tools.CHANGING_TOOLS and self.mode != PLAN and self.protects(arguments):
+            return self.confirm_protected_change(name, arguments)
         if self.rule_allows(name, arguments) and (self.mode != PLAN or not self.changes_things(name, arguments)):
             return None
         if name in READING_TOOLS:

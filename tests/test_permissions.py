@@ -487,3 +487,33 @@ def test_a_plan_outside_plan_mode_or_without_steps_is_an_error(mode, plan, probl
     result = gate.review_plan(plan)
     assert result.startswith("Error") and problem in result
     assert ask.questions == [] and gate.mode == mode
+
+
+PROTECTED_PATHS = [".arty/settings.json", ".arty/mcp.json", ".arty/helpers/x.md", ".git/hooks/pre-commit", ".git/config",
+                   "vendor/lib/.git/hooks/post-checkout", ".GIT/config"]
+
+
+@pytest.mark.parametrize("path", PROTECTED_PATHS)
+def test_setup_and_git_files_are_always_asked_about_even_in_auto_edit(workspace, path):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask, mode=permissions.AUTO_EDIT)
+    assert gate.check("write_file", {"path": path, "content": "{}"}) == permissions.REFUSED
+    assert len(ask.questions) == 1 and path in ask.questions[0][0]
+
+
+def test_setup_files_are_asked_about_after_always_and_a_saved_rule(workspace):
+    ask = Asker(permissions.ALWAYS, "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.rules = permissions.Rules(allow=["write_file(*)", "write_file(.arty/*)"], deny=[])
+    assert gate.allows("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"})
+    assert gate.allows("write_file", {"path": "b.py", "content": ""})
+    assert not gate.allows("write_file", {"path": ".arty/settings.json", "content": "{}"})
+    assert len(ask.questions) == 2
+
+
+def test_a_yes_to_a_setup_file_is_for_that_one_change_only(workspace):
+    gate, told = saving_gate(workspace, permissions.SAVE, permissions.ALWAYS, "n")
+    assert gate.allows("write_file", {"path": ".git/hooks/pre-commit", "content": ""})
+    assert gate.allows("write_file", {"path": ".git/hooks/pre-push", "content": ""})
+    assert not gate.allows("write_file", {"path": ".git/hooks/pre-commit", "content": ""})
+    assert not (workspace.root / permissions.PROJECT_SETTINGS).exists() and told == []
