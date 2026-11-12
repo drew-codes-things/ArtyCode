@@ -30,7 +30,7 @@ SUMMARY_LEAD = "Summary of our conversation so far:"
 SUMMARY_ACK = "Got it, carrying on from there."
 CARRY_ON = "Carry on with the work from there."
 STOPPED = "That request stopped before it finished."
-TRUST_QUESTION = ("This folder has its own Arty setup: notes Arty would follow (ARTY.md), /commands, skills, helpers, "
+TRUST_QUESTION = ("This folder has its own Arty setup: notes Arty would follow (ARTY.md or AGENTS.md), /commands, skills, helpers, "
                   "or hooks and MCP servers that run programs on this computer. Only say yes if you trust whoever wrote them. "
                   "Trust this folder? [y/n]: ")
 CHANGED_QUESTION = ("This folder's hooks, MCP servers or permission rules (.arty/settings.json, .arty/mcp.json) "
@@ -314,7 +314,7 @@ def stopped_note(done: list[str]) -> str:
 
 def has_project_setup(workspace) -> bool:
     root = workspace.root
-    return ((root / memory.MEMORY_FILE).is_file() or (root / commands.PROJECT_COMMANDS).is_dir()
+    return (bool(memory.project_note_files(root)) or (root / commands.PROJECT_COMMANDS).is_dir()
             or (root / skills.PROJECT_SKILLS).is_dir() or (root / helpers.PROJECT_HELPERS).is_dir()
             or (root / hooks.PROJECT_FOLDER / hooks.SETTINGS_FILE).is_file()
             or (root / mcp.PROJECT_FILE).is_file())
@@ -339,7 +339,7 @@ def project_notes_allowed(workspace, personal: Path, terminal: Terminal) -> bool
         return True
     if not is_interactive():
         reason = "its hooks or MCP servers changed since it was trusted" if state == memory.CHANGED else "this folder isn't trusted yet"
-        terminal.note(f"Not following this project's ARTY.md, /commands, skills, helpers, hooks or MCP servers: {reason}. "
+        terminal.note(f"Not following this project's ARTY.md or AGENTS.md, /commands, skills, helpers, hooks or MCP servers: {reason}. "
                       "Start arty-cli here in a terminal to trust it.", "error")
         return False
     if state == memory.CHANGED:

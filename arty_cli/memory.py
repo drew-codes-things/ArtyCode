@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 
 MEMORY_FILE = "ARTY.md"
+SHARED_AGENT_FILE = "AGENTS.md"
+PROJECT_NOTE_FILES = (MEMORY_FILE, SHARED_AGENT_FILE)
 NOTE_PREFIX = "- "
 TRUST_FILE = "trusted-folders.json"
 PRIVATE_FILE_MODE = 0o600
@@ -47,9 +49,14 @@ def trust(personal_folder: Path, project: Path, fingerprint: str = NOT_RECORDED)
         json.dump({**folders, folder: fingerprint}, handle, indent=2)
 
 
+def project_note_files(root: Path) -> list[Path]:
+    return [Path(root) / name for name in PROJECT_NOTE_FILES if (Path(root) / name).is_file()]
+
+
 def memory_files(workspace, personal_folder: Path, include_project: bool = True) -> list[Path]:
-    candidates = [Path(personal_folder) / MEMORY_FILE] + ([workspace.root / MEMORY_FILE] if include_project else [])
-    return [path for path in candidates if path.is_file()]
+    personal = [Path(personal_folder) / MEMORY_FILE]
+    project = project_note_files(workspace.root) if include_project else []
+    return [path for path in personal + project if path.is_file()]
 
 
 def instructions(workspace, personal_folder: Path, include_project: bool = True) -> str:
