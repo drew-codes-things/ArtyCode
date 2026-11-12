@@ -886,6 +886,9 @@ def test_a_long_or_several_line_command_is_shortened_to_one_line():
     ("run_command", "....\n1 passed in 0.01s\n[exit code 0]", "1 passed in 0.01s (exit code 0)", False),
     ("run_command", "E   AssertionError\n1 failed\n[exit code 1]", "1 failed (exit code 1)", True),
     ("run_command", "[exit code 0]", "no output (exit code 0)", False),
+    ("run_command", "....\n" + "=" * 40 + " 1 passed in 0.01s " + "=" * 40 + "\n[exit code 0]",
+     "1 passed in 0.01s (exit code 0)", False),
+    ("run_command", "-" * 30 + "\n[exit code 0]", "no output (exit code 0)", False),
     ("search", "a.py:1:def greet\nb.py:4:greet()", "2 matches", False),
     ("search", "No matches for greet", "No matches for greet", False),
     ("list_files", "a.py\nb.py\nc.py", "3 files", False),
@@ -924,3 +927,8 @@ def test_each_call_shows_a_step_then_its_outcome(tmp_path):
     assert screen.shown == [("step", "Read a.txt"), ("outcome", "2 lines", False),
                             ("step", "Search for zzz"), ("outcome", "No matches for zzz", False)]
     assert screen.activity == []
+
+
+def test_a_command_result_line_stays_short_enough_for_one_row():
+    shown, _failed = agent.outcome_line("run_command", "x" * 300 + "\n[exit code 0]")
+    assert len(f"  └ {shown}") <= 90 and shown.endswith("(exit code 0)")

@@ -44,6 +44,8 @@ MCP_PREFIX, MCP_SEPARATOR = "mcp__", "__"
 NUMBERED_LINE = re.compile(r"\d+\t")
 MORE_LINES = re.compile(r"^\.\.\. (\d+) more lines", re.M)
 MORE_ITEMS = re.compile(r"^\.\.\. and (\d+) more$", re.M)
+RULE_CHARACTERS = "=-_*# "
+MAX_OUTPUT_LINE_CHARS = 72
 EXIT_CODE = re.compile(r"\[exit code (-?\d+)\]")
 ERROR_LEAD = "Error"
 SAID_NO = "Not done: you said no"
@@ -130,7 +132,8 @@ def command_outcome(result: str) -> tuple[str, bool]:
     ending = EXIT_CODE.fullmatch(lines[-1]) if lines else None
     if ending is None:
         return one_line(result), False
-    last = one_line(lines[-2]) if len(lines) > 1 else "no output"
+    last = one_line(lines[-2].strip(RULE_CHARACTERS), MAX_OUTPUT_LINE_CHARS) if len(lines) > 1 else ""
+    last = last or "no output"
     return f"{last} (exit code {ending.group(1)})", ending.group(1) != "0"
 
 
