@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 
 from arty_cli import extras as extras_module
 
-from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, mcp, memory, mentions,
-                       models, permissions, prompt_line, prompts, providers, remote, sessions, settings, skills,
+from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
+                       mentions, models, permissions, prompt_line, prompts, providers, remote, sessions, settings, skills,
                        tools, webfetch)
 
 NOT_SET_UP = 2
@@ -914,6 +914,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         gate.rule_file = project_rule_file(workspace, terminal)
     for problem in problems:
         terminal.note(problem, "error")
+    if lint.wanted(settings.config_dir(), workspace.root, trusted):
+        workspace.lint = lint.Checker(workspace.root)
     loaded = session_extras(workspace, trusted, terminal, client.search_web)
     gate.ask = notifying(terminal.ask, loaded, terminal)
     gate.review = notifying(terminal.review_plan, loaded, terminal, PLAN_APPROVAL)

@@ -104,6 +104,13 @@ class Workspace:
         self.jobs = {}
         self.seen = {}
         self.checkpoints = []
+        self.lint = None
+
+    def lint_note(self, path: Path, text: str) -> str:
+        if self.lint is None:
+            return ""
+        found = self.lint.problems(path, text)
+        return f"\n{found}" if found else ""
 
     def note_seen(self, path: Path, text: str) -> None:
         self.seen[path] = digest_of(text)
@@ -399,18 +406,18 @@ def change_problem(workspace, name: str, arguments: dict) -> str:
 def write_file(workspace, path, content):
     target, before, after = changed_file(workspace, "write_file", {"path": path, "content": content})
     verb = "Updated" if before else "Created"
-    return f"{verb} {workspace.shown(target)} ({len(after.splitlines())} lines)"
+    return f"{verb} {workspace.shown(target)} ({len(after.splitlines())} lines)" + workspace.lint_note(target, after)
 
 
 def edit_file(workspace, path, old_text, new_text, replace_all=False):
     arguments = {"path": path, "old_text": old_text, "new_text": new_text, "replace_all": replace_all}
-    target, _before, _after = changed_file(workspace, "edit_file", arguments)
-    return f"Edited {workspace.shown(target)}"
+    target, _before, after = changed_file(workspace, "edit_file", arguments)
+    return f"Edited {workspace.shown(target)}" + workspace.lint_note(target, after)
 
 
 def multi_edit(workspace, path, edits):
-    target, _before, _after = changed_file(workspace, "multi_edit", {"path": path, "edits": edits})
-    return f"Made {len(edits)} edits to {workspace.shown(target)}"
+    target, _before, after = changed_file(workspace, "multi_edit", {"path": path, "edits": edits})
+    return f"Made {len(edits)} edits to {workspace.shown(target)}" + workspace.lint_note(target, after)
 
 
 def notebook_edit(workspace, path, cell, source="", cell_type="", edit_mode="replace"):

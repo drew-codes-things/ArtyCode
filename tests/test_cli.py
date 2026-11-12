@@ -733,3 +733,31 @@ def test_helpers_from_the_config_folder_are_offered_and_listed(ready, monkeypatc
     chat_with(monkeypatch, "/helpers", "hello", "/exit")
     assert "helper" in ToolSeeingBrain.offered[0]
     assert "reviewer (yours): Reviews a diff" in capsys.readouterr().err
+
+
+def started_workspaces(monkeypatch):
+    made = []
+    original = cli.tools.Workspace
+
+    class Recorded(original):
+        def __init__(self, root):
+            super().__init__(root)
+            made.append(self)
+
+    monkeypatch.setattr(cli.tools, "Workspace", Recorded)
+    return made
+
+
+def test_edits_are_linted_by_default(ready, monkeypatch):
+    made = started_workspaces(monkeypatch)
+    cli.main(["-p", "hello"])
+    assert made[0].lint is not None
+
+
+def test_lint_after_edits_can_be_switched_off_in_your_settings(ready, monkeypatch):
+    made = started_workspaces(monkeypatch)
+    personal = cli.settings.config_dir()
+    personal.mkdir(parents=True, exist_ok=True)
+    (personal / "settings.json").write_text('{"lintAfterEdits": false}')
+    cli.main(["-p", "hello"])
+    assert made[0].lint is None
