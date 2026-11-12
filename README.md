@@ -203,8 +203,9 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/remote`, `/remote off` | Share this chat with the Arty apps and starfire.ai, or stop sharing (below) |
 | `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/help`, `/exit` | The rest |
 
-`ARTY.md` in the project and in the config folder (notes for every project) are added to what the model is told. The
-first time you start arty-cli in a folder that has its own `ARTY.md`, `.arty/commands`, `.arty/skills`,
+`ARTY.md` in the project and in the config folder (notes for every project) are added to what the model is told, and so
+is a project's `AGENTS.md` (the shared file other coding tools read), after `ARTY.md` when both are there. The
+first time you start arty-cli in a folder that has its own `ARTY.md` or `AGENTS.md`, `.arty/commands`, `.arty/skills`,
 `.arty/settings.json` (hooks and permission rules) or `.arty/mcp.json`, it asks whether you trust that folder (a cloned
 repo could put instructions or programs there); until you say yes, they are left out. If `.arty/settings.json` or
 `.arty/mcp.json` change later (a pull, a branch switch), it asks again. Adding a `# note` never trusts a folder.
@@ -212,6 +213,35 @@ Your own prompts go in `.arty/commands/<name>.md` (or `commands/` in the config 
 with `$ARGUMENTS` replaced by the words. Conversations are saved per project in the config folder's `sessions/`.
 Ctrl-C stops the current request, helpers included (what it already changed or ran, MCP calls too, stays noted in the
 conversation); Ctrl-D leaves.
+
+### Checks after edits, project map and sandbox
+
+After every `write_file`, `edit_file` or `multi_edit`, arty-cli checks the file and tells the model what broke: Python
+syntax and JSON in-process, `ruff` or `flake8` when the project configures one (`ruff.toml`, `[tool.ruff]` in
+`pyproject.toml`, `.flake8`, or a `[flake8]` section in `setup.cfg` or `tox.ini`), `node --check` for JavaScript, and
+`bash -n` plus `shellcheck` for shell scripts. Only programs found outside the project folder are run, never ones the
+project ships, and each gets 15 seconds. Turn it off with `"lintAfterEdits": false` in `settings.json`.
+
+At the start (and after `/clear` or a summary) the model gets a short map of the project: the files with their main
+classes and functions, the most used first, tests last, about 3,600 characters at most. It is built with the standard
+library and cached in the config folder's `repomap/`, so only changed files are read again. Turn it off with
+`"repoMap": false`.
+
+`--sandbox`, or `"sandbox": true` in `settings.json`, runs every command in a sandbox as well as asking first as
+usual:
+
+- Linux: bubblewrap (`bwrap`, install it with your package manager). The system is read-only, the project folder is
+  writable, `/tmp` is private, and secrets in your home folder (`~/.ssh`, `~/.gnupg`, cloud and `gh` logins,
+  `.netrc`, `.git-credentials`, arty-cli's own config folder with your API key, and others) look empty.
+- Windows: an AppContainer and a Job Object. The command can change only the project folder (it starts in a
+  `Project:` drive there), can't read your user folder, and everything it started ends with it. A project folder that
+  holds your whole user folder is refused. Programs installed only for you (under `AppData`) can't be run inside it.
+- No network unless you also set `"sandboxNetwork": true` in your own `settings.json`.
+
+It is off by default. When it can't run (no `bwrap`, or a container that blocks it) arty-cli says so and runs commands
+without it; `"sandbox": "required"` refuses commands instead. A trusted project's `.arty/settings.json` can switch
+the sandbox on or make it required, never off, and can't turn the network on. Helpers' commands and the ones you type
+after `!` run in the sandbox too; hooks and MCP servers don't.
 
 ### Long conversations
 
