@@ -282,7 +282,7 @@ Notes and questions still go to standard error, so standard output is only the J
 
 | In the chat | What it does |
 |---|---|
-| `@path` | Attach a file; pictures go to the model's vision |
+| `@path` | Attach a file with numbered lines, as if Arty had read it (so it can edit it at once); pictures go to the model's vision |
 | `# note` | Add a line to this project's `ARTY.md`; the model is told at once |
 | `!command` | Run a command yourself; the model sees the output |
 | `line \` | Carry on typing on the next line |

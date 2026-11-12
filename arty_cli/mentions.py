@@ -28,12 +28,12 @@ def image_part(path) -> dict | None:
     return {"type": "image_url", "image_url": {"url": f"data:{kind};base64,{encoded}"}}
 
 
-def text_block(name: str, path, limit: int) -> str | None:
+def text_block(name: str, path, workspace) -> str | None:
     try:
-        content = path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
+        numbered = tools.read_file(workspace, str(path))
+    except (tools.ToolError, OSError, ValueError):
         return None
-    return f'<file path="{name}">\n{content[:limit]}</file>'
+    return f'<file path="{name}">\n{numbered}\n</file>'
 
 
 def expand(text: str, workspace):
@@ -43,7 +43,7 @@ def expand(text: str, workspace):
         if picture:
             pictures.append(picture)
             continue
-        block = text_block(name, path, workspace.result_chars)
+        block = text_block(name, path, workspace)
         if block:
             blocks.append(block)
     combined = "\n\n".join([text, *blocks])

@@ -82,3 +82,11 @@ def test_an_unknown_argument_name_is_answered_with_the_right_names(project):
     result = brain.tool_results()[0]
     assert result.startswith("Error") and "lines" in result
     assert "path" in result and "offset" in result and "limit" in result
+
+
+def test_a_file_attached_with_at_can_be_edited_without_reading_it_again(project):
+    (project / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    brain = ScriptedBrain([[("edit_file", {"path": "calc.py", "old_text": "a - b", "new_text": "a + b"})], "Fixed."])
+    session_for(project, brain).ask("fix @calc.py")
+    assert brain.tool_results()[0].startswith("Edited calc.py")
+    assert "1\tdef add(a, b):" in brain.prompts[0][-1]["content"]
