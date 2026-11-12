@@ -131,8 +131,10 @@ TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT = "text", "json", "stream-json"
 OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT)
 ERROR_MARK = "Error"
-REMOTE_ON = ("Remote control is on: Arty on your phone or starfire.ai can follow this session, send requests, answer "
-             "questions and stop a request. It can't change the mode. /remote off stops sharing.")
+REMOTE_ON_LEAD = "Remote control is on"
+REMOTE_OPEN_IN = "  Open it in the Arty app (More > Computers) or on starfire.ai's Arty CLI page."
+REMOTE_RULES = "  A phone needs its Arty CLI switch on to see it. /remote off stops sharing."
+REMOTE_ANSWER_HINT = "  Or answer Allow or Deny on another device."
 REMOTE_OFF = "Remote control is off; this session is no longer shared."
 REMOTE_ALREADY_ON = "Remote control is already on. /remote off stops it."
 REMOTE_USAGE = "Use /remote to share this session, or /remote off to stop."
@@ -266,6 +268,8 @@ class Terminal:
         self.note(question, "accent")
         for key, meaning in choices:
             self.note(f"  {self.paint(key, 'accent')}  {meaning}", "reset")
+        if self.remote:
+            self.note(REMOTE_ANSWER_HINT)
         keys = [key for key, _meaning in choices]
         return f"Choose {', '.join(keys[:-1])} or {keys[-1]}: "
 
@@ -273,7 +277,7 @@ class Terminal:
         if self.remote:
             choice, by = self.remote.answer(self.paint(prompt, "accent"), answers, question, details)
             if by:
-                self.note(f"{by} {'refused' if choice == permissions.NO else 'allowed'} that from another device.")
+                self.note(f"{'Refused' if choice == permissions.NO else 'Allowed'} on {by} (remote control).")
             return choice, by
         while True:
             answer = self.asked(prompt).strip().lower()
@@ -488,6 +492,7 @@ class Session:
         self.choices = None
         self.turns = []
         self.remote = None
+        self.remote_name = ""
         self.messages = saved.messages or self.fresh()
 
     def fresh(self) -> list[dict]:
@@ -687,6 +692,7 @@ class Session:
         self.terminal.note(f"Address: {self.client.address() or 'not contacted yet'}")
         self.terminal.note(f"Mode: {self.gate.mode}")
         self.terminal.note(f"Project: {self.workspace.root}")
+        self.terminal.note(f'Remote control: on as "{self.remote_name}"' if self.remote else "Remote control: off")
         self.terminal.note(f"Conversation: {len(self.messages)} messages, about "
                            f"{context.estimated_tokens(self.messages, self.client)} tokens (summarised past "
                            f"{self.compact_limit()} of {context.window_tokens(self.client)}), saved as {self.saved.id}")
@@ -784,11 +790,18 @@ class Session:
                    "mode": self.gate.mode}
         try:
             bridge = remote.connect(self.client, details, remote.answer_lines(is_interactive))
-        except (remote.RelayError, *providers.ERRORS) as error:
+        except remote.RelayError as error:
+            self.terminal.note(f"{error}. Remote control stays off. {remote.next_step(error.status, starting=True)}",
+                               "error")
+            return
+        except providers.ERRORS as error:
             self.terminal.note(f"{error} Remote control stays off.", "error")
             return
         self.remote = self.terminal.remote = self.terminal.events = bridge
-        self.terminal.note(REMOTE_ON, "accent")
+        self.remote_name = details["name"]
+        self.terminal.note(f'{REMOTE_ON_LEAD}: this chat is shared as "{self.remote_name}".', "accent")
+        self.terminal.note(REMOTE_OPEN_IN)
+        self.terminal.note(REMOTE_RULES)
 
     def stop_remote(self) -> None:
         if not self.remote:
@@ -813,7 +826,7 @@ class Session:
             return
         message = self.remote.next_message()
         while message:
-            self.terminal.note(f"From {message.by}: {message.text}", "accent")
+            self.terminal.note(f"From {message.by} (remote control): {message.text}", "accent")
             self.ask(message.text)
             if not self.remote:
                 return
@@ -907,7 +920,7 @@ def first_line(session, reader) -> str:
         return input(PROMPT)
     kept = ""
     while True:
-        prompt, width = prompt_line.mode_prompt(session.terminal, session.gate.mode)
+        prompt, width = prompt_line.mode_prompt(session.terminal, session.gate.mode, shared=bool(session.remote))
         kept, wants_next_mode = reader.read(prompt, width, kept)
         if not wants_next_mode:
             return kept

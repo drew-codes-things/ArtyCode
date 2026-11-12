@@ -29,8 +29,17 @@ READ_CHUNK = 4096
 REQUEST_ID_BYTES = 6
 HERE = "the computer"
 GONE_CODES = (404, 410)
-REFUSED_REASONS = {401: "this computer's API key was refused (run arty-cli login)",
-                   403: "remote control isn't allowed for this key or device"}
+KEY_REFUSED, NOT_ALLOWED, TOO_MANY = 401, 403, 429
+REFUSED_CODES = (KEY_REFUSED, NOT_ALLOWED)
+SESSION_GONE = "The brain no longer knows this shared session (it may have restarted); /remote starts a new one."
+LOST_STEPS = {KEY_REFUSED: "Arty's brain refused this computer's API key: run arty-cli login, then /remote again.",
+              NOT_ALLOWED: ("This key isn't allowed to use that session: it was started with another key, perhaps "
+                            "before a new login; /remote starts a new one."),
+              404: SESSION_GONE, 410: SESSION_GONE}
+START_STEPS = {**LOST_STEPS,
+               404: "This Arty brain has no remote control yet: update the brain, then /remote again.",
+               TOO_MANY: "End a shared session first (/remote off where it runs), then /remote again."}
+TRY_AGAIN = "Try /remote again when the brain is back."
 PASSED_THROUGH = frozenset({"user", "permission", "permission_answered", "status", "error"})
 IDLE, AT_PROMPT, IN_TURN = "idle", "at_prompt", "in_turn"
 NOTHING_TO_STOP = "Nothing was running, so there was nothing to stop."
@@ -45,7 +54,11 @@ class RelayError(Exception):
 
 
 def ends_remote_control(error: RelayError) -> bool:
-    return error.status in GONE_CODES or error.status in REFUSED_REASONS
+    return error.status in GONE_CODES or error.status in REFUSED_CODES
+
+
+def next_step(status: int, starting: bool = False) -> str:
+    return (START_STEPS if starting else LOST_STEPS).get(status, TRY_AGAIN)
 
 
 class Relay:
@@ -68,7 +81,7 @@ class Relay:
             reason = brain.error_message(error) or error.code
             raise RelayError(f"Arty's brain turned down remote control: {reason}", error.code) from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError) as error:
-            raise RelayError(f"Couldn't reach Arty's brain for remote control: {error}") from None
+            raise RelayError(f"Couldn't reach Arty's brain for remote control ({brain.plain_reason(error)})") from None
         if not isinstance(answer, dict):
             raise RelayError("Arty's brain sent something unexpected for remote control.")
         return answer
@@ -389,8 +402,7 @@ class Bridge:
         if self.stopping.is_set() or self.ended:
             return
         self.ended = True
-        reason = REFUSED_REASONS.get(error.status)
-        self.notices.put(f"Remote control ended: {error}" + (f" ({reason})" if reason else ""))
+        self.notices.put(f"Remote control ended: {error}. {next_step(error.status)}")
         with self.answered:
             self.answered.notify_all()
         self.waker.wake_prompt()

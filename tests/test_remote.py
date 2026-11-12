@@ -427,3 +427,19 @@ def test_a_stop_while_a_permission_waits_tells_the_other_devices_it_is_no_longer
     assert relay.events_of("permission_answered") == [
         {"type": "permission_answered", "request_id": request_id, "allow": False, "by": PHONE}]
     assert bridge.stop_reason() == f"Stopped by {PHONE}."
+
+
+def test_an_unreachable_relay_is_described_without_python_internals():
+    def offline(request, timeout):
+        raise remote.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    with pytest.raises(remote.RelayError) as raised:
+        remote.Relay("http://brain.test/v1", {}, opener=offline).call("GET", "/remote/sessions")
+    said = str(raised.value)
+    assert "Connection refused" in said and "<urlopen error" not in said and "[Errno" not in said
+
+
+@pytest.mark.parametrize("status, next_step", [(401, "arty-cli login"), (403, "another key"),
+                                               (404, "/remote starts"), (410, "/remote starts")])
+def test_why_a_relay_refusal_happened_comes_with_the_next_step(status, next_step):
+    assert next_step in remote.next_step(status)

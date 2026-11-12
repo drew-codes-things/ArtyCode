@@ -8,6 +8,7 @@ import time
 from arty_cli import permissions
 
 PROMPT_MARK = "› "
+REMOTE_MARK = " · remote"
 MODE_CYCLE = (permissions.DEFAULT, permissions.AUTO_EDIT, permissions.PLAN)
 MODE_COLOURS = {permissions.DEFAULT: "dim", permissions.AUTO_EDIT: "accent", permissions.PLAN: "accent",
                 permissions.ALLOW_ALL: "error"}
@@ -38,9 +39,10 @@ def next_mode(mode: str) -> str:
     return MODE_CYCLE[(MODE_CYCLE.index(mode) + 1) % len(MODE_CYCLE)]
 
 
-def mode_prompt(terminal, mode: str) -> tuple[str, int]:
-    shown = f"{terminal.paint(mode, MODE_COLOURS.get(mode, 'accent'))} {PROMPT_MARK}"
-    return shown, len(f"{mode} {PROMPT_MARK}")
+def mode_prompt(terminal, mode: str, shared: bool = False) -> tuple[str, int]:
+    marker = REMOTE_MARK if shared else ""
+    shown = f"{terminal.paint(mode, MODE_COLOURS.get(mode, 'accent'))}{terminal.paint(marker, 'accent')} {PROMPT_MARK}"
+    return shown, len(f"{mode}{marker} {PROMPT_MARK}")
 
 
 def for_readline(prompt: str) -> str:

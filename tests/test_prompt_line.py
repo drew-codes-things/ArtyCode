@@ -178,3 +178,14 @@ def test_on_windows_keys_are_polled_so_a_message_from_afar_can_wake_the_prompt()
     next_key = prompt_line.polled_keys(lambda: ready.pop(0), lambda: "x", slept.append)
     assert next_key() == "x"
     assert slept == [prompt_line.KEY_POLL_SECONDS] * 2
+
+
+def test_while_remote_control_is_on_the_prompt_says_so(ready_session):
+    plain = cli.Terminal()
+    plain.colour = False
+    assert prompt_line.mode_prompt(plain, permissions.DEFAULT, shared=True) == (
+        "default · remote › ", len("default · remote › "))
+    ready_session.remote = object()
+    reader = CyclingReader(("hi", False))
+    cli.read_request(ready_session, reader)
+    assert reader.calls[0][0] == "default · remote › "

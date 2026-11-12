@@ -285,6 +285,14 @@ iPhone (**More > Computers**) and starfire.ai's admin **Arty CLI** page can foll
 no port: it sends what happens to the brain and asks the brain for anything sent back. `/remote off` stops sharing,
 and so does leaving arty-cli.
 
+Turning it on says the name the chat is shared as and where to open it, and reminds you that a phone's device key
+needs its **Arty CLI** switch on. While it is on, the prompt reads `default · remote ›` and `/status` says
+`Remote control: on as "<name>"`. A request sent from afar shows as `From <device> (remote control): ...`; a question
+adds `Or answer Allow or Deny on another device.`, and an answer given there shows as `Allowed on <device> (remote
+control).` or `Refused on ...`. If the brain turns sharing down, or a shared session ends, the message says why and
+what to do next: log in again for a refused key, update a brain that has no remote control, end another shared
+session when too many are open, or `/remote` again when the brain is back.
+
 From another device you can:
 
 - follow the chat as it happens: your requests, Arty's answers, its tool calls and their results;
