@@ -12,6 +12,8 @@
 
 </div>
 
+![Arty CLI finding why a test fails, showing the fix as a diff and asking before it edits the file and runs the test](screenshot.png)
+
 ---
 
 ## Overview
