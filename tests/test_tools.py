@@ -60,6 +60,11 @@ def test_searching_names_file_and_line(workspace):
     assert tools.run("search", {"pattern": r"return a"}, workspace) == "src/app.py:2:    return a - b"
 
 
+def test_searching_one_file_looks_inside_it(workspace):
+    (workspace.root / "src" / "other.py").write_text("return a\n")
+    assert tools.run("search", {"pattern": r"return a", "path": "src/app.py"}, workspace) == "src/app.py:2:    return a - b"
+
+
 def test_a_bad_search_pattern_is_reported(workspace):
     assert tools.run("search", {"pattern": "("}, workspace).startswith("Error")
 

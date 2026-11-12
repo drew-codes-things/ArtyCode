@@ -498,13 +498,17 @@ def matches_glob(name: str, relative: str, glob: str) -> bool:
     return any(fnmatch.fnmatch(name, spelling) or fnmatch.fnmatch(relative, spelling) for spelling in glob_spellings(glob))
 
 
+def searched_files(workspace, target: Path) -> list[Path]:
+    return [target] if target.is_file() else project_files(workspace, target, [ANY_FOLDERS, "*"])
+
+
 def search(workspace, pattern, path=".", glob="*"):
     try:
         expression = re.compile(pattern)
     except re.error as error:
         raise ToolError(f"bad pattern: {error}") from None
     matches, used = [], 0
-    for candidate in project_files(workspace, workspace.resolve(path), [ANY_FOLDERS, "*"]):
+    for candidate in searched_files(workspace, workspace.resolve(path)):
         if not matches_glob(candidate.name, workspace.shown(candidate), glob) or candidate.stat().st_size > MAX_SEARCHED_FILE_BYTES:
             continue
         try:
