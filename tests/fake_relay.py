@@ -11,6 +11,8 @@ PREFIX = "/v1/remote/sessions"
 class Relay:
     def __init__(self):
         self.created = []
+        self.title = "repo"
+        self.renamed = []
         self.events = []
         self.ended = []
         self.headers = []
@@ -64,7 +66,11 @@ def handler_for(relay: Relay):
             path = urlparse(self.path).path
             if path == PREFIX:
                 relay.created.append(body)
-                return self.answer(201, {"id": SESSION_ID})
+                return self.answer(201, {"id": SESSION_ID, "title": relay.title})
+            if path == f"{PREFIX}/{SESSION_ID}/title":
+                relay.renamed.append(body.get("title"))
+                relay.title = f"{body.get('title')} 2"
+                return self.answer(200, {"title": relay.title})
             if path == f"{PREFIX}/{SESSION_ID}/events":
                 if relay.events_status != 200:
                     return self.answer(relay.events_status, {"error": {"message": "that session has ended"}})

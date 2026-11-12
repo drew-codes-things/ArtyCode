@@ -40,7 +40,7 @@ START_STEPS = {**LOST_STEPS,
                404: "This Arty brain has no remote control yet: update the brain, then /remote again.",
                TOO_MANY: "End a shared session first (/remote off where it runs), then /remote again."}
 TRY_AGAIN = "Try /remote again when the brain is back."
-PASSED_THROUGH = frozenset({"user", "permission", "permission_answered", "status", "error"})
+PASSED_THROUGH = frozenset({"user", "permission", "permission_answered", "status", "error", "compacted"})
 IDLE, AT_PROMPT, IN_TURN = "idle", "at_prompt", "in_turn"
 NOTHING_TO_STOP = "Nothing was running, so there was nothing to stop."
 ERASE_KEY = "\b \b"
@@ -87,10 +87,17 @@ class Relay:
         return answer
 
     def create(self, details: dict) -> str:
-        session_id = self.call("POST", SESSIONS_PATH, details).get("id")
-        if not isinstance(session_id, str) or not session_id:
+        return self.created(details)["id"]
+
+    def created(self, details: dict) -> dict:
+        made = self.call("POST", SESSIONS_PATH, details)
+        if not isinstance(made.get("id"), str) or not made["id"]:
             raise RelayError("Arty's brain didn't send a remote control session id.")
-        return session_id
+        return made
+
+    def rename(self, session_id: str, wanted: str) -> str:
+        title = self.call("POST", f"{SESSIONS_PATH}/{session_id}/title", {"title": wanted}).get("title")
+        return title if isinstance(title, str) and title else wanted
 
     def post(self, session_id: str, events: list[dict]) -> None:
         self.call("POST", f"{SESSIONS_PATH}/{session_id}/events", {"events": events})
@@ -130,6 +137,45 @@ def relay_event(event: dict) -> dict | None:
     return dict(event) if kind in PASSED_THROUGH else None
 
 
+def shown_content(content) -> str:
+    if isinstance(content, list):
+        texts = (part.get("text") for part in content if isinstance(part, dict))
+        return "\n".join(text for text in texts if isinstance(text, str))
+    return content if isinstance(content, str) else ""
+
+
+def compacted_event(content: str, summary_leads: tuple[str, ...]) -> dict:
+    return {"type": "compacted", "text": content.removeprefix(summary_leads[0]).strip()}
+
+
+def events_of_reply(message: dict, tool_names: dict) -> list[dict]:
+    text = shown_content(message.get("content"))
+    events = [{"type": "assistant", "text": text}] if text else []
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        name = tool_names[call.get("id")] = function.get("name", "")
+        events.append({"type": "tool_call", "tool": name, "text": shown_input(function.get("arguments"))})
+    return events
+
+
+def history_events(messages: list[dict], summary_leads: tuple[str, ...], summary_reply: str = "") -> list[dict]:
+    events, tool_names, after_summary = [], {}, False
+    for message in messages:
+        role, text = message.get("role"), shown_content(message.get("content"))
+        was_summary, after_summary = after_summary, False
+        if role == "user" and text.startswith(summary_leads):
+            events.append(compacted_event(text, summary_leads))
+            after_summary = True
+        elif role == "user" and text:
+            events.append({"type": "user", "text": text})
+        elif role == "assistant" and not (was_summary and text == summary_reply):
+            events.extend(events_of_reply(message, tool_names))
+        elif role == "tool":
+            tool = tool_names.get(message.get("tool_call_id"), "")
+            events.append({"type": "tool_result", "tool": tool, "text": text})
+    return [{**event, "history": True} for event in events]
+
+
 def within_limit(event: dict) -> list[dict]:
     text = event.get("text")
     if not isinstance(text, str) or len(text) <= MAX_TEXT_CHARS:
@@ -139,10 +185,14 @@ def within_limit(event: dict) -> list[dict]:
     return [{**event, "text": text[start:start + MAX_TEXT_CHARS]} for start in range(0, len(text), MAX_TEXT_CHARS)]
 
 
+def continues(earlier: dict, event: dict) -> bool:
+    return earlier["type"] == "assistant" and earlier.get("history") == event.get("history")
+
+
 def batched(events: list[dict]) -> list[list[dict]]:
     merged = []
     for event in events:
-        if merged and event["type"] == "assistant" and merged[-1]["type"] == "assistant":
+        if merged and event["type"] == "assistant" and continues(merged[-1], event):
             merged[-1] = {**merged[-1], "text": merged[-1]["text"] + event["text"]}
         else:
             merged.append(event)
@@ -307,6 +357,7 @@ class Bridge:
         self.lines = lines
         self.write_prompt = write or prompt_line.shown_at_once
         self.session_id = ""
+        self.title = ""
         self.outgoing = queue.Queue()
         self.messages = queue.Queue()
         self.notices = queue.Queue()
@@ -320,7 +371,9 @@ class Bridge:
         self.threads = []
 
     def start(self, details: dict) -> str:
-        self.session_id = self.relay.create(details)
+        made = self.relay.created(details)
+        self.session_id = made["id"]
+        self.title = made["title"] if isinstance(made.get("title"), str) else ""
         self.told_mode = details.get("mode", "")
         self.waker.install()
         self.threads = [threading.Thread(target=self.listen, daemon=True, name="arty-remote-inbox"),
@@ -353,6 +406,15 @@ class Bridge:
         shared = relay_event(event)
         if shared is not None and not self.stopping.is_set():
             self.outgoing.put(shared)
+
+    def send_history(self, events: list[dict]) -> None:
+        for event in events:
+            if not self.stopping.is_set():
+                self.outgoing.put(event)
+
+    def rename(self, wanted: str) -> str:
+        self.title = self.relay.rename(self.session_id, wanted)
+        return self.title
 
     def tell_mode(self, mode: str) -> None:
         if mode != self.told_mode:
