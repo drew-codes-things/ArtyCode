@@ -1,9 +1,11 @@
 from arty_cli import prompts, tools
 
 
-def test_the_model_is_told_to_keep_changes_small_and_leave_tests_alone(tmp_path):
+def test_the_model_is_told_to_keep_changes_small_and_never_weaken_tests_but_add_them_for_its_work(tmp_path):
     prompt = prompts.system_prompt(tools.Workspace(tmp_path))
-    assert "never edit or add tests unless asked" in prompt
+    assert "never weaken or delete an existing test to make it pass" in prompt
+    assert "add tests for what you build or fix" in prompt
+    assert "never edit or add tests" not in prompt
     assert "smallest change" in prompt
     assert "list_files to find files by name" in prompt
 

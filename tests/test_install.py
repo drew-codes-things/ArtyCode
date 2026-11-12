@@ -124,3 +124,8 @@ def test_the_readme_gives_a_one_line_install_that_matches_the_installer():
     assert "sudo" not in one_liner
     assert 'DEFAULT_SOURCE="https://github.com/drew-codes-things/ArtyCode/archive/refs/heads/main.tar.gz"' in script
     assert "arty doctor" in readme and "arty update" in readme
+
+
+def test_the_interface_library_is_installed_with_it():
+    project = tomllib.loads((PROJECT / "pyproject.toml").read_text())["project"]
+    assert [name.split(">")[0] for name in project["dependencies"]] == ["prompt_toolkit"]

@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "ArtyCode: a coding assistant in your terminal that reads, edits and runs code in the current folder, asking first. Runs on your own Arty."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["prompt_toolkit>=3.0.36"]
 
 [project.scripts]
 arty-cli = "arty_cli.cli:main"

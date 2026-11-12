@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import getpass
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -98,8 +99,13 @@ HELP_GROUPS = (
     }),
     ("Keys", {
         "Shift+Tab": "next mode: default, auto-edit, plan",
-        "Esc, Ctrl-C": "stop the current request",
+        "Esc": "stop the current request",
+        "Ctrl-C": "clear what you typed, twice to leave (at the plain prompt it stops the request)",
         "Ctrl-D, /exit": "leave",
+        "Enter while Arty works": "queue your next message for when it finishes",
+        "Alt+Enter": "start another line (so does a line ending in \\)",
+        "Up, Down, Ctrl-R": "earlier requests in this project, and searching them",
+        "Tab, Enter": "take the highlighted /command, model or @file from the menu",
         "?, /help": "this list",
     }),
 )
@@ -114,6 +120,7 @@ COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green
 WORDMARK = "◆ ArtyCode"
 STEP_MARK = "●"
 THOUGHT_MARK = "✻"
+ANSWER_ARROW = "→"
 MIN_THOUGHT_SECONDS = 1
 STEP_HANG = "  "
 OUTCOME_HANG = "    "
@@ -129,6 +136,9 @@ MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
 WELCOME_TIPS = ('Ask in plain words, e.g. "why does the login test fail?" or "add a --dry-run flag"',
                 "@file attaches a file · !command runs one yourself · # note saves a project note",
                 "? or /help for commands · Ctrl-C stops a request · Ctrl-D leaves")
+INTERFACE_TIPS = (*WELCOME_TIPS[:2],
+                  "? or /help for commands · Esc stops a request · Ctrl-C twice or Ctrl-D leaves",
+                  "Enter while Arty works queues your next message · Alt+Enter starts another line")
 NO_NOTES_TIP = "No ARTY.md here yet: /init looks through the project and writes notes Arty reads every time."
 ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO,
            "a": permissions.ALWAYS, "always": permissions.ALWAYS}
@@ -192,6 +202,8 @@ class Terminal:
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
         self.stop_key = None
+        self.console = None
+        self.offered = {}
         self.flow = wrap.Flow()
         self.clock = time.monotonic
         self.thinking_since = None
@@ -228,10 +240,12 @@ class Terminal:
         return self.waiting
 
     def working(self, label: str):
+        if self.console:
+            return self.console.showing(label, self.turn_started, self.tokens_so_far)
         return self.status_line(label) if self.shows_status() else contextlib.nullcontext()
 
     def interruptible(self):
-        if not (is_interactive() and self.shows_status()):
+        if self.console or not (is_interactive() and self.shows_status()):
             return contextlib.nullcontext()
         keys = stopkey.keys_here()
         if keys is None:
@@ -353,7 +367,7 @@ class Terminal:
 
     def show_plan(self, plan: str) -> None:
         flow = wrap.Flow()
-        self.err.write((flow.feed(plan.rstrip()) + flow.flush() if self.err.isatty() else plan.rstrip()) + "\n")
+        self.err.write((flow.feed(plan.rstrip()) if self.err.isatty() else plan.rstrip()) + "\n")
 
     def show_diff(self, preview: str) -> None:
         self.stop_thinking()
@@ -389,6 +403,10 @@ class Terminal:
             return ""
 
     def show_choices(self, question: str, choices: tuple) -> str:
+        if self.console:
+            self.offered = dict(choices)
+            self.console.open_question(question, choices)
+            return ""
         self.note(question, "accent")
         for key, meaning in choices:
             self.note(f"  {self.paint(key, 'accent')}  {meaning}", "reset")
@@ -398,17 +416,42 @@ class Terminal:
         return f"Choose {', '.join(keys[:-1])} or {keys[-1]}: "
 
     def answer(self, prompt: str, answers: dict, question: str, details: str = "") -> tuple[str, str]:
+        if not self.console:
+            return self.answered(prompt, answers, question, details)
+        try:
+            return self.answered(prompt, answers, question, details)
+        finally:
+            self.console.close_question()
+
+    def answered(self, prompt: str, answers: dict, question: str, details: str = "") -> tuple[str, str]:
         if self.remote:
             choice, by = self.remote.answer(self.paint(prompt, "accent"), answers, question, details)
             if by:
                 self.note(f"{'Refused' if choice == permissions.NO else 'Allowed'} on {by} (remote control).")
+            else:
+                self.note_answer(question, choice, answers)
             return choice, by
+        if self.console:
+            choice = answers.get(self.console.wait_answer() or "", permissions.NO)
+            self.note_answer(question, choice, answers)
+            return choice, ""
         while True:
             answer = self.asked(prompt).strip().lower()
             if answer in answers:
                 return answers[answer], ""
 
+    def note_answer(self, question: str, choice: str, answers: dict) -> None:
+        if not self.console:
+            return
+        meaning = next((self.offered[key] for key in self.offered if answers.get(key) == choice), choice)
+        self.note(f"{question} {ANSWER_ARROW} {meaning}", "accent")
+
+    def answer_lines(self):
+        return self.console.answer_lines() if self.console else remote.answer_lines(is_interactive)
+
     def asked(self, question: str) -> str:
+        if self.console:
+            return self.console.line(question)
         return input(prompt_line.readline_safe(self.paint(question, "accent")))
 
     def review_plan(self, plan: str) -> tuple[str, str]:
@@ -489,6 +532,8 @@ def parse_arguments(argv):
                         help="built-in working rules for this run: on (told and checked), tell-only or off")
     parser.add_argument("--sandbox", action="store_true",
                         help="run commands in a sandbox: only the project folder is writable, no network")
+    parser.add_argument("--plain", action="store_true",
+                        help="keep the plain line-at-a-time prompt instead of the full terminal interface")
     parser.add_argument("--version", action="version", version=f"ArtyCode {__version__}")
     return parser.parse_args(argv)
 
@@ -987,7 +1032,7 @@ class Session:
         details = {"name": socket.gethostname(), "folder": self.workspace.root.name, "model": self.client.model,
                    "mode": self.gate.mode}
         try:
-            bridge = remote.connect(self.client, details, remote.answer_lines(is_interactive))
+            bridge = remote.connect(self.client, details, self.terminal.answer_lines())
         except remote.RelayError as error:
             self.terminal.note(f"{error}. Remote control stays off. {remote.next_step(error.status, starting=True)}",
                                "error")
@@ -995,6 +1040,8 @@ class Session:
         except providers.ERRORS as error:
             self.terminal.note(f"{error} Remote control stays off.", "error")
             return
+        if self.terminal.console:
+            bridge.write_prompt = nothing_written
         self.remote = self.terminal.remote = self.terminal.events = bridge
         self.remote_name = bridge.title or details["name"]
         bridge.send_history(remote.history_events(self.messages, SUMMARY_LEADS, SUMMARY_ACK))
@@ -1125,8 +1172,18 @@ class Session:
                 return {}
         return {choice.model: choice.about for choice in self.choices.listed}
 
+    def pick_model(self, listed: models.Choices) -> None:
+        offered = [(str(number), f"{choice.model}  {choice.about}".rstrip())
+                   for number, choice in enumerate(listed.listed, 1)]
+        picked = self.terminal.console.choose(f"Model: {self.client.model}. Switch to which?", offered)
+        if picked:
+            self.change_model(picked)
+
     def show_models(self) -> None:
         listed = self.listed_models()
+        if self.terminal.console:
+            self.pick_model(listed)
+            return
         for line in listed.lines(self.client.model):
             self.terminal.note(line, "accent" if line.startswith("●") else "dim")
         if not is_interactive():
@@ -1224,7 +1281,7 @@ def rules_level(workspace) -> str:
     return found.level if found is not None else rules.OFF
 
 
-def welcome(session: Session) -> None:
+def welcome(session: Session, tips: tuple = WELCOME_TIPS) -> None:
     terminal = session.terminal
     mode = session.gate.mode
     terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(__version__, 'dim')}", "reset")
@@ -1236,14 +1293,103 @@ def welcome(session: Session) -> None:
     if mode == permissions.ALLOW_ALL:
         terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
     terminal.note("")
-    for tip in WELCOME_TIPS:
+    for tip in tips:
         terminal.note(f"  {tip}")
     if not memory.project_note_files(session.workspace.root):
         terminal.note(f"  {NO_NOTES_TIP}")
     terminal.note("")
 
 
-def chat(session: Session, share: bool = False) -> None:
+def nothing_written(_text: str) -> None:
+    return None
+
+
+class SessionHost:
+    def __init__(self, session: Session):
+        self.session = session
+        self.root = session.workspace.root
+        self.commands = session.slash_choices
+        self.models = session.model_choices
+        self.paint = session.terminal.paint
+
+    def mode(self) -> str:
+        return self.session.gate.mode
+
+    def cycle_mode(self) -> None:
+        self.session.gate.mode = prompt_line.next_mode(self.session.gate.mode)
+        self.session.tell_mode()
+
+    def shared(self) -> bool:
+        return bool(self.session.remote)
+
+
+def started_interface(session: Session):
+    terminal = session.terminal
+    if not (is_interactive() and terminal.shows_status()):
+        return None
+    try:
+        tui = importlib.import_module("arty_cli.tui")
+    except ImportError as error:
+        terminal.note(f"The full interface needs prompt_toolkit ({error}); using the plain prompt.", "error")
+        return None
+    interface = tui.Interface(SessionHost(session), tui.history_path(settings.config_dir(), session.workspace.root))
+    try:
+        interface.start()
+    except tui.InterfaceError as error:
+        terminal.note(f"The full interface couldn't start ({error}); using the plain prompt.", "error")
+        return None
+    return interface
+
+
+def chat_in_interface(session: Session, interface, share: bool) -> None:
+    terminal = session.terminal
+    before = (terminal.out, terminal.err, sys.stdout, sys.stderr)
+    terminal.out = terminal.err = interface.scroll
+    sys.stdout = sys.stderr = interface.stray
+    terminal.console = interface
+    try:
+        welcome(session, INTERFACE_TIPS)
+        if share:
+            session.start_remote()
+        talk_in_interface(session, interface)
+    finally:
+        if session.remote:
+            session.stop_remote()
+        terminal.end_line()
+        terminal.console = None
+        interface.stop()
+        terminal.out, terminal.err, sys.stdout, sys.stderr = before
+    if interface.failure is not None:
+        terminal.note(f"The interface stopped unexpectedly: {interface.failure}", "error")
+
+
+def talk_in_interface(session: Session, interface) -> None:
+    while True:
+        try:
+            with interface.working():
+                session.run_remote_requests()
+            with session.running(remote.AT_PROMPT):
+                line = interface.next_message()
+        except KeyboardInterrupt:
+            continue
+        if line is None:
+            return
+        interface.show_request(line)
+        try:
+            with interface.working():
+                carries_on = handle(session, line)
+        except KeyboardInterrupt:
+            session.terminal.note("Stopped.", "error")
+            continue
+        if not carries_on:
+            return
+
+
+def chat(session: Session, share: bool = False, plain: bool = False) -> None:
+    interface = None if plain else started_interface(session)
+    if interface is not None:
+        chat_in_interface(session, interface, share)
+        return
     welcome(session)
     reader = prompt_line.line_reader(is_interactive, session.slash_choices, session.model_choices)
     if share:
@@ -1320,6 +1466,11 @@ def main(argv=None) -> int:
         return FAILED
 
 
+def brains_coding_model(client) -> str | None:
+    named = getattr(client, "coding_model", None)
+    return named() if named is not None else None
+
+
 def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     mode = permissions.AUTO_EDIT if arguments.auto_edit else arguments.permission_mode
     gate = permissions.Gate(workspace, terminal.ask, mode=mode)
@@ -1328,6 +1479,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     client = providers.make(config)
     if saved.model and not arguments.model and brain.is_arty_model(saved.model):
         client.model = saved.model
+    elif not arguments.model and not settings.model_was_chosen():
+        client.model = brains_coding_model(client) or client.model
     trusted = project_notes_allowed(workspace, settings.config_dir(), terminal)
     gate.rules, problems = permissions.load_rules(settings.config_dir(), workspace, trusted)
     if trusted:
@@ -1365,7 +1518,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
             return answered_as_stream(session, once)
         if once:
             return 0 if handle(session, once) is not False and session.messages[-1]["role"] == "assistant" else FAILED
-        chat(session, share=arguments.remote)
+        chat(session, share=arguments.remote, plain=arguments.plain)
         return 0
     finally:
         for problem in loaded.close():

@@ -5,7 +5,7 @@
 **A coding assistant in your terminal: it reads, edits and runs code in the folder you start it in, and asks before it changes anything. It runs on your own Arty.**
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)
-![Dependencies](https://img.shields.io/badge/dependencies-none-success?style=flat-square)
+![Dependencies](https://img.shields.io/badge/dependencies-prompt__toolkit-success?style=flat-square)
 [![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](LICENSE)
 
 [Project home](https://github.com/drew-codes-things/ArtyCode) · [Arty, the assistant it belongs to](https://github.com/drew-codes-things/Arty)
@@ -21,7 +21,8 @@
 ArtyCode (the `arty` command, also `arty-cli`) is a coding assistant for the terminal on Debian (and other Linux) and Windows. You ask in plain words
 ("why does the login test fail?", "add a --dry-run flag"), and it looks through the project, makes the change and
 runs the tests. The file tools and the shell always run on your computer. The thinking happens on your own
-[Arty](https://github.com/drew-codes-things/Arty) brain (`arty/qwen3:14b` unless you pick another), so your
+[Arty](https://github.com/drew-codes-things/Arty) brain (its own coding model unless you pick another: the first `arty/` model it marks for coding, or
+`arty/qwen3:14b` when it marks none or can't be asked quickly; this is never saved as your choice), so your
 code only ever goes to your own server. You need an Arty API key, or to approve this computer in Arty from your browser.
 
 | Tool | What it does | Asks first? |
@@ -56,14 +57,47 @@ Every tool result the model sees is cut to 60,000 characters at most.
 without asking, apart from `.arty` and `.git` folders); `plan` (look and plan only, nothing changed or run; `/plan` switches it; when the model has a plan it
 presents it with the `present_plan` tool and you answer **y** to approve it, so plan mode ends and the work carries on
 in `default`, **a** to approve it and carry on in `auto-edit`, or **n** to keep planning, with what should change); `allow-all` (nothing asked,
-only for a folder you can throw away). On a terminal the prompt is a `›` between two rules, with a bar under it that
-names the mode: `default mode (shift+tab to cycle) · esc to interrupt`. **Shift+Tab** at the prompt moves on to the
-next mode, keeping what you have typed: default, auto-edit, plan, then default again. On Enter the box is swapped for
-the line you typed (`› add a --dry-run flag`), and the `/` menu shows above the box. When output isn't a terminal the
-prompt is the plain `plan ›` with the mode in front.
-allow-all is never reached with Shift+Tab, only with `/mode allow-all` or the flag. On Linux the prompt uses readline (so
-the arrow keys and history work too); on Windows it reads keys itself and handles typing, Backspace, Delete, the
-left and right arrows, Home, End, and up and down for earlier lines.
+only for a folder you can throw away). **Shift+Tab** moves on to the next mode, keeping what you have typed: default,
+auto-edit, plan, then default again. allow-all is never reached with Shift+Tab, only with `/mode allow-all` or the flag.
+
+### The terminal interface
+
+On a terminal ArtyCode runs as its own interface inside it (built on [prompt_toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit),
+its one dependency). It doesn't take over the screen: everything it prints stays in the terminal's normal scrollback,
+and an input box stays pinned underneath.
+
+```
+● Run python3 -m pytest test_greet.py
+  └ 1 passed in 0.01s (exit code 0)
+  queued: also update the README
+• Thinking… (12s · ↓ 340 tokens · esc to interrupt)
+──────────────────────────────────────────────────────────────
+› and then
+──────────────────────────────────────────────────────────────
+  default mode (shift+tab to cycle) · esc to interrupt
+```
+
+- **Typing while Arty works.** The box is always live. Enter while a request runs queues your message (shown as
+  `queued: ...` above the box) and it is sent when the turn ends. **Esc** stops the running request. **Ctrl-C** clears
+  what you typed; on an empty line it asks once more and the second Ctrl-C leaves. **Ctrl-D** on an empty line leaves.
+- **Menus.** `/` opens a list of commands under the box that narrows as you type, each with what it does; after
+  `/model ` it lists the models; `@` completes file paths inside the project. Up and Down move through it, Tab or
+  Enter takes the highlighted entry, Esc closes it.
+- **History.** Up and Down walk through earlier requests, kept per project between sessions (in the config folder's
+  `history/`, readable only by you). **Ctrl-R** searches them.
+- **Several lines.** Alt+Enter (or Ctrl-J, or a line ending in `\`) starts another line; pasted text of several lines
+  stays one message.
+- **Status.** One line just above the box says what is happening, for how long and how many tokens so far, and
+  updates in place. The line being written by the model shows above it until it is complete.
+- **Questions.** Permission questions, plan approval and the model list from `/model` are asked in the interface:
+  move with Up and Down or press the answer's letter or number, Enter confirms, Esc refuses. The answer is then
+  noted in the scrollback (`Edit greet.py? → Yes`). "What should Arty do instead?" and plan feedback are typed in the
+  box (what you were writing is put back afterwards). With remote control on, an answer from another device still
+  wins or loses the same way as before.
+
+`--plain` keeps the line-at-a-time prompt instead: a `›` between two rules with the mode bar under it, read with
+readline on Linux (arrow keys and history work) and key by key on Windows. The plain prompt is also what you get
+when output isn't a terminal, with `-p`, and when the interface can't start (it says why).
 
 ### Look-only commands
 
@@ -120,7 +154,7 @@ Arty works without the other two. ArtyCode needs Arty. starfire.ai works with ot
 
 ## Install
 
-Python 3.11 or newer.
+Python 3.11 or newer. The installers (and pipx) also fetch prompt_toolkit, the one library ArtyCode needs, from PyPI.
 
 **Debian (and other Linux), one line:**
 
@@ -282,7 +316,7 @@ printed). All of this is only when both output and errors go to a terminal, so p
 On a terminal the answer, notes and steps wrap between words at the window's width, with a word that would run past
 the edge moved to the next line; code blocks, diffs and the output of `!commands` are left as written. When a request that
 took steps ends, one line says how long it worked, how many steps it took and how many tokens the model wrote.
-Esc or Ctrl-C stops the current request, helpers included (what it already changed or ran, MCP calls too, stays noted
+Esc stops the current request (so does Ctrl-C at the plain prompt), helpers included (what it already changed or ran, MCP calls too, stays noted
 in the conversation); a question waiting for your answer reads keys normally. Ctrl-D leaves.
 
 ### Long jobs

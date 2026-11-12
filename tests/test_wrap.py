@@ -110,3 +110,10 @@ def test_steps_and_outcomes_wrap_under_their_mark(monkeypatch):
     terminal.show_outcome("Result: 42 printed (exit code 0)", False)
     assert err.getvalue() == ("● Run python\n  calculator.py with\n  input\n"
                               "  └ Result: 42 printed\n    (exit code 0)\n")
+
+
+def test_on_a_terminal_a_plan_is_wrapped_too(monkeypatch):
+    monkeypatch.setattr(wrap, "columns", lambda: 21)
+    err = Tty()
+    cli.Terminal(Tty(), err).show_plan("1. Read the calculator and its tests\n2. Fix it")
+    assert on_screen(err.getvalue()) == ["1. Read the ", "calculator and its ", "tests", "2. Fix it", ""]
