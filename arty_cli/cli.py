@@ -15,8 +15,8 @@ from urllib.parse import urlparse
 from arty_cli import extras as extras_module
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
-                       mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sessions, settings,
-                       skills, tools, webfetch)
+                       mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
+                       settings, skills, tools, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -232,6 +232,8 @@ def parse_arguments(argv):
     parser.add_argument("--auto-edit", action="store_true", help="same as --permission-mode auto-edit")
     parser.add_argument("--remote", action="store_true",
                         help="share the chat with Arty on your phone or starfire.ai from the start (same as /remote)")
+    parser.add_argument("--sandbox", action="store_true",
+                        help="run commands in a sandbox: only the project folder is writable, no network")
     parser.add_argument("--version", action="version", version=f"arty-cli {__version__}")
     return parser.parse_args(argv)
 
@@ -920,6 +922,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         workspace.lint = lint.Checker(workspace.root)
     if repomap.wanted(settings.config_dir(), workspace.root, trusted):
         workspace.repo_map = repomap.RepoMap(workspace.root, settings.config_dir() / REPO_MAP_FOLDER)
+    choice = sandbox.chosen(settings.config_dir(), workspace.root, trusted, arguments.sandbox)
+    workspace.sandbox = sandbox.Sandbox(workspace.root, choice, secret_paths=(settings.config_dir(),))
     loaded = session_extras(workspace, trusted, terminal, client.search_web)
     gate.ask = notifying(terminal.ask, loaded, terminal)
     gate.review = notifying(terminal.review_plan, loaded, terminal, PLAN_APPROVAL)
@@ -927,6 +931,10 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         session = Session(client, workspace, gate, terminal, saved, project_trusted=trusted, extras=loaded)
         if workspace.repo_map and workspace.repo_map.problem:
             terminal.note(workspace.repo_map.problem, "error")
+        if workspace.sandbox.problem:
+            terminal.note(workspace.sandbox.problem, "error")
+        elif workspace.sandbox.active:
+            terminal.note(workspace.sandbox.describe())
         session.start_hook(RESUME if saved.messages else STARTUP)
         once = arguments.once or " ".join(arguments.words)
         if once and arguments.remote:

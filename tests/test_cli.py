@@ -776,3 +776,29 @@ def test_the_project_map_can_be_switched_off(ready):
     (personal / "settings.json").write_text('{"repoMap": false}')
     cli.main(["-p", "hello"])
     assert "charge_card" not in FakeBrain.made[0].calls[0][0]["content"]
+
+
+def test_commands_are_not_sandboxed_unless_asked(ready, monkeypatch):
+    made = started_workspaces(monkeypatch)
+    cli.main(["-p", "hello"])
+    assert made[0].sandbox.choice.mode == cli.sandbox.OFF
+
+
+def test_the_sandbox_flag_switches_it_on_and_says_so(ready, monkeypatch, capsys):
+    made = started_workspaces(monkeypatch)
+    monkeypatch.setattr(cli.sandbox, "platform_problem", lambda root: "")
+    cli.main(["--sandbox", "-p", "hello"])
+    assert made[0].sandbox.active
+    assert "sandbox" in capsys.readouterr().err
+
+
+def test_a_sandbox_that_cannot_run_is_reported(ready, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sandbox, "platform_problem", lambda root: "bwrap isn't installed")
+    cli.main(["--sandbox", "-p", "hello"])
+    assert "bwrap isn't installed" in capsys.readouterr().err
+
+
+def test_the_sandbox_hides_your_arty_settings_folder(ready, monkeypatch):
+    made = started_workspaces(monkeypatch)
+    cli.main(["-p", "hello"])
+    assert cli.settings.config_dir() in made[0].sandbox.secret_paths

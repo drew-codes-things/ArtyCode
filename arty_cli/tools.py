@@ -106,6 +106,7 @@ class Workspace:
         self.checkpoints = []
         self.lint = None
         self.repo_map = None
+        self.sandbox = None
 
     def lint_note(self, path: Path, text: str) -> str:
         if self.lint is None:
@@ -545,7 +546,10 @@ def shell_command(command: str) -> tuple[list[str] | str, dict]:
 
 
 def stop(process: subprocess.Popen) -> None:
-    if sys.platform == "win32":
+    end_tree = getattr(process, "end_tree", None)
+    if end_tree is not None:
+        end_tree()
+    elif sys.platform == "win32":
         subprocess.run([windows_system_program("taskkill.exe"), "/F", "/T", "/PID", str(process.pid)],
                        capture_output=True)
     else:
@@ -556,9 +560,14 @@ def stop(process: subprocess.Popen) -> None:
 
 
 def start_process(workspace, command: str) -> subprocess.Popen:
+    pipes = {"cwd": workspace.root, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT,
+             "stdin": subprocess.DEVNULL, "text": True, "encoding": "utf-8", "errors": "replace"}
+    if workspace.sandbox is not None:
+        sandboxed = workspace.sandbox.start(command, **pipes)
+        if sandboxed is not None:
+            return sandboxed
     arguments, options = shell_command(command)
-    return subprocess.Popen(arguments, cwd=workspace.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", **options)
+    return subprocess.Popen(arguments, **pipes, **options)
 
 
 def start_job(workspace, command: str) -> str:
