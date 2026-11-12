@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from arty_cli import tools
+from arty_cli import eyes, tools
 
 YES, NO, ALWAYS, SAVE = "y", "n", "a", "s"
 AGREEING = (YES, ALWAYS, SAVE)
@@ -48,7 +48,7 @@ GIT_CONFIG_SECONDS = 10
 SHELL_CONTROL = re.compile(r"[;&|<>`$\n]")
 GROUPING = set("(){}")
 QUOTES = "'\""
-READING_TOOLS = ("read_file", "list_files", "search")
+READING_TOOLS = ("read_file", "list_files", "search", eyes.VIEW_IMAGE)
 FREE_TOOLS = ("command_output", "stop_command", "todo_write")
 EDITS = "edits"
 WEB_SEARCH = "web_search"
@@ -64,7 +64,10 @@ RULE_SHAPE = re.compile(r"^([A-Za-z0-9_*?\[\]-]+)(?:\((.*)\))?$", re.DOTALL)
 COMMAND_PARTS = re.compile(r"[;&|\n]+")
 SETTINGS_FILE = "settings.json"
 PROJECT_SETTINGS = Path(".arty") / SETTINGS_FILE
-PATH_TOOLS = ("read_file", "write_file", "edit_file", "multi_edit", "notebook_edit", "search")
+PATH_TOOLS = ("read_file", "write_file", "edit_file", "multi_edit", "notebook_edit", "search", eyes.VIEW_IMAGE)
+LOOKING_TOOLS = (eyes.SCREENSHOT, eyes.HTTP_CHECK)
+LOOK_QUESTIONS = {eyes.SCREENSHOT: "Open {url} in a headless browser?", eyes.HTTP_CHECK: "Check {url}?"}
+OUTSIDE_PAGE_QUESTION = "Open a file outside the project in a headless browser: {path}?"
 PROTECTED_FOLDERS = (".arty", ".git")
 PROTECTED_NOTE = "it is part of the project's arty-cli or git setup, which can run programs"
 PLAN_REFUSAL = ("Plan mode is on: nothing may be changed or run except looking. Finish looking, then set out the plan "
@@ -244,9 +247,18 @@ def call_target(workspace, name: str, arguments: dict) -> str:
         return str(arguments.get("command") or "").strip()
     if name == "web_fetch":
         return str(arguments.get("url") or "")
+    if name in LOOKING_TOOLS:
+        return looked_at_address(workspace, arguments)
     if name == WEB_SEARCH:
         return str(arguments.get("query") or "")
     return ""
+
+
+def looked_at_address(workspace, arguments: dict) -> str:
+    try:
+        return eyes.page_address(str(arguments.get("url") or ""), workspace.root)
+    except tools.ToolError:
+        return str(arguments.get("url") or "")
 
 
 def rule_matches(rule: str, name: str, targets: list[str]) -> bool:
@@ -308,9 +320,9 @@ def literal_pattern(text: str) -> str:
     return RULE_WILDCARDS.sub(r"[\1]", text)
 
 
-def site_rule(url: str) -> str:
+def site_rule(url: str, tool: str = "web_fetch") -> str:
     parts = urlparse(url)
-    return f"web_fetch({literal_pattern(f'{parts.scheme}://{parts.netloc}')}/*)" if parts.scheme and parts.netloc else ""
+    return f"{tool}({literal_pattern(f'{parts.scheme}://{parts.netloc}')}/*)" if parts.scheme and parts.netloc else ""
 
 
 def saved_settings(path: Path) -> dict:
@@ -391,7 +403,7 @@ class Gate:
         return self.rules.allows(name, call_target(self.workspace, name, arguments))
 
     def changes_things(self, name: str, arguments: dict) -> bool:
-        if name in READING_TOOLS or name in FREE_TOOLS or name in ("web_fetch", WEB_SEARCH):
+        if name in READING_TOOLS or name in FREE_TOOLS or name in ("web_fetch", WEB_SEARCH, *LOOKING_TOOLS):
             return False
         if name == "run_command":
             return not is_read_only_command(str(arguments.get("command", ""))) or bool(arguments.get("background"))
@@ -486,6 +498,8 @@ class Gate:
             return self.confirm(f"Read outside the project: {arguments.get('path')}?")
         if name == "web_fetch":
             return self.check_fetch(str(arguments.get("url", "")))
+        if name in LOOKING_TOOLS:
+            return self.check_look(name, str(arguments.get("url") or ""))
         if name == WEB_SEARCH:
             return self.check_search(str(arguments.get("query", "")))
         if name in tools.CHANGING_TOOLS:
@@ -533,6 +547,24 @@ class Gate:
         if site and f"site:{site}" in self.always:
             return None
         return self.confirm(f"Fetch {url}?", remember=f"site:{site}" if site else "", rule=site_rule(url))
+
+    def check_look(self, name: str, url: str) -> str | None:
+        try:
+            address = eyes.page_address(url, self.workspace.root)
+        except tools.ToolError as error:
+            return f"Error: {error}"
+        parts = urlparse(address)
+        if parts.scheme == eyes.FILE_SCHEME:
+            place = eyes.file_of(address)
+            inside = self.workspace.contains(str(place))
+            return None if inside else self.confirm(OUTSIDE_PAGE_QUESTION.format(path=place))
+        if eyes.is_this_computer(parts.hostname or ""):
+            return None
+        remembered = f"{name}:{parts.netloc}"
+        if remembered in self.always:
+            return None
+        return self.confirm(LOOK_QUESTIONS[name].format(url=address), remember=remembered,
+                            rule=site_rule(address, name))
 
     def review_plan(self, plan: str) -> str:
         if self.mode != PLAN:

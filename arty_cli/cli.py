@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from arty_cli import extras as extras_module
+from arty_cli import eyes
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
@@ -1072,7 +1073,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         workspace.repo_map = repomap.RepoMap(workspace.root, settings.config_dir() / REPO_MAP_FOLDER)
     choice = sandbox.chosen(settings.config_dir(), workspace.root, trusted, arguments.sandbox)
     workspace.sandbox = sandbox.Sandbox(workspace.root, choice, secret_paths=(settings.config_dir(),))
-    loaded = session_extras(workspace, trusted, terminal, client.search_web)
+    loaded = session_extras(workspace, trusted, terminal, client.search_web, eyes.Eyes(workspace, client))
     gate.ask = notifying(terminal.ask, loaded, terminal)
     gate.instead = terminal.instead
     gate.review = notifying(terminal.review_plan, loaded, terminal, PLAN_APPROVAL)
@@ -1174,7 +1175,7 @@ def answered_as_stream(session: Session, request: str) -> int:
     return 0 if answered else FAILED
 
 
-def session_extras(workspace, trusted: bool, terminal: Terminal, search):
+def session_extras(workspace, trusted: bool, terminal: Terminal, search, looks=None):
     personal = settings.config_dir()
     found_hooks, problems = hooks.load(personal, workspace, trusted)
     wanted, trouble = mcp.configs(personal, workspace, trusted)
@@ -1188,7 +1189,7 @@ def session_extras(workspace, trusted: bool, terminal: Terminal, search):
     for problem in problems:
         terminal.note(problem, "error")
     return extras_module.Extras(hooks=found_hooks, skills=skills.find(personal, workspace, trusted), hub=hub,
-                                search=search, helpers=found_helpers)
+                                search=search, helpers=found_helpers, looks=looks)
 
 
 if __name__ == "__main__":
