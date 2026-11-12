@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from arty_cli import extras as extras_module
 from arty_cli import eyes
+from arty_cli import finish
 from arty_cli import rules
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
@@ -1464,6 +1465,7 @@ def main(argv=None) -> int:
         settings.positive_number(config, "context_tokens")
         workspace = tools.Workspace(arguments.project or Path.cwd())
         workspace.max_command_seconds = settings.positive_number(config, "max_command_seconds") or tools.MAX_COMMAND_SECONDS
+        workspace.finish_check = finish.FinishCheck(enabled=settings.is_on(config, "finish_check"))
         try:
             return run_session(arguments, config, workspace, terminal)
         finally:

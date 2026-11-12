@@ -10,7 +10,9 @@ CONFIG_NAME = "config.json"
 DEFAULT_MODEL = "arty/qwen3:14b"
 RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
-OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with")
+OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with", "finish_check")
+SWITCHED_ON = ("on", "true", "yes", "1")
+SWITCHED_OFF = ("off", "false", "no", "0")
 TEMPORARY_NAME_BYTES = 8
 ENVIRONMENT_NAMES = {
     "base_url": "ARTY_URL",
@@ -22,6 +24,7 @@ ENVIRONMENT_NAMES = {
     "context_tokens": "ARTY_CLI_CONTEXT_TOKENS",
     "max_command_seconds": "ARTY_CLI_MAX_COMMAND_SECONDS",
     "search_with": "ARTY_CLI_SEARCH_WITH",
+    "finish_check": "ARTY_CLI_FINISH_CHECK",
 }
 
 
@@ -40,6 +43,7 @@ class Settings:
     context_tokens: str = ""
     max_command_seconds: str = ""
     search_with: str = ""
+    finish_check: str = ""
 
     def is_ready(self) -> bool:
         return bool(self.api_key and (self.base_url or self.remote_url))
@@ -53,6 +57,16 @@ def positive_number(settings: Settings, name: str) -> int | None:
         raise SettingsError(f"{name} should be a whole number above 0 (set it in {CONFIG_NAME} or "
                             f"{ENVIRONMENT_NAMES[name]}), not {given!r}.")
     return int(given)
+
+
+def is_on(settings: Settings, name: str) -> bool:
+    given = str(getattr(settings, name) or "").strip().lower()
+    if not given or given in SWITCHED_ON:
+        return True
+    if given in SWITCHED_OFF:
+        return False
+    raise SettingsError(f"{name} should be on or off (set it in {CONFIG_NAME} or {ENVIRONMENT_NAMES[name]}), "
+                        f"not {given!r}.")
 
 
 def config_dir(environ=os.environ, platform=sys.platform) -> Path:

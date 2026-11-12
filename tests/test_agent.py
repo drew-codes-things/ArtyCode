@@ -1,5 +1,6 @@
 import _thread
 import json
+import re
 import threading
 
 import pytest
@@ -1157,3 +1158,63 @@ def test_a_reply_that_says_what_it_will_do_or_has_not_done_is_sent_back_to_do_it
 
 def test_offering_more_with_let_me_know_is_not_taken_for_an_announced_step():
     assert not agent.announces_a_next_step("Built calc.py. Let me know if you'd like me to add a history feature.")
+
+
+FAILING_TESTS = "FAILED test_calc.py::test_divide\n=== 13 failed, 17 passed in 0.5s ===\n[exit code 0]"
+
+
+def failing_test_workspace(tmp_path, monkeypatch, enabled=True):
+    from arty_cli import finish
+    workspace = tools.Workspace(tmp_path)
+    workspace.finish_check = finish.FinishCheck(enabled=enabled)
+    monkeypatch.setitem(tools.HANDLERS, "run_command", lambda workspace, **arguments: FAILING_TESTS)
+    return workspace
+
+
+def test_ending_with_failing_tests_sends_one_follow_up_and_shows_it(tmp_path, monkeypatch):
+    workspace = failing_test_workspace(tmp_path, monkeypatch)
+    scripted = ScriptedBrain(("", [call("run_command", command="python3 -m pytest 2>&1 | tail -40")]),
+                             ("All done.", []), ("Still 13 failing: the spec contradicts itself.", []))
+    screen = Screen()
+    messages = [{"role": "user", "content": "make the calculator"}]
+    answer = agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, lambda q, p="", s="": "y"), screen)
+    assert answer == "Still 13 failing: the spec contradicts itself."
+    follow_ups = [m["content"] for m in messages if m["role"] == "user"][1:]
+    assert len(follow_ups) == 1 and "13 failed, 17 passed" in follow_ups[0]
+    assert any("13 failed" in line for line in screen.activity)
+
+
+def test_no_follow_up_in_plan_mode_or_when_switched_off(tmp_path, monkeypatch):
+    for mode, enabled in ((permissions.PLAN, True), (permissions.DEFAULT, False)):
+        workspace = failing_test_workspace(tmp_path, monkeypatch, enabled)
+        workspace.finish_check.record("pytest", FAILING_TESTS)
+        scripted = ScriptedBrain(("Done.", []))
+        messages = [{"role": "user", "content": "go"}]
+        gate = permissions.Gate(workspace, lambda q, p="", s="": "y", mode=mode)
+        assert agent.run_turn(messages, scripted, workspace, gate, Screen()) == "Done."
+        assert len(messages) == 2
+
+
+def test_a_failure_from_an_interrupted_request_is_not_followed_up_later(tmp_path, monkeypatch):
+    workspace = failing_test_workspace(tmp_path, monkeypatch)
+    workspace.finish_check.record("pytest", FAILING_TESTS)
+    scripted = ScriptedBrain(("Hello.", []))
+    messages = [{"role": "user", "content": "hi"}]
+    assert agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, lambda q, p="", s="": "y"),
+                          Screen()) == "Hello."
+    assert len(messages) == 2
+
+
+BRAIN_FOLLOW_UP_OPENINGS = re.compile(
+    r"^\W*(?:yes, )?(?:carry on\b|do (?:that|it) now\b|you said you haven['’]t\b|your last reply was cut off\b|"
+    r"your checklist still has unfinished items\b|an? (?:stop|subagentstop) hook asked you\b|"
+    r"you haven['’]t changed anything\b|you have made the same tool calls\b|before you finish\b)", re.I)
+
+
+def test_every_automatic_follow_up_opens_the_way_the_brain_recognises():
+    from arty_cli import checks, finish
+    follow_ups = [agent.DO_IT_NOW, agent.NOT_DONE_ANSWER, agent.CARRY_ON_ANSWER, agent.CUT_SHORT_ANSWER,
+                  agent.unfinished_note([{"status": "pending", "text": "x"}]), agent.STOP_HOOK_LEAD,
+                  agent.SUBAGENT_STOP_LEAD, agent.NOTHING_CHANGED_YET, agent.STUCK_NOTE, checks.FINISH_LEAD,
+                  finish.FOLLOW_UP.format(summary="1 failed", command="pytest", tail="F")]
+    assert [text for text in follow_ups if not BRAIN_FOLLOW_UP_OPENINGS.search(text)] == []

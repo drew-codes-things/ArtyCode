@@ -250,7 +250,8 @@ key being sent; a per-device key is proved through its SHA-256), so on another n
 address never sees it.
 
 These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `ARTY_API_KEY`,
-`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`. Two optional limits can be set the same way,
+`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET`, `ARTY_CLI_MODEL` and `ARTY_CLI_FINISH_CHECK` (`on` or `off`, the
+finish check above). Two optional limits can be set the same way,
 as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_TOKENS` and
 `ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (unless set, the size the brain reports in its model list, or 12288 tokens for a brain that doesn't say) and the
 longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops ArtyCode at the start
@@ -342,6 +343,14 @@ files in parts. A real question for you, or a second stop in a row, ends the req
 stops a job on its own is the same step with the same result over and over (it is warned once first); waiting on a
 background build that is still running doesn't count.
 
+The finish check: when the model ends a request while the last test run it made in that request still fails (a
+non-zero exit, or output such as `13 failed, 17 passed`, `FAILED (failures=2)` or `Tests: 2 failed`, so a pytest piped
+through `tail` counts too), ArtyCode sends it back with that summary line and the end of the test output, asking it to
+keep fixing or to explain clearly why the tests can't pass. A dim `Finish check:` line shows when that happens. It is
+sent at most twice per request, the second time only if fewer tests fail than the first time, never in plan mode, and
+not for a request you stopped. Set `finish_check` to `off` in the config file (or `ARTY_CLI_FINISH_CHECK=off`) to
+turn it off.
+
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
 long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
 writes), and only five minutes of total silence counts as a lost connection.
@@ -401,7 +410,8 @@ They are also checked, not only told:
 - When the model says it has finished a request that changed files, it is sent back if comments or em dashes it added
   are still there (up to three times), once if nothing was run to check the work after the last change (a test,
   build, lint or the program; looking around with `ls`, `cat` or `git` doesn't count) and the report doesn't say
-  `UNVERIFIED` (a command that wasn't found doesn't count), and once more if no entry was added to
+  `UNVERIFIED` (a command that wasn't found, or a test run that failed, doesn't count; with the finish check off, a
+  failing last test run is named in that send-back), and once more if no entry was added to
   `.arty/history.md`. Those two are asked for one at a time, and every send-back ends with the report shape.
 
 Arty writes `.arty/scratchpad.md` and `.arty/history.md` without asking, and `.arty/history.md` only at its end:

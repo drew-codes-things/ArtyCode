@@ -1310,3 +1310,11 @@ def test_the_session_listens_for_the_brains_reasoning(ready, monkeypatch):
     monkeypatch.setattr(cli.brain, "Brain", ThinkingBrain)
     assert cli.main(["-p", "hello"]) == 0
     assert heard == ["pondering"]
+
+
+def test_the_finish_check_follows_the_settings(ready, monkeypatch):
+    monkeypatch.setattr(cli.settings, "load", lambda *a, **k: settings.Settings(base_url="http://b/v1", api_key="k",
+                                                                              finish_check="off"))
+    made = started_workspaces(monkeypatch)
+    cli.main(["-p", "hello"])
+    assert made[0].finish_check.enabled is False

@@ -211,8 +211,57 @@ def test_a_command_that_was_not_found_is_not_a_check(tmp_path):
     checks.checked_result(workspace, watched, "bash: python: command not found\n[exit code 127]")
     assert turn_state.checked_at < turn_state.changed_at
     watched = checks.watch(workspace, "run_command", {"command": "python3 -m pytest"})
-    checks.checked_result(workspace, watched, "1 failed\n[exit code 1]")
+    checks.checked_result(workspace, watched, "30 passed\n[exit code 0]")
     assert turn_state.checked_at > turn_state.changed_at
+
+
+def test_a_failing_test_run_is_not_a_check_and_is_remembered(tmp_path):
+    workspace = ruled_workspace(tmp_path)
+    checks.start_turn(workspace)
+    changed_through_the_checks(workspace, "write_file", {"path": "app.py", "content": "x = 1\n"})
+    turn_state = checks.current_turn(workspace)
+    watched = checks.watch(workspace, "run_command", {"command": "python3 -m pytest | tail -5"})
+    checks.checked_result(workspace, watched, "=== 13 failed, 17 passed ===\n[exit code 0]")
+    assert turn_state.checked_at < turn_state.changed_at
+    assert turn_state.failing_run.failures == 13 and turn_state.failing_run.exit_code == 0
+    checks.checked_result(workspace, watched, "=== 30 passed ===\n[exit code 0]")
+    assert turn_state.checked_at > turn_state.changed_at and turn_state.failing_run is None
+
+
+FAILING_PYTEST = python_call("-c", "print('=== 2 failed, 3 passed ==='); raise SystemExit(1)") + " # pytest"
+
+
+def test_finishing_on_failing_tests_is_sent_back_with_the_failure_when_there_is_no_finish_check(tmp_path):
+    workspace = ruled_workspace(tmp_path)
+    answer, messages, _scripted = turn(
+        workspace,
+        ("", [call("write_file", path="app.py", content="x = 1\n")]),
+        ("", [call("write_file", "c2", path=".arty/history.md", content=HISTORY_ENTRY)]),
+        ("", [call("run_command", "c3", command=FAILING_PYTEST)]),
+        ("Done.", []),
+        ("Done anyway.", []),
+    )
+    [sent] = sent_back_texts(messages)
+    assert "2 failed, 3 passed" in sent and checks.VERIFY_REQUEST not in sent
+    assert answer == "Done anyway."
+
+
+def test_with_the_finish_check_on_failing_tests_are_left_to_it(tmp_path):
+    from arty_cli import finish
+    workspace = ruled_workspace(tmp_path)
+    workspace.finish_check = finish.FinishCheck()
+    answer, messages, _scripted = turn(
+        workspace,
+        ("", [call("write_file", path="app.py", content="x = 1\n")]),
+        ("", [call("write_file", "c2", path=".arty/history.md", content=HISTORY_ENTRY)]),
+        ("", [call("run_command", "c3", command=FAILING_PYTEST)]),
+        ("Done.", []),
+        ("Cannot pass: the spec contradicts itself.", []),
+    )
+    assert sent_back_texts(messages) == []
+    follow_ups = [m["content"] for m in messages if m["role"] == "user"][1:]
+    assert len(follow_ups) == 1 and "2 failed, 3 passed" in follow_ups[0]
+    assert answer == "Cannot pass: the spec contradicts itself."
 
 
 def test_a_report_marked_unverified_with_a_history_entry_may_finish(tmp_path):
