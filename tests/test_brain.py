@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -313,3 +314,60 @@ def test_written_calls_one_per_line_are_all_recognised_in_order():
 ])
 def test_json_that_is_not_only_calls_on_their_own_lines_stays_text(text):
     assert brain.written_tool_calls(text, OFFERED_NAMES) == []
+
+
+HALF_AN_ANSWER = f"data: {json.dumps({'choices': [{'delta': {'content': 'half an ans'}}]})}\n\n".encode()
+
+
+class CutOffBrain(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(HALF_AN_ANSWER)
+
+    def log_message(self, *args):
+        pass
+
+
+class ChunkedCutOffBrain(CutOffBrain):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        self.wfile.write(f"{len(HALF_AN_ANSWER):x}\r\n".encode() + HALF_AN_ANSWER + b"\r\n")
+        self.close_connection = True
+
+
+@pytest.mark.parametrize("handler", [CutOffBrain, ChunkedCutOffBrain])
+def test_a_reply_cut_off_before_its_end_is_an_error_not_an_answer(handler):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    client = brain.Brain(settings.Settings(remote_url=f"http://127.0.0.1:{server.server_address[1]}/v1", api_key="key"))
+    try:
+        with pytest.raises(brain.BrainError, match="stopped before its end"):
+            client.reply([{"role": "user", "content": "hi"}], tools=[], on_text=lambda text: None)
+    finally:
+        server.shutdown()
+    assert client.address() == ""
+
+
+def test_a_reply_that_ends_with_a_finish_reason_is_complete():
+    finished = [f"data: {json.dumps({'choices': [{'delta': {'content': 'ok'}, 'finish_reason': 'stop'}]})}"]
+    assert brain.read_reply(finished, lambda text: None)["content"] == "ok"
+
+
+def test_a_secure_connection_failing_mid_reply_is_a_brain_error(remote, monkeypatch):
+    def failing_lines(response):
+        yield HALF_AN_ANSWER.decode().strip()
+        raise ssl.SSLError("record layer failure")
+
+    monkeypatch.setattr(brain, "decoded_lines", failing_lines)
+    client = brain.Brain(settings.Settings(remote_url=remote, api_key="key"))
+    with pytest.raises(brain.BrainError, match="record layer failure"):
+        client.reply([{"role": "user", "content": "hi"}], tools=[], on_text=lambda text: None)

@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import http.client
 import json
 import re
 import secrets
@@ -20,6 +21,7 @@ MODEL_PREFIX = "arty/"
 SKIPPED_GROUPS = "browser,screen,windows,computer,documents"
 DATA_PREFIX = "data: "
 DONE = "data: [DONE]"
+CUT_OFF = "the reply stopped before its end, so it was not used"
 DEFAULT_PORTS = {"http": 80, "https": 443}
 IDENTITY_PREFIX = "arty-identity:"
 NONCE_BYTES = 16
@@ -184,16 +186,18 @@ def with_written_calls(reply: dict, tools: list[dict]) -> dict:
 
 
 def read_reply(lines, on_text) -> dict:
-    content, calls = [], {}
+    content, calls, finished = [], {}, False
     for line in lines:
         if not line.startswith(DATA_PREFIX):
             continue
         if line == DONE:
+            finished = True
             break
         try:
             choice = (json.loads(line[len(DATA_PREFIX):]).get("choices") or [{}])[0]
         except ValueError as error:
             raise BrainError(f"Arty's brain sent something unreadable: {error}") from None
+        finished = finished or bool(choice.get("finish_reason"))
         delta = choice.get("delta") or {}
         if delta.get("content"):
             content.append(delta["content"])
@@ -201,6 +205,8 @@ def read_reply(lines, on_text) -> dict:
         for call in delta.get("tool_calls") or []:
             index = call.pop("index", len(calls))
             calls[index] = call
+    if not finished:
+        raise ConnectionError(CUT_OFF)
     return {"role": "assistant", "content": "".join(content), "tool_calls": [calls[i] for i in sorted(calls)]}
 
 
@@ -326,7 +332,7 @@ class Brain:
                 raise BrainError(f"Arty's brain is busy right now ({error_detail(error) or error.code}). "
                                  "Try again in a minute.") from None
             raise BrainError(f"Arty's brain hit an error: {error_detail(error) or error.code}") from None
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+        except (OSError, http.client.HTTPException) as error:
             self.route = None
             raise BrainError(f"Lost the connection to Arty's brain at {route.url}: {error}") from None
         return with_written_calls(reply, tools)
