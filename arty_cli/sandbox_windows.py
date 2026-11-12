@@ -287,8 +287,7 @@ def in_project_drive(root: Path, command: str) -> str:
 
 
 def command_line(root: Path, command: str) -> str:
-    return subprocess.list2cmdline([tools.windows_powershell(), "-NoProfile", "-NonInteractive", "-Command",
-                                    in_project_drive(root, command)])
+    return subprocess.list2cmdline(tools.powershell_arguments(in_project_drive(root, command)))
 
 
 def environment_block(environment: dict, container_folder: str) -> str:

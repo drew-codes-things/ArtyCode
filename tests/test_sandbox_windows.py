@@ -86,6 +86,11 @@ def test_a_sandboxed_command_reports_its_exit_code(tmp_path):
 
 
 @on_windows
+def test_a_sandboxed_program_passes_its_own_exit_code_back(tmp_path):
+    assert "[exit code 3]" in tools.run_command(sandboxed_workspace(tmp_path), "cmd /c exit 3")
+
+
+@on_windows
 def test_a_sandboxed_command_that_runs_too_long_is_stopped(tmp_path):
     result = tools.run_command(sandboxed_workspace(tmp_path), "'started'; Start-Sleep 30", timeout_seconds=2)
     assert "started" in result and "[stopped after 2 s]" in result
