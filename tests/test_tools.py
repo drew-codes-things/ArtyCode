@@ -481,3 +481,24 @@ def test_multi_edit_needs_the_file_read_first(workspace):
                        workspace)
     assert result.startswith("Error")
     assert (workspace.root / "src" / "app.py").read_text() == "def add(a, b):\n    return a - b\n"
+
+
+def test_an_edit_whose_newlines_were_written_as_backslash_n_still_applies():
+    before = "def greet():\n    return 'hi'\n"
+    after = tools.edited_text(before, "def greet():\\n    return 'hi'", "def greet():\\n    return 'hello'", False)
+    assert after == "def greet():\n    return 'hello'\n"
+
+
+def test_a_real_backslash_n_in_the_file_is_matched_as_written():
+    before = 'print("a\\nb")\n'
+    assert tools.edited_text(before, 'print("a\\nb")', 'print("a\\nc")', False) == 'print("a\\nc")\n'
+
+
+def test_escaped_text_that_still_does_not_match_gives_the_usual_error():
+    with pytest.raises(tools.ToolError, match="was not found"):
+        tools.edited_text("one\ntwo\n", "three\\nfour", "x", False)
+
+
+def test_escaped_text_found_in_several_places_needs_more_context():
+    with pytest.raises(tools.ToolError, match="2 places"):
+        tools.edited_text("a\nb\na\nb\n", "a\\nb", "c", False)

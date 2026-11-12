@@ -266,10 +266,22 @@ def line_count(limit) -> int:
     return asked if asked > 0 else DEFAULT_READ_LINES
 
 
+WRITTEN_OUT_ESCAPES = {"\\n": "\n", "\\t": "\t", '\\"': '"'}
+
+
+def unescaped(text: str) -> str:
+    for written, real in WRITTEN_OUT_ESCAPES.items():
+        text = text.replace(written, real)
+    return text
+
+
 def edited_text(before: str, old_text: str, new_text: str, replace_all: bool) -> str:
     if not old_text:
         raise ToolError("old_text is empty; use write_file to create a file")
     found = before.count(old_text)
+    if found == 0 and before.count(unescaped(old_text)) > 0:
+        old_text, new_text = unescaped(old_text), unescaped(new_text)
+        found = before.count(old_text)
     if found == 0:
         raise ToolError("old_text was not found; read the file again and copy the text exactly")
     if found > 1 and not replace_all:
