@@ -186,17 +186,33 @@ def test_a_clean_edit_gets_no_rule_note(tmp_path):
     assert answer == "Done." and sent_back_texts(messages) == []
 
 
-def test_finishing_without_checking_or_history_is_sent_back_once_then_allowed(tmp_path):
+def test_finishing_without_checking_or_history_is_sent_back_once_for_each_then_allowed(tmp_path):
     workspace = ruled_workspace(tmp_path)
     answer, messages, _scripted = turn(
         workspace,
         ("", [call("write_file", path="app.py", content="x = 1\n")]),
         ("All done.", []),
         ("Still done.", []),
+        ("Really done.", []),
     )
-    assert answer == "Still done."
-    [sent] = sent_back_texts(messages)
-    assert checks.VERIFY_REQUEST in sent and ".arty/history.md" in sent and "Verified by" in sent
+    assert answer == "Really done."
+    verify, history = sent_back_texts(messages)
+    assert checks.VERIFY_REQUEST in verify and ".arty/history.md" not in verify
+    assert ".arty/history.md" in history and "Verified by" in history and checks.VERIFY_REQUEST not in history
+    assert all(checks.REPORT_REMINDER in text for text in (verify, history))
+
+
+def test_a_command_that_was_not_found_is_not_a_check(tmp_path):
+    workspace = ruled_workspace(tmp_path)
+    checks.start_turn(workspace)
+    changed_through_the_checks(workspace, "write_file", {"path": "app.py", "content": "x = 1\n"})
+    turn_state = checks.current_turn(workspace)
+    watched = checks.watch(workspace, "run_command", {"command": "python -m pytest"})
+    checks.checked_result(workspace, watched, "bash: python: command not found\n[exit code 127]")
+    assert turn_state.checked_at < turn_state.changed_at
+    watched = checks.watch(workspace, "run_command", {"command": "python3 -m pytest"})
+    checks.checked_result(workspace, watched, "1 failed\n[exit code 1]")
+    assert turn_state.checked_at > turn_state.changed_at
 
 
 def test_a_report_marked_unverified_with_a_history_entry_may_finish(tmp_path):
@@ -237,6 +253,7 @@ def test_a_look_only_command_after_the_edit_is_not_a_check(tmp_path):
         ("Done again.", []),
     )
     assert len(sent_back_texts(messages)) == 1
+    assert answer == "Done again."
 
 
 def test_comments_left_in_send_the_model_back_until_a_limit_then_it_may_stop(tmp_path):
@@ -331,7 +348,7 @@ def test_each_request_starts_its_own_count(tmp_path):
     workspace = ruled_workspace(tmp_path)
     turn(workspace,
          ("", [call("write_file", path="app.py", content="x = 1\n")]),
-         ("Done.", []), ("Done.", []))
+         ("Done.", []), ("Done.", []), ("Done.", []))
     answer, messages, _scripted = turn(workspace, ("Nothing to change.", []))
     assert answer == "Nothing to change." and sent_back_texts(messages) == []
 
@@ -339,7 +356,7 @@ def test_each_request_starts_its_own_count(tmp_path):
 def test_being_sent_back_is_shown_on_the_screen(tmp_path):
     workspace = ruled_workspace(tmp_path)
     scripted = ScriptedBrain(("", [call("write_file", path="app.py", content="x = 1\n")]), ("Done.", []),
-                             ("Done.", []))
+                             ("Done.", []), ("Done.", []))
     screen = Screen()
     gate = permissions.Gate(workspace, lambda question, preview="": "y")
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace, gate, screen)
@@ -393,6 +410,8 @@ def test_a_check_run_in_the_background_counts_once_its_output_shows_it_finished(
 @pytest.mark.parametrize("ending, counts", [("\n[exit code 1]", True), ("\n[stopped after 120 s]", True),
                                             ("\n[stopped after 120 s. Run it in the background]", True),
                                             ("\n[job 2 finished with exit code 0]", True),
-                                            ("\n[job 2 still running]", False), ("Job 1 started", False)])
+                                            ("\n[job 2 still running]", False), ("Job 1 started", False),
+                                            ("\n[exit code 127]", False), ("\n[exit code 126]", False),
+                                            ("\n[job 3 finished with exit code 127]", False)])
 def test_which_command_results_show_the_command_ran(ending, counts):
-    assert bool(checks.RAN_TO_THE_END.search(f"output{ending}")) is counts
+    assert checks.ran_to_the_end(f"output{ending}") is counts

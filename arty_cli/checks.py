@@ -42,8 +42,9 @@ EM_DASH = "\u2014"
 COMMENT, DOCSTRING, EM_DASH_KIND = "comment", "docstring", "em dash"
 MAX_SHOWN_CHARS = 120
 MAX_COMMENT_SEND_BACKS = 3
-RAN_TO_THE_END = re.compile(r"\[(exit code -?\d+|stopped after \d+ s\b[^\]]*|"
-                            r"job \S+ finished with exit code -?\d+)\]\s*$")
+EXIT_CODE_AT_THE_END = re.compile(r"\[(?:job \S+ finished with )?exit code (-?\d+)\]\s*$")
+STOPPED_AT_THE_END = re.compile(r"\[stopped after \d+ s\b[^\]]*\]\s*$")
+NOT_RUN_EXIT_CODES = ("126", "127")
 COMMAND_SEPARATORS = re.compile(r"&&|\|\||[;|&\n]")
 ENVIRONMENT_SETTING = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 NOT_CHECKING_PROGRAMS = {
@@ -57,11 +58,15 @@ HITS_ADVICE = ("Say it in code instead: a clearer name, a smaller function or a 
                "history entry. Only tool directives may stay (shebangs, encoding lines, lint or type suppressions, "
                "license headers). Replace an em dash with a comma, colon or brackets.")
 FINISH_LEAD = "Before you finish (ArtyCode's built-in rules):"
-VERIFY_REQUEST = ("You changed files but ran nothing to check them after the last change. Run the tests, a build, a "
-                  "lint or the program now and report each command with its result. If it can't be checked, write "
-                  f"{rules.UNVERIFIED} in your report with what would check it.")
-HISTORY_REQUEST = (f"Append one entry for this task to the end of {rules.HISTORY.as_posix()} (read it first; create "
-                   "it if it is missing; never change earlier entries), in this shape:\n{template}")
+VERIFY_REQUEST = ("You changed files but ran nothing to check them after the last change. Run the project's tests "
+                  "now with run_command (or a build, a lint or the program itself) and read the result. If it can't "
+                  f"be checked, write {rules.UNVERIFIED} in your report with what would check it.")
+HISTORY_REQUEST = (f"Now append one entry for this task to the end of {rules.HISTORY.as_posix()}: create it with "
+                   "write_file if it is missing, otherwise read it and add the entry after its last line with "
+                   "edit_file. Never change earlier entries. The shape:\n{template}")
+REPORT_REMINDER = (f"Then finish with your report: Outcome (DONE, PARTIAL, BLOCKED or {rules.UNVERIFIED}), Changed, "
+                   "Verification (each command and its result), Assumptions, Open items.")
+VERIFY_STEP, HISTORY_STEP = "verify", "history"
 SENT_BACK_NOTE = "Rule check: sent back to"
 LEFT_IN_NOTE = "Rule check: still in the lines added:"
 
@@ -81,7 +86,7 @@ class Turn:
     changed_at: int = 0
     checked_at: int = 0
     comment_send_backs: int = 0
-    reminded: bool = False
+    asked: set = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def next_step(self) -> int:
@@ -263,8 +268,15 @@ def watch(workspace, name: str, arguments: dict) -> Watched | None:
     return Watched(name, "", path, text_or_none(path))
 
 
+def ran_to_the_end(result: str) -> bool:
+    ended = EXIT_CODE_AT_THE_END.search(result)
+    if ended is not None:
+        return ended.group(1) not in NOT_RUN_EXIT_CODES
+    return STOPPED_AT_THE_END.search(result) is not None
+
+
 def after_command(turn: Turn, watched: Watched, result: str) -> None:
-    if is_checking_command(watched.command) and RAN_TO_THE_END.search(result):
+    if is_checking_command(watched.command) and ran_to_the_end(result):
         with turn.lock:
             turn.checked_at = turn.next_step()
 
@@ -304,13 +316,13 @@ def history_appended(workspace, turn: Turn) -> bool:
     return len(now.strip()) > len(before.strip()) and now.startswith(before)
 
 
-def missing_steps(workspace, turn: Turn, answer: str) -> list[str]:
+def missing_steps(workspace, turn: Turn, answer: str) -> list[tuple[str, str]]:
     missing = []
     if turn.checked_at <= turn.changed_at and rules.UNVERIFIED not in answer:
-        missing.append(VERIFY_REQUEST)
+        missing.append((VERIFY_STEP, VERIFY_REQUEST))
     if not history_appended(workspace, turn):
-        missing.append(HISTORY_REQUEST.format(template=rules.history_template(rules.today_text())))
-    return missing
+        missing.append((HISTORY_STEP, HISTORY_REQUEST.format(template=rules.history_template(rules.today_text()))))
+    return [(step, request) for step, request in missing if step not in turn.asked]
 
 
 def show(screen, line: str) -> None:
@@ -327,10 +339,11 @@ def finish_reasons(workspace, turn: Turn, answer: str, screen) -> list[str]:
         reasons.append(hits_note(workspace, outstanding))
     elif outstanding:
         show(screen, f"{LEFT_IN_NOTE} {', '.join(workspace.shown(path) for path in outstanding)}")
-    if not turn.reminded:
-        missing = missing_steps(workspace, turn, answer)
-        turn.reminded = bool(missing)
-        reasons += missing
+    missing = missing_steps(workspace, turn, answer)
+    if missing:
+        step, request = missing[0]
+        turn.asked.add(step)
+        reasons.append(request)
     return reasons
 
 
@@ -342,7 +355,7 @@ def sent_back(workspace, messages: list[dict], answer: str, screen=None) -> bool
     if not reasons:
         return False
     show(screen, f"{SENT_BACK_NOTE} {', '.join(sent_for(reason) for reason in reasons)}")
-    messages.append({"role": "user", "content": "\n\n".join([FINISH_LEAD, *reasons])})
+    messages.append({"role": "user", "content": "\n\n".join([FINISH_LEAD, *reasons, REPORT_REMINDER])})
     return True
 
 
