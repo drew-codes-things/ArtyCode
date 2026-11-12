@@ -124,7 +124,8 @@ PLAN_FEEDBACK_QUESTION = "What should change? (Enter to skip) "
 YES_CHOICE = ("y", "Yes")
 ALWAYS_CHOICE = ("a", "Yes, and don't ask again for this until you quit")
 SAVE_CHOICE = ("s", "Yes, and save it as an allow rule for this project")
-NO_CHOICE = ("n", "No")
+NO_CHOICE = ("n", "No, and tell Arty what to do instead")
+INSTEAD_QUESTION = "What should Arty do instead? (Enter to just say no) "
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT = "text", "json", "stream-json"
 OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT)
@@ -159,6 +160,7 @@ class Terminal:
         self.offers_rules = False
         self.remote = None
         self.waiting = None
+        self.answered_here = False
         self.colour = self.err.isatty() and not os.environ.get("NO_COLOR")
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
@@ -247,7 +249,17 @@ class Terminal:
         answers = {**ANSWERS, **SAVE_ANSWERS} if self.offers_rules else ANSWERS
         saving = (SAVE_CHOICE,) if self.offers_rules else ()
         prompt = self.show_choices(question, (YES_CHOICE, ALWAYS_CHOICE, *saving, NO_CHOICE))
-        return self.answer(prompt, answers, question, preview)[0]
+        choice, by = self.answer(prompt, answers, question, preview)
+        self.answered_here = not by
+        return choice
+
+    def instead(self) -> str:
+        if not is_interactive() or not self.answered_here:
+            return ""
+        try:
+            return self.asked(INSTEAD_QUESTION).strip()
+        except EOFError:
+            return ""
 
     def show_choices(self, question: str, choices: tuple) -> str:
         self.note(question, "accent")
@@ -1030,6 +1042,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     workspace.sandbox = sandbox.Sandbox(workspace.root, choice, secret_paths=(settings.config_dir(),))
     loaded = session_extras(workspace, trusted, terminal, client.search_web)
     gate.ask = notifying(terminal.ask, loaded, terminal)
+    gate.instead = terminal.instead
     gate.review = notifying(terminal.review_plan, loaded, terminal, PLAN_APPROVAL)
     try:
         session = Session(client, workspace, gate, terminal, saved, project_trusted=trusted, extras=loaded)

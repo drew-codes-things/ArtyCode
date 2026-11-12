@@ -54,7 +54,10 @@ EDITS = "edits"
 WEB_SEARCH = "web_search"
 DEFAULT, AUTO_EDIT, PLAN, ALLOW_ALL = "default", "auto-edit", "plan", "allow-all"
 MODES = (DEFAULT, AUTO_EDIT, PLAN, ALLOW_ALL)
-REFUSED = "The user didn't allow that, so it wasn't done. Don't try another way round it; say so and ask what they'd like."
+REFUSED_LEAD = "The user didn't allow that, so it wasn't done."
+REFUSED = REFUSED_LEAD + " Don't try another way round it; say so and ask what they'd like."
+REFUSED_INSTEAD = (REFUSED_LEAD + " They said what to do instead: {said}. Do that, and don't try another way round "
+                   "what they refused.")
 RULE_DENIED = ("A permission rule in the settings forbids this, so it wasn't done. Don't try another way round it; "
                "tell the user.")
 RULE_SHAPE = re.compile(r"^([A-Za-z0-9_*?\[\]-]+)(?:\((.*)\))?$", re.DOTALL)
@@ -375,6 +378,11 @@ class Gate:
         self.approved_servers = set()
         self.rule_file = None
         self.review = None
+        self.instead = None
+
+    def refused(self) -> str:
+        said = self.instead().strip().rstrip(".") if self.instead else ""
+        return REFUSED_INSTEAD.format(said=said) if said else REFUSED
 
     def rule_refusal(self, name: str, arguments: dict) -> str | None:
         return RULE_DENIED if self.rules.denies(name, call_target(self.workspace, name, arguments)) else None
@@ -409,7 +417,7 @@ class Gate:
     def confirm_protected_change(self, name: str, arguments: dict) -> str | None:
         verb = change_verb(name, arguments)
         question = f"{verb} {arguments.get('path')}? ({PROTECTED_NOTE})"
-        return None if self.ask(question, diff_preview(self.workspace, name, arguments)) in AGREEING else REFUSED
+        return None if self.ask(question, diff_preview(self.workspace, name, arguments)) in AGREEING else self.refused()
 
     def reaches_outside(self, path: str) -> bool:
         if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path) or names_a_provider_drive(path):
@@ -458,7 +466,7 @@ class Gate:
             return None
         if answer in (ALWAYS, SAVE) and remember:
             self.always.add(remember)
-        return None if answer in AGREEING else REFUSED
+        return None if answer in AGREEING else self.refused()
 
     def check(self, name: str, arguments: dict) -> str | None:
         denied = self.rule_refusal(name, arguments)

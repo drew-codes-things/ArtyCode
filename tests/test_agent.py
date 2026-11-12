@@ -895,6 +895,7 @@ def test_a_long_or_several_line_command_is_shortened_to_one_line():
     ("edit_file", "Error: old_text wasn't found in greet.py\nmore detail", "Error: old_text wasn't found in greet.py",
      True),
     ("edit_file", permissions.REFUSED, "Not done: you said no", False),
+    ("run_command", permissions.REFUSED_LEAD + " They said what to do instead: x.", "Not done: you said no", False),
 ])
 def test_a_result_is_summed_up_in_one_short_line(name, result, shown, is_problem):
     assert agent.outcome_line(name, result) == (shown, is_problem)

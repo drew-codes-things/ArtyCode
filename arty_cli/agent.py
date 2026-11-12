@@ -143,7 +143,7 @@ def listed_count(result: str) -> int:
 def outcome_line(name: str, result: str) -> tuple[str, bool]:
     if result.startswith(ERROR_LEAD):
         return one_line(result), True
-    if result.startswith(REFUSED):
+    if result.startswith(permissions.REFUSED_LEAD):
         return SAID_NO, False
     if name == "run_command":
         return command_outcome(result)

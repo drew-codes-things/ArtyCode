@@ -41,7 +41,9 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `mcp__<server>__<tool>` | Tools from your MCP servers (below) | The first use of each server asks; after that, tools the server marks read-only don't, the others do |
 
 Each question lists its answers under it, one per line with its key, then asks `Choose y, a or n:`. Answer **y**
-(yes), **a** (yes, and don't ask again for this until you quit) or **n** (no). "Always" lasts until you quit: for edits it covers every edit, for a
+(yes), **a** (yes, and don't ask again for this until you quit) or **n** (no). After **n** typed here, arty-cli asks
+`What should Arty do instead?`: what you write goes to the model with the refusal, so it changes course instead of
+stopping, and Enter on its own just says no. "Always" lasts until you quit: for edits it covers every edit, for a
 command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
 written to `.arty/settings.json` as an allow rule (below) for that exact command, that file, that site or that tool, so
 later sessions don't ask either. When no rule fits (a chained command, say), **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.

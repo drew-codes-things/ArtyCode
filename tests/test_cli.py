@@ -1020,3 +1020,41 @@ def test_a_plan_is_approved_from_a_menu_with_keys(monkeypatch):
     assert [row.split()[0] for row in rows[question + 1:]] == ["y", "a", "n"]
     assert "auto-edit" in rows[question + 2]
     assert prompts_seen == ["Choose y, a or n: "]
+
+
+def test_after_a_no_here_the_user_is_asked_what_to_do_instead(monkeypatch):
+    terminal, err, prompts_seen = asked_with(monkeypatch, "n", "  use the staging target  ")
+    assert terminal.ask("Run: make deploy") == cli.permissions.NO
+    assert "tell Arty what to do instead" in err.getvalue().splitlines()[-1]
+    assert terminal.instead() == "use the staging target"
+    assert prompts_seen[-1] == cli.INSTEAD_QUESTION
+
+
+def test_without_a_terminal_nothing_is_asked_after_a_no(monkeypatch):
+    monkeypatch.setattr(cli, "is_interactive", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail(f"asked {prompt!r}"))
+    assert cli.Terminal(io.StringIO(), io.StringIO()).instead() == ""
+
+
+def test_a_no_given_from_another_device_is_not_followed_by_a_question_here(monkeypatch):
+    terminal, err, prompts_seen = asked_with(monkeypatch)
+
+    class Phone:
+        def answer(self, prompt, answers, question, details=""):
+            return cli.permissions.NO, "Drew's phone"
+
+    terminal.remote = Phone()
+    assert terminal.ask("Run: make deploy") == cli.permissions.NO
+    assert terminal.instead() == ""
+    assert prompts_seen == []
+
+
+def test_what_you_say_instead_reaches_the_model_with_the_refusal(ready, monkeypatch):
+    monkeypatch.setattr(cli.brain, "Brain", CommandBrain)
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    answers = iter(["n", "create it with python instead"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cli.main(["-p", "make the file"]) == 0
+    result = [m for m in FakeBrain.made[0].calls[1] if m["role"] == "tool"][0]["content"]
+    assert result.startswith(cli.permissions.REFUSED_LEAD) and "create it with python instead" in result
+    assert not (ready / "made.txt").exists()

@@ -558,3 +558,30 @@ def test_an_overwrite_is_asked_about_as_an_overwrite(workspace):
     gate.check("write_file", {"path": "b.py", "content": "y = 2\n"})
     gate.check("write_file", {"path": ".arty/notes.md", "content": "x\n", "overwrite": True})
     assert [question.split()[0] for question, _preview in ask.questions] == ["Overwrite", "Write", "Overwrite"]
+
+
+def test_after_a_no_what_the_user_wants_instead_goes_back_to_the_model(workspace):
+    gate = permissions.Gate(workspace, Asker("n"))
+    gate.instead = lambda: "  run only the unit tests  "
+    refusal = gate.check("run_command", {"command": "make deploy"})
+    assert refusal.startswith(permissions.REFUSED_LEAD)
+    assert "run only the unit tests." in refusal and refusal != permissions.REFUSED
+
+
+def test_a_no_with_nothing_said_is_the_plain_refusal(workspace):
+    gate = permissions.Gate(workspace, Asker("n"))
+    gate.instead = lambda: ""
+    assert gate.check("run_command", {"command": "make deploy"}) == permissions.REFUSED
+
+
+def test_a_yes_never_asks_what_to_do_instead(workspace):
+    gate = permissions.Gate(workspace, Asker("y"))
+    gate.instead = lambda: pytest.fail("asked what to do instead after a yes")
+    assert gate.check("run_command", {"command": "make deploy"}) is None
+
+
+def test_a_no_to_changing_the_git_setup_also_takes_what_to_do_instead(workspace):
+    gate = permissions.Gate(workspace, Asker("n"), mode=permissions.AUTO_EDIT)
+    gate.instead = lambda: "leave .git alone"
+    refusal = gate.check("write_file", {"path": ".git/config", "content": "x"})
+    assert refusal.startswith(permissions.REFUSED_LEAD) and "leave .git alone" in refusal
