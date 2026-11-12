@@ -382,3 +382,22 @@ def test_a_permission_without_a_terminal_is_refused_once_the_session_is_gone(rel
         assert bridge.answer("Run? ", ANSWERS, "Run?") == (permissions.NO, "")
     finally:
         bridge.stop()
+
+
+class StoppedLines(Lines):
+    def line(self, seconds):
+        raise KeyboardInterrupt
+
+
+def test_a_stop_while_a_permission_waits_tells_the_other_devices_it_is_no_longer_waiting(relay):
+    bridge, _written = started_bridge(relay, StoppedLines())
+    bridge.stopped_by = PHONE
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            bridge.answer("Run? ", ANSWERS, "Run?")
+    finally:
+        bridge.stop()
+    request_id = relay.events_of("permission")[0]["request_id"]
+    assert relay.events_of("permission_answered") == [
+        {"type": "permission_answered", "request_id": request_id, "allow": False, "by": PHONE}]
+    assert bridge.stop_reason() == f"Stopped by {PHONE}."

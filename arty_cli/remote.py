@@ -435,13 +435,20 @@ class Bridge:
                    "text": f"{question}\n{details}" if details else question})
         try:
             choice, by = self.raced(request_id, prompt, answers)
-        finally:
-            with self.answered:
-                self.open_requests.discard(request_id)
-                self.answers.pop(request_id, None)
+        except BaseException:
+            self.close_request(request_id)
+            self.send({"type": "permission_answered", "request_id": request_id, "allow": False,
+                       "by": self.stopped_by or HERE})
+            raise
+        self.close_request(request_id)
         self.send({"type": "permission_answered", "request_id": request_id, "allow": choice != permissions.NO,
                    "by": by or HERE})
         return choice, by
+
+    def close_request(self, request_id: str) -> None:
+        with self.answered:
+            self.open_requests.discard(request_id)
+            self.answers.pop(request_id, None)
 
     def raced(self, request_id: str, prompt: str, answers: dict) -> tuple[str, str]:
         self.write_prompt(prompt)
