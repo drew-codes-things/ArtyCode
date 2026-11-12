@@ -105,6 +105,7 @@ class Workspace:
         self.seen = {}
         self.checkpoints = []
         self.lint = None
+        self.repo_map = None
 
     def lint_note(self, path: Path, text: str) -> str:
         if self.lint is None:

@@ -4,8 +4,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-SETTINGS_FILE = "settings.json"
-PROJECT_SETTINGS = Path(".arty") / SETTINGS_FILE
+from arty_cli import switches
+
 SWITCH = "lintAfterEdits"
 DEFAULT_TIMEOUT_SECONDS = 15
 MAX_NOTE_CHARS = 1500
@@ -19,18 +19,7 @@ FLAKE8_SECTION_FILES = ("setup.cfg", "tox.ini")
 
 
 def wanted(personal_folder: Path, project_root: Path, include_project: bool) -> bool:
-    places = [Path(personal_folder) / SETTINGS_FILE]
-    if include_project:
-        places.append(Path(project_root) / PROJECT_SETTINGS)
-    return all(switch_in(path) is not False for path in places)
-
-
-def switch_in(path: Path):
-    try:
-        table = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return table.get(SWITCH) if isinstance(table, dict) else None
+    return switches.is_on(personal_folder, project_root, include_project, SWITCH)
 
 
 def clipped(text: str) -> str:

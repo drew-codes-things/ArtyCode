@@ -761,3 +761,18 @@ def test_lint_after_edits_can_be_switched_off_in_your_settings(ready, monkeypatc
     (personal / "settings.json").write_text('{"lintAfterEdits": false}')
     cli.main(["-p", "hello"])
     assert made[0].lint is None
+
+
+def test_the_project_map_reaches_the_model(ready, monkeypatch):
+    (ready / "billing.py").write_text("def charge_card(amount):\n    pass\n")
+    cli.main(["-p", "hello"])
+    assert "charge_card" in FakeBrain.made[0].calls[0][0]["content"]
+
+
+def test_the_project_map_can_be_switched_off(ready):
+    (ready / "billing.py").write_text("def charge_card(amount):\n    pass\n")
+    personal = cli.settings.config_dir()
+    personal.mkdir(parents=True, exist_ok=True)
+    (personal / "settings.json").write_text('{"repoMap": false}')
+    cli.main(["-p", "hello"])
+    assert "charge_card" not in FakeBrain.made[0].calls[0][0]["content"]

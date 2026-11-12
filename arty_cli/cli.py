@@ -15,8 +15,8 @@ from urllib.parse import urlparse
 from arty_cli import extras as extras_module
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
-                       mentions, models, permissions, prompt_line, prompts, providers, remote, sessions, settings, skills,
-                       tools, webfetch)
+                       mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sessions, settings,
+                       skills, tools, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -35,6 +35,7 @@ TRUST_QUESTION = ("This folder has its own Arty setup: notes Arty would follow (
                   "Trust this folder? [y/n]: ")
 CHANGED_QUESTION = ("This folder's hooks, MCP servers or permission rules (.arty/settings.json, .arty/mcp.json) "
                     "changed since you trusted it, so they may run different programs now. Trust it again? [y/n]: ")
+REPO_MAP_FOLDER = "repomap"
 FINGERPRINTED_FILES = (hooks.PROJECT_FOLDER / hooks.SETTINGS_FILE, mcp.PROJECT_FILE)
 HOOK_CONTEXT_LEAD = "(Added by a hook:)"
 START_CONTEXT_LEAD = "(Added by a SessionStart hook:)"
@@ -387,7 +388,8 @@ class Session:
     def fresh(self) -> list[dict]:
         notes = memory.instructions(self.workspace, self.personal, self.project_trusted)
         listed = skills.listing(self.extras.skills)
-        notes = "\n\n".join(part for part in (notes, listed) if part)
+        mapped = self.workspace.repo_map.render() if self.workspace.repo_map else ""
+        notes = "\n\n".join(part for part in (notes, listed, mapped) if part)
         return [{"role": "system", "content": prompts.system_prompt(self.workspace, notes)}]
 
     def prompt_hook(self, text: str) -> str | None:
@@ -916,11 +918,15 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         terminal.note(problem, "error")
     if lint.wanted(settings.config_dir(), workspace.root, trusted):
         workspace.lint = lint.Checker(workspace.root)
+    if repomap.wanted(settings.config_dir(), workspace.root, trusted):
+        workspace.repo_map = repomap.RepoMap(workspace.root, settings.config_dir() / REPO_MAP_FOLDER)
     loaded = session_extras(workspace, trusted, terminal, client.search_web)
     gate.ask = notifying(terminal.ask, loaded, terminal)
     gate.review = notifying(terminal.review_plan, loaded, terminal, PLAN_APPROVAL)
     try:
         session = Session(client, workspace, gate, terminal, saved, project_trusted=trusted, extras=loaded)
+        if workspace.repo_map and workspace.repo_map.problem:
+            terminal.note(workspace.repo_map.problem, "error")
         session.start_hook(RESUME if saved.messages else STARTUP)
         once = arguments.once or " ".join(arguments.words)
         if once and arguments.remote:
