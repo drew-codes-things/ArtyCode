@@ -53,3 +53,32 @@ def test_a_newest_result_too_big_for_the_window_is_cut_not_summarised(project, m
     seen = brain.tool_results(1)
     assert seen and "characters cut" in seen[0]
     assert brain.largest_prompt() < context.compact_limit(brain)
+
+
+def test_argument_mistakes_small_models_make_are_forgiven(project):
+    (project / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    edits = '[{"old_string": "return a - b", "new_string": "return a + b"}]'
+    todos = '[{"content": "Fix add", "status": "completed"}, {"content": "Test it", "status": "in-progress"}]'
+    brain = ScriptedBrain([
+        [("read_file", {"file_path": "calc.py"})],
+        [("multi_edit", {"file_path": "calc.py", "edits": edits})],
+        [("todo_write", {"todos": todos})],
+        [("run_command", {"cmd": "echo checked"})],
+        "Fixed.",
+    ])
+    session = session_for(project, brain)
+    session.ask("fix add in calc.py")
+    results = [message["content"] for message in brain.prompts[-1] if message["role"] == "tool"]
+    assert len(results) == 4 and not [result for result in results if result.startswith("Error")]
+    assert (project / "calc.py").read_text() == "def add(a, b):\n    return a + b\n"
+    assert session.workspace.todos == [{"text": "Fix add", "status": "done"},
+                                       {"text": "Test it", "status": "in_progress"}]
+
+
+def test_an_unknown_argument_name_is_answered_with_the_right_names(project):
+    (project / "a.txt").write_text("hi\n")
+    brain = ScriptedBrain([[("read_file", {"path": "a.txt", "lines": 5})], "Done."])
+    session_for(project, brain).ask("read a.txt")
+    result = brain.tool_results()[0]
+    assert result.startswith("Error") and "lines" in result
+    assert "path" in result and "offset" in result and "limit" in result

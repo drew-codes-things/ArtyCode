@@ -696,3 +696,37 @@ def test_a_stopped_command_says_so_before_its_output_so_a_server_is_not_taken_fo
     result = tools.run("run_command", {"command": "python3 app.py"}, workspace)
     assert result.startswith("[stopped after 120 s while still running, so it is not running now.")
     assert result.endswith(" * Serving Flask app 'app'\n")
+
+
+def test_a_list_sent_as_a_json_string_is_read_as_a_list():
+    typed = tools.typed_arguments("todo_write", {"items": '[{"text": "a", "status": "pending"}]'})
+    assert typed == {"items": [{"text": "a", "status": "pending"}]}
+
+
+def test_a_string_that_is_not_json_is_left_for_the_tool_to_refuse():
+    assert tools.typed_arguments("todo_write", {"items": "not a list"}) == {"items": "not a list"}
+
+
+def test_common_other_names_for_arguments_become_the_right_ones():
+    assert tools.typed_arguments("edit_file", {"file_path": "a", "old_string": "x", "new_string": "y"}) == {
+        "path": "a", "old_text": "x", "new_text": "y"}
+    assert tools.typed_arguments("run_command", {"cmd": "ls"}) == {"command": "ls"}
+
+
+def test_an_alias_never_overrides_the_right_name_or_a_real_parameter():
+    assert tools.typed_arguments("edit_file", {"path": "a", "file_path": "b", "old_text": "x", "new_text": "y"})[
+        "path"] == "a"
+    assert tools.typed_arguments("write_file", {"path": "a", "content": "x"}) == {"path": "a", "content": "x"}
+
+
+def test_checklist_statuses_and_item_names_are_normalised():
+    typed = tools.typed_arguments("todo_write", {"todos": [{"content": "a", "status": "Completed"},
+                                                           {"task": "b", "status": "in-progress"},
+                                                           {"text": "c", "status": "todo"}]})
+    assert typed == {"items": [{"text": "a", "status": "done"}, {"text": "b", "status": "in_progress"},
+                               {"text": "c", "status": "pending"}]}
+
+
+def test_wrong_argument_names_get_the_list_of_right_ones(tmp_path):
+    result = tools.run("read_file", {"where": "a.txt"}, tools.Workspace(tmp_path))
+    assert result.startswith("Error") and "where" in result and "path, offset, limit" in result

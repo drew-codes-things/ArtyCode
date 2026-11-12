@@ -53,6 +53,14 @@ NEW_FILE_MODE = 0o666
 POWERSHELL_EXIT_CODE = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }"
 TEMPORARY_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL
 TRUE_WORDS = ("true", "yes", "1")
+JSON_TYPES = {"array": list, "object": dict}
+KEY_ALIASES = {"file_path": "path", "filepath": "path", "file": "path", "filename": "path", "file_name": "path",
+               "old_string": "old_text", "old_str": "old_text", "new_string": "new_text", "new_str": "new_text",
+               "cmd": "command", "todos": "items", "content": "text", "task": "text", "title": "text",
+               "timeout": "timeout_seconds", "glob_pattern": "glob", "regex": "pattern", "query": "pattern"}
+VALUE_ALIASES = {"completed": "done", "complete": "done", "finished": "done", "in-progress": "in_progress",
+                 "in progress": "in_progress", "inprogress": "in_progress", "active": "in_progress",
+                 "todo": "pending", "to do": "pending", "not_started": "pending", "open": "pending"}
 FALSE_WORDS = ("false", "no", "0")
 
 
@@ -935,21 +943,61 @@ def strict_boolean(key: str, value) -> bool:
     raise ToolError(f"{key} should be true or false, not {value!r}")
 
 
+def from_json_text(schema: dict, value):
+    wanted = JSON_TYPES.get(schema.get("type"))
+    if wanted is None or not isinstance(value, str):
+        return value
+    try:
+        found = json.loads(value)
+    except ValueError:
+        return value
+    return found if isinstance(found, wanted) else value
+
+
+def enum_value(schema: dict, value):
+    allowed = schema.get("enum")
+    if not allowed or not isinstance(value, str) or value in allowed:
+        return value
+    plain = value.strip().lower()
+    plain = VALUE_ALIASES.get(plain, plain)
+    return plain if plain in allowed else value
+
+
 def typed_value(key: str, schema: dict, value):
     if schema.get("type") == "boolean":
         return strict_boolean(key, value)
+    value = enum_value(schema, from_json_text(schema, value))
     item_properties = (schema.get("items") or {}).get("properties")
     if schema.get("type") == "array" and item_properties and isinstance(value, list):
         return [typed_values(item_properties, item) if isinstance(item, dict) else item for item in value]
     return value
 
 
+def with_right_names(properties: dict, values: dict) -> dict:
+    renamed = dict(values)
+    for key in values:
+        right = KEY_ALIASES.get(key)
+        if key not in properties and right in properties and right not in renamed:
+            renamed[right] = renamed.pop(key)
+    return renamed
+
+
 def typed_values(properties: dict, values: dict) -> dict:
-    return {key: typed_value(key, properties.get(key, {}), value) for key, value in values.items()}
+    named = with_right_names(properties, values) if properties else values
+    return {key: typed_value(key, properties.get(key, {}), value) for key, value in named.items()}
 
 
 def typed_arguments(name: str, arguments: dict) -> dict:
     return typed_values(PROPERTIES.get(name, {}), arguments)
+
+
+def parameter_note(name: str) -> str:
+    definition = next((found["function"] for found in DEFINITIONS if found["function"]["name"] == name), None)
+    if definition is None:
+        return ""
+    names = ", ".join(definition["parameters"]["properties"])
+    needed = ", ".join(definition["parameters"]["required"])
+    return f". Its parameters are {names}" + (f" ({needed} needed)" if needed else "")
 
 
 def run(name: str, arguments: dict, workspace: Workspace) -> str:
@@ -959,6 +1007,6 @@ def run(name: str, arguments: dict, workspace: Workspace) -> str:
     try:
         return handler(workspace, **arguments)
     except TypeError as error:
-        return f"Error: wrong arguments for {name}: {error}"
+        return f"Error: wrong arguments for {name}: {error}{parameter_note(name)}"
     except (ToolError, OSError, ValueError) as error:
         return f"Error: {error}"
