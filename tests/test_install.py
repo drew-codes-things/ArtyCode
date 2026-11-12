@@ -1,10 +1,14 @@
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from arty_cli import cli
 
 PROJECT = Path(__file__).resolve().parents[1]
+debian_installer = pytest.mark.skipif(sys.platform == "win32", reason="install.sh is the Debian installer")
 
 
 def test_typing_arty_or_arty_cli_starts_the_same_program():
@@ -14,11 +18,13 @@ def test_typing_arty_or_arty_cli_starts_the_same_program():
     assert module == cli.__name__ and callable(getattr(cli, function))
 
 
+@debian_installer
 def test_the_debian_installer_is_valid_bash():
     checked = subprocess.run(["bash", "-n", str(PROJECT / "install.sh")], capture_output=True, text=True)
     assert checked.returncode == 0, checked.stderr
 
 
+@debian_installer
 def test_the_debian_installer_refuses_unknown_options():
     ran = subprocess.run(["bash", str(PROJECT / "install.sh"), "--bogus"], capture_output=True, text=True)
     assert ran.returncode == 1
@@ -39,6 +45,7 @@ def uninstall_with_home(home, bin_folder):
                           env=environment)
 
 
+@debian_installer
 def test_uninstall_never_deletes_a_folder_this_installer_did_not_make(tmp_path):
     precious = tmp_path / "local"
     precious.mkdir()
@@ -50,6 +57,7 @@ def test_uninstall_never_deletes_a_folder_this_installer_did_not_make(tmp_path):
     assert (precious / "keep.txt").read_text() == "mine"
 
 
+@debian_installer
 def test_uninstall_removes_a_marked_install_or_an_older_one_with_only_its_venv(tmp_path):
     for name, marked in (("marked", True), ("older", False)):
         home = tmp_path / name
@@ -62,11 +70,15 @@ def test_uninstall_removes_a_marked_install_or_an_older_one_with_only_its_venv(t
         assert not home.exists()
 
 
-def test_the_installers_refuse_plain_http_sources(tmp_path):
+@debian_installer
+def test_the_debian_installer_refuses_plain_http_sources(tmp_path):
     environment = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "ARTY_CLI_HOME": str(tmp_path / "app"),
                    "ARTY_CLI_BIN": str(tmp_path / "bin"), "ARTY_CLI_SOURCE": "http://example.com/arty-cli.tar.gz"}
     ran = subprocess.run(["bash", str(PROJECT / "install.sh")], capture_output=True, text=True, env=environment)
     assert ran.returncode == 1 and "https" in ran.stderr
     assert not (tmp_path / "app").exists()
+
+
+def test_the_windows_installer_refuses_plain_http_sources():
     script = (PROJECT / "install.ps1").read_text()
     assert "'^http://'" in script and "'^git\\+http://'" in script

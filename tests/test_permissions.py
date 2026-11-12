@@ -1,4 +1,5 @@
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -6,6 +7,8 @@ import pytest
 
 from arty_cli import permissions, tools
 
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git isn't installed")
+LOOK_ONLY_COMMANDS = [pytest.param("git status", marks=needs_git), "ls -la"]
 
 class Asker:
     def __init__(self, *answers):
@@ -87,10 +90,21 @@ def test_auto_edit_skips_asking_inside_the_project_only(workspace):
     assert len(ask.questions) == 1
 
 
-def test_read_only_commands_run_without_asking(workspace):
+@pytest.mark.parametrize("command", LOOK_ONLY_COMMANDS)
+def test_read_only_commands_run_without_asking(workspace, command):
     ask = Asker()
-    assert permissions.Gate(workspace, ask).allows("run_command", {"command": "git status"})
+    assert permissions.Gate(workspace, ask).allows("run_command", {"command": command})
     assert ask.questions == []
+
+
+def test_look_only_git_asks_when_git_settings_cannot_be_checked(workspace, monkeypatch):
+    def git_missing(*arguments, **options):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(permissions.subprocess, "run", git_missing)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": "git status"})
+    assert "program" in ask.questions[0][0]
 
 
 def test_without_a_terminal_nothing_risky_is_allowed(workspace):
@@ -100,11 +114,12 @@ def test_without_a_terminal_nothing_risky_is_allowed(workspace):
     assert gate.allows("read_file", {"path": "a.py"})
 
 
-def test_plan_mode_looks_but_never_changes(workspace):
+@pytest.mark.parametrize("command", LOOK_ONLY_COMMANDS)
+def test_plan_mode_looks_but_never_changes(workspace, command):
     ask = Asker("y")
     gate = permissions.Gate(workspace, ask, mode=permissions.PLAN)
     assert gate.allows("read_file", {"path": "a.py"})
-    assert gate.allows("run_command", {"command": "git log"})
+    assert gate.allows("run_command", {"command": command})
     assert gate.check("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}) == permissions.PLAN_REFUSAL
     assert gate.check("run_command", {"command": "make"}) == permissions.PLAN_REFUSAL
     assert ask.questions == []
@@ -275,6 +290,7 @@ def git_repo(workspace, *settings):
                                         ("filter.x.process", "./run.sh"), ("gpg.program", "./run.sh"),
                                         ("diff.x.command", "./run.sh"), ("gpg.ssh.program", "./run.sh"),
                                         ("core.pager", "./run.sh")])
+@needs_git
 def test_look_only_git_asks_when_the_repository_names_a_program(workspace, key, value):
     git_repo(workspace, (key, value))
     ask = Asker("n")
@@ -282,6 +298,7 @@ def test_look_only_git_asks_when_the_repository_names_a_program(workspace, key, 
     assert "program" in ask.questions[0][0]
 
 
+@needs_git
 def test_look_only_git_in_a_plain_repository_needs_no_ok(workspace):
     git_repo(workspace, ("user.name", "x"), ("core.fsmonitor", "false"))
     ask = Asker()
@@ -541,13 +558,16 @@ def test_powershell_provider_drives_are_outside_the_project_on_windows(workspace
 
 
 @pytest.mark.parametrize("command", ["ls -la", "cat a.py", "Get-Content a.py", "grep -n x a.py",
-                                     "git log --format=%H:%s", "ls --color=auto", "grep -A2 x a.py"])
+                                     pytest.param("git log --format=%H:%s", marks=needs_git), "ls --color=auto",
+                                     "grep -A2 x a.py"])
 def test_ordinary_looking_needs_no_ok_after_the_flag_checks(workspace, monkeypatch, command):
     monkeypatch.setattr(sys, "platform", "win32")
     assert asked_about(workspace, command) == []
 
 
-def test_a_git_revision_and_path_is_not_a_drive_off_windows(workspace):
+@needs_git
+def test_a_git_revision_and_path_is_not_a_drive_off_windows(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     assert asked_about(workspace, "git show HEAD:a.py") == []
 
 

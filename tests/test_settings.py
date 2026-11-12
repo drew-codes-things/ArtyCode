@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -41,7 +42,7 @@ def test_windows_keeps_the_config_in_appdata():
 
 def test_linux_follows_xdg_config_home():
     folder = settings.config_dir(environ={"XDG_CONFIG_HOME": "/tmp/cfg"}, platform="linux")
-    assert str(folder) == os.path.join("/tmp/cfg", "arty-cli")
+    assert folder == Path("/tmp/cfg") / "arty-cli"
 
 
 def test_a_broken_config_file_says_where_it_is(tmp_path):

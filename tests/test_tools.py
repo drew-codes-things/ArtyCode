@@ -419,10 +419,9 @@ def test_a_file_changed_on_disk_since_it_was_read_must_be_read_again(tmp_path):
     assert "changed = True" in (tmp_path / "a.py").read_text()
 
 
-def test_writes_are_atomic_and_keep_the_file_mode(tmp_path, monkeypatch):
+def test_writes_replace_the_file_in_one_step_and_leave_nothing_beside_it(tmp_path, monkeypatch):
     target = tmp_path / "run.sh"
     target.write_text("echo one\n")
-    target.chmod(0o755)
     workspace = tools.Workspace(tmp_path)
     tools.run("read_file", {"path": "run.sh"}, workspace)
     replaced = []
@@ -431,8 +430,18 @@ def test_writes_are_atomic_and_keep_the_file_mode(tmp_path, monkeypatch):
                                                                            real_replace(source, destination)))
     tools.run("write_file", {"path": "run.sh", "content": "echo two\n", "overwrite": True}, workspace)
     assert replaced == [target] and target.read_text() == "echo two\n"
-    assert target.stat().st_mode & 0o777 == 0o755
     assert sorted(path.name for path in tmp_path.iterdir()) == ["run.sh"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_writes_keep_the_file_mode(tmp_path):
+    target = tmp_path / "run.sh"
+    target.write_text("echo one\n")
+    target.chmod(0o755)
+    workspace = tools.Workspace(tmp_path)
+    tools.run("read_file", {"path": "run.sh"}, workspace)
+    tools.run("write_file", {"path": "run.sh", "content": "echo two\n", "overwrite": True}, workspace)
+    assert target.stat().st_mode & 0o777 == 0o755
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")

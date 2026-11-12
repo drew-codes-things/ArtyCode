@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -187,7 +188,7 @@ def test_a_bare_program_name_is_never_found_in_the_project_or_the_current_folder
     real.write_text("#!/bin/sh\necho real\n")
     real.chmod(0o755)
     monkeypatch.chdir(planted)
-    monkeypatch.setenv("PATH", f".:{planted}:{real_folder}")
+    monkeypatch.setenv("PATH", os.pathsep.join([".", str(planted), str(real_folder)]))
     assert mcp.program_path("helper-tool", tools.Workspace(project)) == str(real)
-    monkeypatch.setenv("PATH", f".:{planted}")
+    monkeypatch.setenv("PATH", os.pathsep.join([".", str(planted)]))
     assert mcp.program_path("helper-tool", tools.Workspace(project)) is None
