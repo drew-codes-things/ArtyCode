@@ -7,6 +7,8 @@ import pytest
 
 from arty_cli import lint, tools
 
+stand_in_linters = pytest.mark.skipif(sys.platform == "win32", reason="the stand-in linters are shell scripts")
+
 
 def fake_program(folder, name, output, exit_code=1):
     folder.mkdir(parents=True, exist_ok=True)
@@ -26,7 +28,7 @@ def project(tmp_path, monkeypatch):
 
 def edited(workspace, name, text):
     path = workspace.root / name
-    path.write_text(text)
+    path.write_bytes(text.encode("utf-8"))
     workspace.note_seen(path, text)
     return path
 
@@ -47,6 +49,7 @@ def test_a_clean_file_adds_nothing_to_the_result(project):
     assert tools.edit_file(workspace, str(path), "x = 1", "x = 2") == "Edited app.py"
 
 
+@stand_in_linters
 def test_ruff_runs_when_the_project_configures_it(project, tmp_path):
     fake_program(tmp_path / "bin", "ruff", "app.py:1:1: F401 unused import")
     (project / "ruff.toml").write_text("line-length = 100\n")
@@ -59,6 +62,7 @@ def test_ruff_is_not_run_without_its_config(project, tmp_path):
     assert lint.Checker(project).problems(project / "app.py", "import os\n") == ""
 
 
+@stand_in_linters
 def test_flake8_config_in_setup_cfg_picks_flake8(project, tmp_path):
     fake_program(tmp_path / "bin", "flake8", "app.py:1:1: E999")
     (project / "setup.cfg").write_text("[flake8]\nmax-line-length = 100\n")
@@ -77,6 +81,7 @@ def test_broken_json_is_reported(project):
     assert "data.json" in note and "JSON" in note
 
 
+@stand_in_linters
 def test_a_slow_linter_is_stopped_and_said_so(project, tmp_path):
     folder = tmp_path / "bin"
     folder.mkdir()
@@ -88,6 +93,7 @@ def test_a_slow_linter_is_stopped_and_said_so(project, tmp_path):
     assert "took longer than" in note
 
 
+@stand_in_linters
 def test_long_linter_output_is_cut(project, tmp_path):
     fake_program(tmp_path / "bin", "ruff", "E" * 5000)
     (project / "ruff.toml").write_text("")
