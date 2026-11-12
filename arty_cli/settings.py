@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 import sys
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
@@ -9,6 +10,7 @@ CONFIG_NAME = "config.json"
 DEFAULT_MODEL = "arty/qwen3:14b"
 RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
+TEMPORARY_NAME_BYTES = 8
 ENVIRONMENT_NAMES = {
     "base_url": "ARTY_URL",
     "remote_url": "ARTY_REMOTE_URL",
@@ -70,14 +72,26 @@ def load(path: Path | None = None, environ=os.environ) -> Settings:
     return replace(loaded, **overrides)
 
 
+def write_private_json(target: Path, data, indent: int | None = None) -> None:
+    temporary = target.parent / f".{target.name}.{secrets.token_hex(TEMPORARY_NAME_BYTES)}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            if hasattr(os, "fchmod"):
+                os.fchmod(handle.fileno(), PRIVATE_FILE_MODE)
+            json.dump(data, handle, indent=indent)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def save(settings: Settings, path: Path | None = None) -> Path:
     target = path or config_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE_MODE)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        if hasattr(os, "fchmod"):
-            os.fchmod(handle.fileno(), PRIVATE_FILE_MODE)
-        json.dump(asdict(settings), handle, indent=2)
+    write_private_json(target, asdict(settings), indent=2)
     return target
 
 

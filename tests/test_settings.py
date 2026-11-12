@@ -76,3 +76,27 @@ def test_a_saved_old_default_moves_to_the_new_default_but_a_chosen_model_stays(t
     assert settings.load(path, environ={"ARTY_CLI_MODEL": "arty/qwen2.5-coder:14b"}).model == "arty/qwen2.5-coder:14b"
     path.write_text(json.dumps({"base_url": "http://brain.lan:8081/v1", "model": "arty/qwen2.5:72b"}))
     assert settings.load(path, environ={}).model == "arty/qwen2.5:72b"
+
+
+def disk_fills_up(data, handle, **options):
+    handle.write('{"half')
+    raise OSError(28, "No space left on device")
+
+
+def test_a_save_that_fails_part_way_leaves_the_old_config_whole(tmp_path, monkeypatch):
+    path = settings.save(settings.Settings(api_key="kept"), tmp_path / "config.json")
+    monkeypatch.setattr(settings.json, "dump", disk_fills_up)
+    with pytest.raises(OSError):
+        settings.save(settings.Settings(api_key="new"), path)
+    monkeypatch.undo()
+    assert settings.load(path, environ={}).api_key == "kept"
+    assert [found.name for found in tmp_path.iterdir()] == ["config.json"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_saving_over_an_open_config_makes_it_private(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("{}")
+    path.chmod(0o644)
+    settings.save(settings.Settings(api_key="secret"), path)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600

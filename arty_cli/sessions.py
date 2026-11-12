@@ -1,12 +1,12 @@
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from arty_cli import settings
+
 PROJECT_KEY_CHARS = 16
-PRIVATE_FILE_MODE = 0o600
 FIRST_REQUEST_CHARS = 70
 
 
@@ -34,9 +34,7 @@ class Saved:
     def save(self, messages: list[dict], model: str) -> None:
         self.messages, self.model = messages, model
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE_MODE)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"model": model, "messages": messages}, handle)
+        settings.write_private_json(self.path, {"model": model, "messages": messages})
 
 
 class Store:
