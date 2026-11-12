@@ -49,7 +49,7 @@ def test_a_fix_is_read_made_and_reported(tmp_path):
     )
     screen = Screen()
     messages = [{"role": "user", "content": "fix add"}]
-    answer = agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, lambda q, p="": "y"), screen)
+    answer = agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, lambda q, p="", s="": "y"), screen)
     assert answer == "Fixed: add now adds."
     assert (tmp_path / "app.py").read_text().endswith("a + b\n")
     assert messages[-1] == {"role": "assistant", "content": "Fixed: add now adds."}
@@ -179,7 +179,7 @@ def test_the_explore_helper_cannot_change_anything(tmp_path):
         ("Done looking.", []),
     )
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y"), Screen())
+                   permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen())
     assert (tmp_path / "a.py").read_text() == "x = 1\n"
 
 
@@ -196,7 +196,7 @@ def test_changes_and_commands_that_ran_are_recorded(tmp_path):
     asked = iter(["y", "n"])
     done = []
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": next(asked)), Screen(), done=done)
+                   permissions.Gate(workspace, lambda q, p="", s="": next(asked)), Screen(), done=done)
     assert done == ["edit_file a.py"]
 
 
@@ -221,7 +221,7 @@ def test_a_command_cut_short_by_ctrl_c_is_still_recorded(tmp_path, monkeypatch):
     done = []
     try:
         agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                       permissions.Gate(workspace, lambda q, p="": "y"), Screen(), done=done)
+                       permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen(), done=done)
     except KeyboardInterrupt:
         pass
     assert done == ["run_command make deploy (stopped part way)"]
@@ -231,7 +231,7 @@ def test_ctrl_c_while_being_asked_records_nothing(tmp_path):
     workspace = tools.Workspace(tmp_path)
     scripted = ScriptedBrain(("", [call("run_command", command="make deploy")]))
 
-    def ctrl_c(question, preview=""):
+    def ctrl_c(question, preview="", scope=""):
         raise KeyboardInterrupt
 
     done = []
@@ -261,7 +261,7 @@ def test_a_pre_tool_hook_can_block_a_call_before_anyone_is_asked(tmp_path):
     scripted = ScriptedBrain(("", [call("edit_file", path="a.py", old_text="x = 1", new_text="x = 2")]), ("OK.", []))
     asked = []
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": asked.append(q) or "y"), Screen(),
+                   permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "y"), Screen(),
                    extras=with_hooks(workspace, ("PreToolUse", "edit_file", block)))
     result = [m for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]["content"]
     assert result == f"{agent.HOOK_BLOCKED} a.py is frozen"
@@ -335,7 +335,7 @@ def test_extra_tools_are_offered_and_mcp_calls_go_through_the_gate(tmp_path):
                              ("OK.", []))
     asked = []
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": asked.append(q) or "n"), Screen(),
+                   permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "n"), Screen(),
                    extras=extras.Extras(hub=hub))
     offered = {definition["function"]["name"] for definition in scripted.sent[0]["tools"]}
     assert {"mcp__notes__find", "mcp__notes__delete", "read_file"} <= offered
@@ -350,7 +350,7 @@ def test_read_only_mcp_tools_work_in_plan_mode_and_others_are_refused(tmp_path):
     scripted = ScriptedBrain(("", [call("mcp__notes__find", q="x"), call("mcp__notes__delete", "c2", id="1")]),
                              ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y", mode=permissions.PLAN), Screen(),
+                   permissions.Gate(workspace, lambda q, p="", s="": "y", mode=permissions.PLAN), Screen(),
                    extras=extras.Extras(hub=hub))
     results = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"]
     assert results == ["mcp__notes__find ran", permissions.PLAN_REFUSAL]
@@ -419,7 +419,7 @@ def test_ctrl_c_while_a_parallel_helper_asks_leaves_no_question_behind(tmp_path,
     reads, asking_threads, typed_later = [], [], threading.Event()
     monkeypatch.setitem(tools.HANDLERS, "read_file", lambda workspace, **arguments: reads.append(arguments) or "read")
 
-    def ask(question, preview=""):
+    def ask(question, preview="", scope=""):
         asking_threads.append(threading.current_thread())
         if threading.current_thread() is threading.main_thread():
             raise KeyboardInterrupt
@@ -444,7 +444,7 @@ def test_a_parallel_helpers_question_is_asked_on_the_main_thread_and_a_yes_lets_
     workspace = tools.Workspace(project)
     reads, asking_threads = [], []
     monkeypatch.setitem(tools.HANDLERS, "read_file", lambda workspace, **arguments: reads.append(arguments) or "read")
-    gate = permissions.Gate(workspace, lambda q, p="": asking_threads.append(threading.current_thread()) or "y")
+    gate = permissions.Gate(workspace, lambda q, p="", s="": asking_threads.append(threading.current_thread()) or "y")
     brain = OutsideReadingHelperBrain(tmp_path / "secret.txt")
     brain.main_replies.append(("Read.", []))
     assert agent.run_turn([{"role": "user", "content": "go"}], brain, workspace, gate, Screen()) == "Read."
@@ -461,7 +461,7 @@ def test_a_huge_tool_result_is_cut_before_it_reaches_the_model(tmp_path):
     workspace = tools.Workspace(tmp_path)
     scripted = ScriptedBrain(("", [call("mcp__notes__find", q="x")]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=extras.Extras(hub=FloodingHub()))
+                   permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen(), extras=extras.Extras(hub=FloodingHub()))
     result = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]
     assert len(result) <= agent.MAX_RESULT_CHARS + 200 and "characters cut" in result
 
@@ -471,7 +471,7 @@ def test_mcp_calls_that_ran_are_recorded_as_done(tmp_path):
     done = []
     scripted = ScriptedBrain(("", [call("mcp__notes__delete", id="1")]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y"), Screen(), done=done,
+                   permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen(), done=done,
                    extras=extras.Extras(hub=StubHub()))
     assert done == ["mcp__notes__delete"]
 
@@ -479,7 +479,7 @@ def test_mcp_calls_that_ran_are_recorded_as_done(tmp_path):
 def test_a_stopped_helper_asks_nothing_and_runs_no_more_tools(tmp_path):
     workspace = tools.Workspace(tmp_path)
     asked = []
-    gate = permissions.Gate(workspace, lambda q, p="": asked.append(q) or "y")
+    gate = permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "y")
     helpers = agent.Helpers(ScriptedBrain(), workspace, gate, Screen(), extras.NONE)
     helpers.stopped.set()
     assert helpers.ask("Run: rm -rf x?") == permissions.NO and asked == []
@@ -500,7 +500,7 @@ def test_a_helper_stopped_while_the_model_answers_runs_none_of_its_calls(tmp_pat
     workspace = tools.Workspace(tmp_path)
     stopped = threading.Event()
     ran = []
-    gate = permissions.Gate(workspace, lambda q, p="": ran.append(q) or "y")
+    gate = permissions.Gate(workspace, lambda q, p="", s="": ran.append(q) or "y")
     brain = StoppingBrain(stopped, ("", [call("run_command", command=MAKE_A_FILE)]))
     answer = agent.run_turn([{"role": "user", "content": "go"}], brain, workspace, gate, Screen(), stopped=stopped)
     assert answer == agent.HELPER_STOPPED
@@ -535,13 +535,13 @@ def test_a_hook_allow_skips_the_question_but_not_plan_mode(tmp_path):
     extra = with_hooks(workspace, ("PreToolUse", "", decision_hook(tmp_path, "allow")))
     scripted = ScriptedBrain(("", [call("run_command", command=MAKE_A_FILE)]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": asked.append(q) or "n"), Screen(), extras=extra)
+                   permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "n"), Screen(), extras=extra)
     result = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]
     assert asked == [] and (tmp_path / "made").exists() and "note from the hook" in result
     (tmp_path / "made").unlink()
     scripted = ScriptedBrain(("", [call("run_command", command=MAKE_A_FILE)]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y", mode=permissions.PLAN), Screen(), extras=extra)
+                   permissions.Gate(workspace, lambda q, p="", s="": "y", mode=permissions.PLAN), Screen(), extras=extra)
     assert not (tmp_path / "made").exists()
 
 
@@ -552,7 +552,7 @@ def test_a_hook_ask_asks_even_for_a_look_only_call(tmp_path):
     extra = with_hooks(workspace, ("PreToolUse", "", decision_hook(tmp_path, "ask")))
     scripted = ScriptedBrain(("", [call("read_file", path="a.txt")]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": asked.append(q) or "n"), Screen(), extras=extra)
+                   permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "n"), Screen(), extras=extra)
     assert len(asked) == 1 and "hook rule" in asked[0]
 
 
@@ -561,7 +561,7 @@ def test_a_hook_deny_refuses_with_its_reason(tmp_path):
     extra = with_hooks(workspace, ("PreToolUse", "", decision_hook(tmp_path, "deny")))
     scripted = ScriptedBrain(("", [call("run_command", command=MAKE_A_FILE)]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=extra)
+                   permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen(), extras=extra)
     result = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]
     assert "hook rule" in result and not (tmp_path / "made").exists()
 
@@ -572,7 +572,7 @@ def test_a_change_that_cannot_work_is_reported_without_asking_first(tmp_path):
     asked = []
     scripted = ScriptedBrain(("", [call("edit_file", path="a.py", old_text="x = 1", new_text="x = 2")]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": asked.append(q) or "y"), Screen())
+                   permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "y"), Screen())
     result = [m["content"] for m in scripted.sent[1]["messages"] if m["role"] == "tool"][0]
     assert asked == [] and "read_file" in result
 
@@ -584,7 +584,7 @@ def test_the_first_call_to_an_mcp_server_asks_once_even_for_a_read_only_tool(tmp
     scripted = ScriptedBrain(("", [call("mcp__notes__find", q="x"), call("mcp__notes__find", "c2", q="y")]),
                              ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": asked.append(q) or "y"), Screen(),
+                   permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "y"), Screen(),
                    extras=extras.Extras(hub=hub))
     assert len(asked) == 1 and "notes" in asked[0]
     assert [name for name, _ in hub.calls] == ["mcp__notes__find", "mcp__notes__find"]
@@ -595,7 +595,7 @@ def test_refusing_an_mcp_server_s_first_use_runs_nothing(tmp_path):
     hub = StubHub()
     scripted = ScriptedBrain(("", [call("mcp__notes__find", q="x")]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "n"), Screen(), extras=extras.Extras(hub=hub))
+                   permissions.Gate(workspace, lambda q, p="", s="": "n"), Screen(), extras=extras.Extras(hub=hub))
     assert hub.calls == []
 
 
@@ -608,7 +608,7 @@ def test_a_reply_that_only_announces_its_next_step_is_sent_back_once_to_do_it(tm
         ("ops.py sets x to 1.", []),
     )
     messages = [{"role": "user", "content": "what does ops.py set?"}]
-    answer = agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, lambda q, p="": "y"), Screen())
+    answer = agent.run_turn(messages, scripted, workspace, permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen())
     assert answer == "ops.py sets x to 1."
     nudge = scripted.sent[1]["messages"][-1]
     assert nudge["role"] == "user" and agent.DO_IT_NOW in nudge["content"]
@@ -618,7 +618,7 @@ def test_an_announced_step_is_only_nudged_once_per_request(tmp_path):
     workspace = tools.Workspace(tmp_path)
     scripted = ScriptedBrain(("I'll run the tests next.", []), ("Let me run the tests now.", []))
     answer = agent.run_turn([{"role": "user", "content": "test it"}], scripted, workspace,
-                            permissions.Gate(workspace, lambda q, p="": "y"), Screen())
+                            permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen())
     assert answer == "Let me run the tests now."
     assert len(scripted.sent) == 2
 
@@ -632,7 +632,7 @@ def test_a_finished_answer_or_a_question_is_not_nudged(tmp_path, final):
     workspace = tools.Workspace(tmp_path)
     scripted = ScriptedBrain((final, []))
     assert agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                          permissions.Gate(workspace, lambda q, p="": "y"), Screen()) == final
+                          permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen()) == final
     assert len(scripted.sent) == 1
 
 
@@ -647,7 +647,7 @@ def test_web_search_is_offered_only_with_a_brain_that_searches_and_its_results_a
     scripted = ScriptedBrain(("", [call("web_search", query="python json")]), ("Found it.", []))
     with_search = extras.Extras(search=search)
     agent.run_turn([{"role": "user", "content": "look it up"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=with_search)
+                   permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen(), extras=with_search)
     assert "web_search" in [d["function"]["name"] for d in scripted.sent[0]["tools"]]
     assert "web_search" not in [d["function"]["name"] for d in agent.offered_definitions(extras.NONE)]
     assert searched == [("python json", extras.SEARCH_RESULTS)]
@@ -664,7 +664,7 @@ def test_a_failed_search_is_an_error_result(tmp_path):
 
     scripted = ScriptedBrain(("", [call("web_search", query="x")]), ("OK.", []))
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                   permissions.Gate(workspace, lambda q, p="": "y"), Screen(), extras=extras.Extras(search=search))
+                   permissions.Gate(workspace, lambda q, p="", s="": "y"), Screen(), extras=extras.Extras(search=search))
     assert scripted.sent[-1]["messages"][-1]["content"] == "Error: This Arty brain has no web search"
 
 
@@ -708,7 +708,7 @@ def test_in_plan_mode_the_model_presents_a_plan_and_carries_on_once_it_is_approv
         ("", [call("edit_file", "e1", path="a.py", old_text="x = 1", new_text="x = 2")]),
         ("Done.", []),
     )
-    gate = permissions.Gate(workspace, lambda q, p="": "y", mode=permissions.PLAN)
+    gate = permissions.Gate(workspace, lambda q, p="", s="": "y", mode=permissions.PLAN)
     gate.review = lambda plan: (permissions.YES, "")
     agent.run_turn([{"role": "user", "content": "plan it"}], scripted, workspace, gate, Screen())
     assert "present_plan" in [d["function"]["name"] for d in scripted.sent[0]["tools"]]
@@ -776,7 +776,7 @@ def test_a_helper_allowed_to_edit_asks_like_the_main_agent_and_a_looking_one_can
         scripted = CustomHelperBrain([("", [helper_call("reviewer", "fix a.py")]), ("OK.", [])],
                                      list(edit))
         agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace,
-                       permissions.Gate(workspace, lambda q, p="": asked.append(q) or "y"), Screen(),
+                       permissions.Gate(workspace, lambda q, p="", s="": asked.append(q) or "y"), Screen(),
                        extras=extras.Extras(helpers={"reviewer": reviewer(*allowed)}))
         assert (tmp_path / "a.py").read_text() == expected
 
@@ -803,7 +803,7 @@ def test_a_model_that_claims_the_work_after_approval_without_changing_anything_i
         ("", [call("edit_file", "e1", path="a.py", old_text="x = 1", new_text="x = 2")]),
         ("Changed x to 2.", []),
     )
-    gate = permissions.Gate(workspace, lambda q, p="": "y", mode=permissions.PLAN)
+    gate = permissions.Gate(workspace, lambda q, p="", s="": "y", mode=permissions.PLAN)
     gate.review = lambda plan: (permissions.YES, "")
     messages = [{"role": "user", "content": "plan it"}]
     answer = agent.run_turn(messages, scripted, workspace, gate, Screen())
@@ -952,7 +952,7 @@ def test_looking_tools_come_through_the_extras_and_run_without_changing_anything
         scripted = ScriptedBrain(("", [call("http_check", url=f"{url}/health", expect_text="good")]), ("Up.", []))
         done = []
         agent.run_turn([{"role": "user", "content": "is it up?"}], scripted, workspace,
-                       permissions.Gate(workspace, lambda q, p="": "n"), Screen(), extras=with_looks, done=done)
+                       permissions.Gate(workspace, lambda q, p="", s="": "n"), Screen(), extras=with_looks, done=done)
     result = scripted.sent[-1]["messages"][-1]["content"]
     assert "Status: 200" in result and "PASS" in result
     assert done == []

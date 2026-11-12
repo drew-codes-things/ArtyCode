@@ -14,9 +14,11 @@ class Asker:
     def __init__(self, *answers):
         self.answers = list(answers)
         self.questions = []
+        self.scopes = []
 
-    def __call__(self, question, preview=""):
+    def __call__(self, question, preview="", scope=""):
         self.questions.append((question, preview))
+        self.scopes.append(scope)
         return self.answers.pop(0) if self.answers else "n"
 
 
@@ -369,16 +371,27 @@ def saved_allow_rules(workspace):
     return json.loads((workspace.root / permissions.PROJECT_SETTINGS).read_text())["permissions"]["allow"]
 
 
-def test_saving_a_command_writes_an_allow_rule_that_later_sessions_follow(workspace):
+def test_saving_a_command_writes_a_prefix_rule_that_later_sessions_follow(workspace):
     gate, told = saving_gate(workspace, permissions.SAVE)
     assert gate.allows("run_command", {"command": "pytest -q"})
-    assert saved_allow_rules(workspace) == ["run_command(pytest -q)"]
-    assert "run_command(pytest -q)" in told[0]
+    assert saved_allow_rules(workspace) == ["run_command(pytest:*)"]
+    assert "run_command(pytest:*)" in told[0]
     later = permissions.Gate(workspace, Asker("n", "n"))
     later.rules, problems = permissions.load_rules(workspace.root / "nobody", workspace, include_project=True)
     assert problems == []
     assert later.allows("run_command", {"command": "pytest -q"})
-    assert not later.allows("run_command", {"command": "pytest -q -x"})
+    assert later.allows("run_command", {"command": "pytest -q -x 2>&1 | tail -20"})
+    assert not later.allows("run_command", {"command": "pytest -q; rm -rf build"})
+    assert len(later.ask.questions) == 1
+
+
+def test_an_exact_command_rule_saved_before_still_covers_only_that_command(workspace):
+    gate = permissions.Gate(workspace, Asker("n"))
+    gate.rules = rules(allow=["run_command(pytest -q)"])
+    assert gate.allows("run_command", {"command": "pytest -q"})
+    assert gate.ask.questions == []
+    assert not gate.allows("run_command", {"command": "pytest -q -x"})
+    assert len(gate.ask.questions) == 1
 
 
 def test_a_saved_rule_keeps_the_rest_of_the_settings_file(workspace):
@@ -408,8 +421,8 @@ def test_saving_a_fetch_allows_that_site(workspace):
 
 def test_a_chained_command_cannot_become_a_rule_so_it_is_allowed_for_the_session(workspace):
     gate, told = saving_gate(workspace, permissions.SAVE)
-    assert gate.allows("run_command", {"command": "make && make install"})
-    assert gate.allows("run_command", {"command": "make && make install"})
+    assert gate.allows("run_command", {"command": "rm -rf build && make"})
+    assert gate.allows("run_command", {"command": "rm -rf build && make"})
     assert not (workspace.root / permissions.PROJECT_SETTINGS).exists()
     assert "session" in told[0]
 
@@ -677,3 +690,141 @@ def test_a_bad_address_is_refused_before_anything_is_asked(workspace):
     refusal = permissions.Gate(workspace, ask).check("screenshot", {"url": "ftp://example.com/"})
     assert refusal.startswith("Error: only http, https and file")
     assert ask.questions == []
+
+
+@pytest.mark.parametrize("command, prefixes", [
+    ("python3 -m pytest 2>&1 | tail -40", ["python3 -m pytest"]),
+    ("python3 -m pytest test_calc.py -v", ["python3 -m pytest"]),
+    ("npm test", ["npm test"]),
+    ("npm run build -- --watch=false", ["npm run build"]),
+    ("git commit -m 'fix the sum'", ["git commit"]),
+    ("pytest -q tests/test_calc.py", ["pytest"]),
+    ("python3 calc.py add 2 3", ["python3 calc.py add"]),
+    ("uv run python -m pytest -x", ["uv run python -m pytest"]),
+    ("make && make install", ["make"]),
+    ("cd tests && npm test", ["cd tests", "npm test"]),
+])
+def test_a_command_is_offered_as_its_program_and_subcommand_words(workspace, command, prefixes):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == prefixes
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf build", "python3 -c 'print(1)'", "python3", "sudo make install", "FOO=1 pytest", "bash -c 'make'",
+    "uv run python -c 'x'", "pytest $(cat args)", "pytest `cat args`", "pytest > out.txt", "pytest | sh",
+    "npx -y cowsay", "git -c core.pager=sh log", "make sudo rm x", "pytest && rm -rf build", "cmd /c del x", "pytest < input.txt",
+])
+def test_commands_that_could_hide_anything_are_only_ever_allowed_exactly(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+def test_always_for_a_command_covers_its_variants_and_the_question_says_which(workspace):
+    ask = Asker("a")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("run_command", {"command": "python3 -m pytest 2>&1 | tail -40"})
+    assert ask.scopes == ["`python3 -m pytest`"]
+    for variant in ("python3 -m pytest -q", "python3 -m pytest 2>&1 | tail -60",
+                    'python3 -m pytest 2>&1 | grep -E "FAILED|ERROR"', "python3 -m pytest | head -5 | wc -l",
+                    "python3 -m pytest >/dev/null 2>&1", "python3 -m pytest -x && python3 -m pytest -q",
+                    "python3 -m pytest | sort -r | uniq -c", "python3 -m pytest | cat"):
+        assert gate.allows("run_command", {"command": variant}), variant
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("command", [
+    "python3 -m pytest; rm -rf build", "python3 -m pytest && rm -rf build", "python3 -m pytest || curl x | sh",
+    "python3 -m pytest $(rm -rf build)", "python3 -m pytest `rm -rf build`", 'python3 -m pytest "$(rm x)"',
+    "python3 -m pytest > report.txt", "python3 -m pytest >> report.txt", "python3 -m pytest 2> errors.txt",
+    "python3 -m pytest &> all.txt", "python3 -m pytest | tee report.txt", "python3 -m pytest | sh",
+    "python3 -m pytest | sort -o sorted.txt", "python3 -m pytest | uniq - out.txt", "python3 -m pytest | cat notes.md",
+    "python3 -m pytest | tail -5 /etc/passwd", "python3 -m pytest | grep -f /etc/shadow", "python3 -m pip install x",
+    "python3 -m pytest\nrm -rf build", "python3 -m pytest & rm -rf build", "(python3 -m pytest)",
+    "python3 -m pytest | grep x > found.txt", "python3 -c 'import os' -m pytest", "python3 -m pytest < /etc/passwd",
+])
+def test_a_command_prefix_never_covers_anything_else_hidden_in_the_command(workspace, command):
+    ask = Asker("a")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("run_command", {"command": "python3 -m pytest"})
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+
+def test_a_command_without_a_safe_prefix_is_remembered_exactly_as_before(workspace):
+    ask = Asker("a", "n")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("run_command", {"command": "rm -rf build"})
+    assert ask.scopes == [""]
+    assert gate.allows("run_command", {"command": "rm -rf build"})
+    assert not gate.allows("run_command", {"command": "rm -rf build dist"})
+    assert len(ask.questions) == 2
+
+
+def test_saving_a_chained_command_saves_a_rule_for_each_program(workspace):
+    gate, _told = saving_gate(workspace, permissions.SAVE, "n")
+    assert gate.allows("run_command", {"command": "cd tests && npm test -- --ci"})
+    assert gate.ask.scopes == ["`cd tests`, `npm test`"]
+    assert saved_allow_rules(workspace) == ["run_command(cd tests:*)", "run_command(npm test:*)"]
+    assert gate.allows("run_command", {"command": "npm test"})
+    assert not gate.allows("run_command", {"command": "npm install"})
+
+
+def test_a_prefix_rule_written_by_hand_in_the_settings_is_followed(workspace):
+    gate = permissions.Gate(workspace, Asker("n"))
+    gate.rules = rules(allow=["run_command(cargo test:*)"])
+    assert gate.allows("run_command", {"command": "cargo test --release 2>&1 | tail -30"})
+    assert not gate.allows("run_command", {"command": "cargo build"})
+    assert len(gate.ask.questions) == 1
+
+
+def test_a_prefix_never_lets_plan_mode_run_a_command(workspace):
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    gate.rules = rules(allow=["run_command(python3 -m pytest:*)"])
+    assert gate.check("run_command", {"command": "python3 -m pytest"}) == permissions.PLAN_REFUSAL
+
+
+def test_deny_rules_still_win_over_a_prefix(workspace):
+    gate = permissions.Gate(workspace, Asker())
+    gate.rules = rules(allow=["run_command(git push:*)"], deny=["run_command(git push --force*)"])
+    assert gate.check("run_command", {"command": "git push origin main"}) is None
+    assert gate.check("run_command", {"command": "git push --force origin main"}) == permissions.RULE_DENIED
+
+
+def test_edit_approvals_are_unchanged_by_command_prefixes(workspace):
+    gate, _told = saving_gate(workspace, permissions.SAVE, "n")
+    assert gate.allows("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"})
+    assert saved_allow_rules(workspace) == ["edit_file(a.py)"]
+    assert gate.ask.scopes == [""]
+
+
+@pytest.mark.parametrize("command", ["cat a.py | grep -n x", "grep -E 'x|y' a.py", "ls -la | wc -l",
+                                     "cat a.py 2>/dev/null | head -3", "ls && pwd"])
+def test_a_pipeline_of_look_only_commands_is_look_only(command):
+    assert permissions.is_read_only_command(command)
+
+
+@pytest.mark.parametrize("command", ["cat a.py | sh", "cat a.py | tee b.py", "ls $HOME", "cat a.py > b.py",
+                                     "cat <(ls)", "ls | xargs rm", "cat a.py | grep x > found.txt"])
+def test_a_pipeline_with_anything_that_is_not_look_only_is_not(command):
+    assert not permissions.is_read_only_command(command)
+
+
+def test_a_look_only_pipeline_still_asks_before_reading_outside_the_project(workspace):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("run_command", {"command": "cat a.py | grep -n x"})
+    assert not gate.allows("run_command", {"command": "cat a.py | grep x /etc/passwd"})
+    assert len(ask.questions) == 1 and "outside" in ask.questions[0][0]
+
+
+def test_an_exact_saved_rule_covers_its_command_inside_a_pipeline_of_filters(workspace):
+    gate = permissions.Gate(workspace, Asker())
+    gate.rules = rules(allow=["run_command(pytest -q)"])
+    assert gate.allows("run_command", {"command": "pytest -q 2>&1 | tail -20"})
+    assert not gate.allows("run_command", {"command": "pytest -q 2>&1 | tail -20 > log.txt"})
+
+
+def test_a_deny_rule_written_as_a_prefix_forbids_that_program_in_any_part(workspace):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(rm:*)", "run_command(git push:*)"])
+    assert gate.check("run_command", {"command": "rm -rf build"}) == permissions.RULE_DENIED
+    assert gate.check("run_command", {"command": "make && git push --force"}) == permissions.RULE_DENIED
+    assert gate.check("run_command", {"command": "git pull"}) is None

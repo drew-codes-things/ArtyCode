@@ -48,9 +48,14 @@ Each question lists its answers under it, one per line with its key, then asks `
 (yes), **a** (yes, and don't ask again for this until you quit) or **n** (no). After **n** typed here, ArtyCode asks
 `What should Arty do instead?`: what you write goes to the model with the refusal, so it changes course instead of
 stopping, and Enter on its own just says no. "Always" lasts until you quit: for edits it covers every edit, for a
-command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
-written to `.arty/settings.json` as an allow rule (below) for that exact command, that file, that site or that tool, so
-later sessions don't ask either. When no rule fits (a chained command, say), **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
+command the program and its subcommand words, which the question names (`Yes, and don't ask again for
+\`python3 -m pytest\` commands until you quit`), so `python3 -m pytest -q`, `python3 -m pytest 2>&1 | tail -40` and
+`python3 -m pytest | grep -E "FAILED|ERROR"` are covered too. A command whose words decide what it touches or runs
+(`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like) or one with `$`, backticks,
+`(`, `<` or output written to a file is only ever remembered exactly, as before. In a trusted project there is also
+**s** (save as a project rule): the answer is written to `.arty/settings.json` as an allow rule (below), for a command
+as `run_command(python3 -m pytest:*)`, for that file, that site or that tool, so later sessions don't ask either. When
+no rule fits, **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
 Every tool result the model sees is cut to 60,000 characters at most.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project
@@ -101,7 +106,8 @@ when output isn't a terminal, with `-p`, and when the interface can't start (it 
 
 ### Look-only commands
 
-`ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project.
+`ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project,
+also when joined by pipes or `&&` (`cat a.py | grep -n x`), as long as there is no `$`, backtick or file redirection.
 Every path is read the way the shell would: `~`, `~+` and `~-`, wildcards (each match is followed through links), and
 Windows backslash, drive and network paths. Anything that reaches outside the project, or can't be read, asks first,
 in plan mode and in helpers too. A command also asks when it uses an option that writes, runs a program or follows
@@ -124,9 +130,14 @@ Saved rules skip or forbid questions. Put them in `settings.json` in the config 
 ```
 
 A rule is a tool name, or a tool name with a wildcard pattern in brackets that is matched against the path (relative
-to the project), the command, the address or the list pattern. Deny wins over everything, including `allow-all` and
-hooks, and is checked against each part of a chained command. An allow rule never matches a command with `;`, `&&`,
-`|`, `$` or redirection in it, and never lets plan mode change anything.
+to the project), the command, the address or the list pattern. A command pattern ending in `:*`, such as
+`run_command(npm test:*)`, is a prefix: it matches any command whose first words are those words. Deny wins over
+everything, including `allow-all` and hooks, and is checked against each part of a chained command. A chained command
+or pipeline (`|`, `&&`, `||`, `;`, a new line) is allowed only when every part is: a part matches an allow rule or a
+prefix allowed with **a**, or, after a `|`, is only a look-only filter (`tail`, `head`, `grep`, `wc`, `sort`, `uniq`,
+or `cat` with nothing after it) that reads nothing outside the project. Nothing is allowed this way with `$`,
+backticks, `(`, `<`, or output sent to a file (`2>&1` and `>/dev/null` are fine). An allow rule never lets plan mode
+change anything.
 
 ## Arty, ArtyCode and starfire.ai
 

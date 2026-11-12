@@ -138,7 +138,7 @@ def ruled_workspace(tmp_path, level=rules.ON):
 def turn(workspace, *replies):
     scripted = ScriptedBrain(*replies)
     messages = [{"role": "user", "content": "do the job"}]
-    gate = permissions.Gate(workspace, lambda question, preview="": "y")
+    gate = permissions.Gate(workspace, lambda question, preview="", scope="": "y")
     answer = agent.run_turn(messages, scripted, workspace, gate, Screen())
     return answer, messages, scripted
 
@@ -339,7 +339,7 @@ def test_a_refused_edit_is_not_counted_as_a_change(tmp_path):
     workspace = ruled_workspace(tmp_path)
     scripted = ScriptedBrain(("", [call("write_file", path="app.py", content="x = 1  # one\n")]), ("Okay.", []))
     messages = [{"role": "user", "content": "do the job"}]
-    gate = permissions.Gate(workspace, lambda question, preview="": "n")
+    gate = permissions.Gate(workspace, lambda question, preview="", scope="": "n")
     assert agent.run_turn(messages, scripted, workspace, gate, Screen()) == "Okay."
     assert sent_back_texts(messages) == [] and checks.HITS_LEAD not in tool_results(messages)[0]
 
@@ -358,7 +358,7 @@ def test_being_sent_back_is_shown_on_the_screen(tmp_path):
     scripted = ScriptedBrain(("", [call("write_file", path="app.py", content="x = 1\n")]), ("Done.", []),
                              ("Done.", []), ("Done.", []))
     screen = Screen()
-    gate = permissions.Gate(workspace, lambda question, preview="": "y")
+    gate = permissions.Gate(workspace, lambda question, preview="", scope="": "y")
     agent.run_turn([{"role": "user", "content": "go"}], scripted, workspace, gate, screen)
     assert any(line.startswith(checks.SENT_BACK_NOTE) for line in screen.activity)
 
@@ -368,7 +368,7 @@ def test_helpers_do_not_run_the_finish_check(tmp_path):
     checks.start_turn(workspace)
     scripted = ScriptedBrain(("", [call("write_file", path="app.py", content="x = 1\n")]), ("Done.", []))
     messages = [{"role": "user", "content": "go"}]
-    gate = permissions.Gate(workspace, lambda question, preview="": "y")
+    gate = permissions.Gate(workspace, lambda question, preview="", scope="": "y")
     assert agent.run_turn(messages, scripted, workspace, gate, Screen(), stop_hooks=False) == "Done."
     assert sent_back_texts(messages) == []
 

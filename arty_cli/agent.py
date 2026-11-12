@@ -230,9 +230,10 @@ class Quiet:
 
 
 class WaitingQuestion:
-    def __init__(self, question: str, preview: str):
+    def __init__(self, question: str, preview: str, scope: str):
         self.question = question
         self.preview = preview
+        self.scope = scope
         self.answer = permissions.NO
         self.answered = threading.Event()
 
@@ -249,16 +250,16 @@ class Helpers:
         self.asking_thread = threading.current_thread()
         self.waiting = queue.Queue()
 
-    def ask(self, question: str, preview: str = "") -> str:
+    def ask(self, question: str, preview: str = "", scope: str = "") -> str:
         if self.stopped.is_set():
             return permissions.NO
         if threading.current_thread() is not self.asking_thread:
-            return self.asked_for_helper(question, preview)
+            return self.asked_for_helper(question, preview, scope)
         with self.lock:
-            return permissions.NO if self.stopped.is_set() else self.gate.ask(question, preview)
+            return permissions.NO if self.stopped.is_set() else self.gate.ask(question, preview, scope)
 
-    def asked_for_helper(self, question: str, preview: str) -> str:
-        waiting = WaitingQuestion(question, preview)
+    def asked_for_helper(self, question: str, preview: str, scope: str) -> str:
+        waiting = WaitingQuestion(question, preview, scope)
         self.waiting.put(waiting)
         while not waiting.answered.wait(HELPER_JOIN_SECONDS):
             if self.stopped.is_set():
@@ -268,7 +269,7 @@ class Helpers:
     def answer_waiting_questions(self) -> None:
         while not self.waiting.empty():
             waiting = self.waiting.get_nowait()
-            waiting.answer = self.ask(waiting.question, waiting.preview)
+            waiting.answer = self.ask(waiting.question, waiting.preview, waiting.scope)
             waiting.answered.set()
 
     def helper_gate(self, mode: str):
