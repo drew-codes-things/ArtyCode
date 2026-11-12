@@ -145,7 +145,10 @@ def shown_content(content) -> str:
 
 
 def compacted_event(content: str, summary_leads: tuple[str, ...]) -> dict:
-    return {"type": "compacted", "text": content.removeprefix(summary_leads[0]).strip()}
+    text = content.strip()
+    for lead in summary_leads[:-1]:
+        text = text.removeprefix(lead).strip()
+    return {"type": "compacted", "text": text}
 
 
 def events_of_reply(message: dict, tool_names: dict) -> list[dict]:

@@ -334,6 +334,7 @@ class LongReadBrain(FakeBrain):
 def roomy_results(monkeypatch, limit=3_000):
     monkeypatch.setattr(cli.Session, "compact_limit", lambda self: limit)
     monkeypatch.setattr(cli.Session, "refresh_budget", lambda self: setattr(self.workspace, "result_chars", 60_000))
+    monkeypatch.setattr(cli.prune, "prune", lambda *given: None)
 
 
 def test_a_conversation_that_grows_mid_request_is_summarised_before_the_next_step(ready, monkeypatch):
@@ -1119,7 +1120,7 @@ def squeezed_request(ready, monkeypatch, summary_fails):
     monkeypatch.setattr(cli.brain, "Brain", ChecklistThenLongReadBrain)
     assert cli.main(["--permission-mode", "allow-all", "-p", "make me an app"]) == 0
     calls = FakeBrain.made[0].calls
-    return next(call for call in calls if len(call) > 1 and str(call[1]["content"]).endswith(cli.CARRY_ON))
+    return next(call for call in calls if len(call) > 1 and str(call[1]["content"]).startswith(cli.COMPACTED_LEAD))
 
 
 def test_after_a_summary_mid_job_the_request_checklist_and_changes_are_kept(ready, monkeypatch):
@@ -1127,12 +1128,12 @@ def test_after_a_summary_mid_job_the_request_checklist_and_changes_are_kept(read
     assert "made app.py, read big.txt" in carried
     assert f"{cli.REQUEST_LEAD}\nmake me an app" in carried
     assert "[x] Write app.py" in carried and "[ ] Try it" in carried
-    assert "write_file app.py" in carried and carried.endswith(cli.CARRY_ON)
+    assert "write_file app.py" in carried and carried.startswith(cli.COMPACTED_LEAD)
 
 
 def test_a_summary_that_fails_mid_job_does_not_stop_the_job(ready, monkeypatch, capsys):
     carried = squeezed_request(ready, monkeypatch, summary_fails=True)[1]["content"]
-    assert carried.startswith(cli.NO_SUMMARY_LEAD) and "make me an app" in carried
+    assert carried.startswith(f"{cli.COMPACTED_LEAD}\n\n{cli.NO_SUMMARY_LEAD}") and "make me an app" in carried
     assert "Finished." in capsys.readouterr().out
 
 

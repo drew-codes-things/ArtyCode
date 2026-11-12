@@ -34,7 +34,12 @@ SHELL_MARK = "!"
 SESSIONS_FOLDER = "sessions"
 SUMMARY_LEAD = "Summary of our conversation so far:"
 SUMMARY_ACK = "Got it, carrying on from there."
-CARRY_ON = "Carry on with the work from there."
+COMPACTED_LEAD = "Carry on with the work from there: the conversation got too long, so this is where it stands."
+LAST_OUTPUT_LEAD = "The end of the last command's output ({command}):"
+LAST_FILE_LEAD = "The file you changed last, {path}, as it is now (it counts as read):"
+CARRIED_OUTPUT_SHARE = 4
+CARRIED_FILE_SHARE = 2
+PRUNED_NOTE = "The conversation is long, so older results were dropped to make room."
 REQUEST_LEAD = "The request you are working on:"
 CHECKLIST_LEAD = "Your checklist:"
 DONE_LEAD = "Changes and commands that already ran:"
@@ -171,7 +176,7 @@ REMOTE_USAGE = "Use /remote to share this session, /remote name <new name> to re
 REMOTE_NAME_USAGE = "Give the new name: /remote name <new name>."
 REMOTE_NAME_NEEDS_SHARING = "Turn remote control on with /remote first, then rename it."
 REMOTE_NAME = "name"
-SUMMARY_LEADS = (SUMMARY_LEAD, NO_SUMMARY_LEAD)
+SUMMARY_LEADS = (COMPACTED_LEAD, SUMMARY_LEAD, NO_SUMMARY_LEAD)
 REMOTE_ONLY_IN_CHAT = "--remote works in the chat, not with a single question."
 
 
@@ -738,8 +743,20 @@ class Session:
     def is_too_long(self, messages: list[dict]) -> bool:
         return context.estimated_tokens(messages, self.client) > self.compact_limit()
 
+    def pruned_enough(self, messages: list[dict]) -> bool:
+        prune.prune(messages, self.compact_limit(), self.client)
+        self.forget_unseen(messages)
+        return not self.is_too_long(messages)
+
+    def forget_unseen(self, messages: list[dict]) -> None:
+        for path in prune.paths_out_of_view(messages):
+            try:
+                self.workspace.seen.pop(self.workspace.resolve(path), None)
+            except (tools.ToolError, OSError, ValueError):
+                continue
+
     def compact_before_asking(self) -> None:
-        if not self.is_too_long(self.messages):
+        if not self.is_too_long(self.messages) or self.pruned_enough(self.messages):
             return
         self.terminal.note("The conversation is long, so it's being summarised first.")
         try:
@@ -881,9 +898,37 @@ class Session:
             parts.append(f"{DONE_LEAD}\n" + "\n".join(f"- {step}" for step in self.done[-MAX_LISTED_DONE:]))
         return "\n\n".join(parts)
 
+    def last_command_output(self, messages: list[dict]) -> str:
+        for step in reversed(prune.steps_of(messages)):
+            content = str(messages[step.index].get("content") or "")
+            if step.name == "run_command" and not prune.is_stub(content) and agent.EXIT_CODE.search(content):
+                tail = content[-(self.workspace.result_chars // CARRIED_OUTPUT_SHARE):]
+                return f"{LAST_OUTPUT_LEAD.format(command=step.command())}\n{tail}"
+        return ""
+
+    def last_changed_file(self) -> str:
+        lines = max(self.workspace.result_chars // CARRIED_FILE_SHARE // tools.AVERAGE_LINE_CHARS, 1)
+        for checkpoint in reversed(self.workspace.checkpoints):
+            if not checkpoint.path.is_file():
+                continue
+            try:
+                numbered = tools.read_file(self.workspace, str(checkpoint.path), 1, lines)
+            except (tools.ToolError, OSError, ValueError):
+                continue
+            return f"{LAST_FILE_LEAD.format(path=self.workspace.shown(checkpoint.path))}\n{numbered}"
+        return ""
+
+    def carried_state(self, messages: list[dict]) -> str:
+        output = self.last_command_output(messages)
+        self.workspace.seen.clear()
+        return "\n\n".join(part for part in (output, self.last_changed_file()) if part)
+
     def squeeze(self, messages: list[dict]) -> None:
         prune.cut_newest(messages, self.compact_limit(), self.client)
         if not self.is_too_long(messages):
+            return
+        if self.pruned_enough(messages):
+            self.terminal.note(PRUNED_NOTE)
             return
         instructions = self.compact_instructions(AUTOMATIC)
         if instructions is None:
@@ -895,7 +940,8 @@ class Session:
             self.terminal.note(f"{error} Carrying on from the request, the checklist and what was done instead.",
                                "error")
             summary = NO_SUMMARY_LEAD
-        carry_on = "\n\n".join(part for part in (summary, self.work_so_far(), CARRY_ON) if part)
+        parts = (COMPACTED_LEAD, summary, self.work_so_far(), self.carried_state(messages))
+        carry_on = "\n\n".join(part for part in parts if part)
         messages[:] = self.fresh() + [{"role": "user", "content": carry_on}]
         self.turns = []
         self.turn_start, self.compacted_in_turn = len(messages) - 1, True

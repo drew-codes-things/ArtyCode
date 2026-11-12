@@ -411,10 +411,15 @@ show the state.
 
 ### Long conversations
 
-The conversation size is estimated in tokens, and it is summarised when it no longer leaves room in the model's context
-window (`context_tokens` if set, otherwise the size the brain reports, otherwise 12288 tokens) for the tool list and a full reply. `/status` shows the
-estimate. A summary in the middle of a request keeps the request itself, the checklist and the changes and commands
-that already ran, then the work carries on; the conversation sent to be summarised has big tool results and file
+The conversation size is estimated in tokens. When it no longer leaves room in the model's context
+window (`context_tokens` if set, otherwise the size the brain reports, otherwise 12288 tokens) for the tool list and a full reply, older
+content is dropped first, with no model call: earlier reads of a file that was read again or changed since, all but the
+newest run of a command, the long text of past writes and edits, then the oldest results, until the conversation is at
+60% of that point. Calls and their results stay in place, the newest step is never touched, and a file whose reads were
+all dropped has to be read again before it is edited. Only if that is not enough is it summarised. `/status` shows the
+estimate. A summary in the middle of a request keeps the request itself, the checklist, the changes made and the
+commands run with what each showed, the end of the last command's output and the file changed last (numbered, so it
+can be edited at once), then the work carries on; the conversation sent to be summarised has big tool results and file
 contents shortened so it fits. If summarising fails at the start of a request, it carries on unsummarised; if it fails
 in the middle, the work carries on from the request, the checklist and what already ran.
 

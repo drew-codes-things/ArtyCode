@@ -355,6 +355,11 @@ def reason_not_to_run(name: str, arguments: dict, workspace, gate, extras, decis
     return problem or gate_refusal(name, arguments, gate, extras, decision, reason)
 
 
+def done_line(name: str, arguments: dict, result: str) -> str:
+    line = activity_line(name, arguments)
+    return f"{line}: {command_outcome(result)[0]}" if name == "run_command" else line
+
+
 def performed(name: str, arguments: dict, workspace, gate, extras, done: list, decision: str = "",
               reason: str = "") -> str:
     try:
@@ -377,7 +382,7 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
             done.append(f"{activity_line(name, arguments)} (stopped part way)")
         raise
     if recorded and (name == "run_command" or not result.startswith("Error")):
-        done.append(activity_line(name, arguments))
+        done.append(done_line(name, arguments, result))
     return checks.checked_result(workspace, watched, result)
 
 

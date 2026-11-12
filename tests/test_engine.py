@@ -1,4 +1,4 @@
-from arty_cli import agent, context, tools
+from arty_cli import agent, cli, context, prune, tools
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
 
@@ -119,3 +119,55 @@ def test_an_explore_helper_reading_a_big_file_page_after_page_stays_inside_the_w
     limit = context.compact_limit(brain, agent.explorer_definitions())
     assert max(context.estimated_tokens(prompt, brain) for prompt in helper_prompts) <= limit
     assert brain.tool_results()[-1].startswith("It summarises.")
+
+
+def test_a_long_job_is_pruned_without_a_summary_call_when_that_makes_room(project):
+    copy_of_arty_cli_source(project)
+    pages = [[("read_file", {"path": "big.py", "offset": offset})] for offset in (1, 401, 801, 1201, 1)]
+    brain = ScriptedBrain([*pages, "Read it all."])
+    session = session_for(project, brain)
+    session.ask("read all of big.py")
+    assert SUMMARY_MARK not in brain.log
+    assert brain.largest_prompt() <= context.compact_limit(brain, session.offered())
+    assert any(result.startswith(prune.STUB_LEAD) for result in brain.tool_results())
+
+
+def test_commands_are_recorded_with_what_they_showed(project):
+    brain = ScriptedBrain([[("run_command", {"command": "echo 3 passed"})], "Done."])
+    session = session_for(project, brain)
+    session.ask("run it")
+    assert session.done == ["run_command echo 3 passed: 3 passed (exit code 0)"]
+
+
+def forced_summary(project, monkeypatch):
+    copy_of_arty_cli_source(project, "big.py")
+    copy_of_arty_cli_source(project, "big2.py")
+    monkeypatch.setattr(cli.Session, "compact_limit", lambda self: 6_000)
+    monkeypatch.setattr(cli.Session, "refresh_budget", lambda self: setattr(self.workspace, "result_chars", 60_000))
+    monkeypatch.setattr(cli.prune, "prune", lambda *given: None)
+    brain = ScriptedBrain([
+        [("write_file", {"path": "calc.py", "content": "def add(a, b):\n    return a + b\n"})],
+        [("run_command", {"command": "echo 1 failed, 2 passed; exit 1"})],
+        [("read_file", {"path": "big.py"})],
+        [("read_file", {"path": "big2.py"})],
+        "Done.",
+    ], summary="Made calc.py; tests run.")
+    session = session_for(project, brain)
+    session.ask("make calc.py")
+    carried = next(prompt[1]["content"] for prompt in brain.prompts
+                   if len(prompt) > 1 and str(prompt[1]["content"]).startswith(cli.COMPACTED_LEAD))
+    return session, brain, carried
+
+
+def test_after_a_summary_the_last_check_output_and_the_last_edited_file_are_carried(project, monkeypatch):
+    session, brain, carried = forced_summary(project, monkeypatch)
+    assert SUMMARY_MARK in brain.log
+    assert "Made calc.py; tests run." in carried
+    assert "run_command echo 1 failed, 2 passed; exit 1: 1 failed, 2 passed (exit code 1)" in carried
+    assert "1 failed, 2 passed\n\n[exit code 1]" in carried
+    assert "calc.py" in carried and "1\tdef add(a, b):\n2\t    return a + b" in carried
+
+
+def test_after_a_summary_only_the_carried_file_counts_as_read(project, monkeypatch):
+    session, _brain, _carried = forced_summary(project, monkeypatch)
+    assert set(session.workspace.seen) == {(project / "calc.py").resolve()}
