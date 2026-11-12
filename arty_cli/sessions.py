@@ -1,13 +1,15 @@
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from arty_cli import settings
 
 PROJECT_KEY_CHARS = 16
 FIRST_REQUEST_CHARS = 70
+STAMP_FORMAT = "%Y%m%d-%H%M%S-%f"
+ONE_TICK = timedelta(microseconds=1)
 
 
 def first_request_of(messages: list[dict]) -> str:
@@ -40,14 +42,22 @@ class Saved:
 class Store:
     def __init__(self, folder: Path):
         self.root = Path(folder)
+        self.last_started: datetime | None = None
 
     def folder(self, project: Path) -> Path:
         key = hashlib.sha256(str(Path(project).resolve()).encode()).hexdigest()[:PROJECT_KEY_CHARS]
         return self.root / key
 
     def start(self, project: Path) -> Saved:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        return Saved(stamp, self.folder(project) / f"{stamp}.json")
+        folder = self.folder(project)
+        moment = datetime.now()
+        if self.last_started is not None:
+            moment = max(moment, self.last_started + ONE_TICK)
+        while (folder / f"{moment.strftime(STAMP_FORMAT)}.json").exists():
+            moment += ONE_TICK
+        self.last_started = moment
+        stamp = moment.strftime(STAMP_FORMAT)
+        return Saved(stamp, folder / f"{stamp}.json")
 
     def read(self, path: Path) -> Saved | None:
         try:

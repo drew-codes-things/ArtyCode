@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import sys
+from datetime import datetime
 
 import pytest
 
@@ -36,6 +37,25 @@ def test_conversations_are_listed_newest_first_and_found_by_id(tmp_path):
     assert [entry.id for entry in listed] == ids[::-1]
     assert listed[0].first_request == "three"
     assert store.load(tmp_path / "p", ids[0]).messages[0]["content"] == "one"
+
+
+def test_conversations_started_within_one_clock_tick_get_their_own_ids_in_order(tmp_path, monkeypatch):
+    class StuckClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 12, 9, 30, 0, 125000)
+
+    monkeypatch.setattr(sessions, "datetime", StuckClock)
+    store = sessions.Store(tmp_path / "sessions")
+    first = store.start(tmp_path / "p")
+    first.save([{"role": "user", "content": "one"}], "m")
+    second = store.start(tmp_path / "p")
+    third = store.start(tmp_path / "p")
+    second.save([{"role": "user", "content": "two"}], "m")
+    third.save([{"role": "user", "content": "three"}], "m")
+    assert len({first.id, second.id, third.id}) == 3
+    assert [entry.first_request for entry in store.listed(tmp_path / "p")] == ["three", "two", "one"]
+    assert sessions.Store(tmp_path / "sessions").start(tmp_path / "p").id not in {first.id, second.id, third.id}
 
 
 def test_a_damaged_conversation_file_is_skipped(tmp_path):
