@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,9 @@ LINK_FOLLOWING_FLAGS = {"grep": ("R", ("--dereference-recursive",)), "rg": ("L",
 FIND_LINK_FOLLOWING = {"-L", "-follow"}
 SHELL_DIRECTORY_STACK = ("~+", "~-")
 WINDOWS_ABSOLUTE = re.compile(r"^([A-Za-z]:|\\\\|//)")
+WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
+FLAG_VALUE_MARKS = ":="
+PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
 GIT_PROGRAM_SETTINGS = re.compile(r"^(core\.(fsmonitor|pager|sshcommand|askpass|editor)|diff\.external|"
                                   r"diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|"
@@ -171,16 +175,22 @@ def is_read_only_command(command: str) -> bool:
     return program in READ_ONLY_PROGRAMS
 
 
+def flag_values(word: str) -> list[str]:
+    values = [word[index + 1:] for index, character in enumerate(word) if character in FLAG_VALUE_MARKS]
+    if not word.startswith("--") and PATH_MARKS & set(word):
+        values += [word[index:] for index in range(2, len(word))]
+    return values
+
+
 def paths_among(words: list[str]) -> list[str]:
     found = []
     for word in words[1:]:
-        if word.startswith("--"):
-            found += [word.split("=", 1)[1]] if "=" in word else []
-        elif word.startswith("-"):
-            found += [word[2:]] if len(word) > 2 and ("/" in word or "\\" in word or "~" in word) else []
-        else:
-            found.append(word)
-    return [path for path in found if path]
+        found += flag_values(word) if word.startswith("-") else [word]
+    return [path for path in dict.fromkeys(found) if path]
+
+
+def names_a_provider_drive(path: str) -> bool:
+    return sys.platform == "win32" and bool(WINDOWS_PROVIDER_DRIVE.match(path))
 
 
 def named_paths(command: str) -> list[str]:
@@ -396,7 +406,7 @@ class Gate:
         return None if self.ask(question, diff_preview(self.workspace, name, arguments)) in AGREEING else REFUSED
 
     def reaches_outside(self, path: str) -> bool:
-        if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path):
+        if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path) or names_a_provider_drive(path):
             return True
         expanded = with_tilde_expanded(path, self.workspace.root)
         try:

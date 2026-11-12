@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -517,3 +518,34 @@ def test_a_yes_to_a_setup_file_is_for_that_one_change_only(workspace):
     assert gate.allows("write_file", {"path": ".git/hooks/pre-push", "content": ""})
     assert not gate.allows("write_file", {"path": ".git/hooks/pre-commit", "content": ""})
     assert not (workspace.root / permissions.PROJECT_SETTINGS).exists() and told == []
+
+
+def asked_about(workspace, command):
+    ask = Asker("n")
+    permissions.Gate(workspace, ask).check("run_command", {"command": command})
+    return [question for question, _preview in ask.questions]
+
+
+@pytest.mark.parametrize("command", [r"Get-Content -Path:C:\Users\x\secret.txt", r"type -Path=C:\Users\x\secret.txt",
+                                     "grep -rf/etc/passwd .", "cat --file=/etc/passwd"])
+def test_a_path_glued_to_a_flag_is_still_seen_as_outside(workspace, command):
+    assert asked_about(workspace, command) == [f"Look outside the project: {command}?"]
+
+
+@pytest.mark.parametrize("command", ["Get-ChildItem Env:", r"Get-ChildItem HKCU:\Software", "Get-Content Variable:",
+                                     "Get-ChildItem Cert:", "Get-ChildItem Env:ARTY_API_KEY",
+                                     "Get-Content -Path:Env:ARTY_API_KEY", "Get-ChildItem -Path HKLM:\\SOFTWARE"])
+def test_powershell_provider_drives_are_outside_the_project_on_windows(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert asked_about(workspace, command) == [f"Look outside the project: {command}?"]
+
+
+@pytest.mark.parametrize("command", ["ls -la", "cat a.py", "Get-Content a.py", "grep -n x a.py",
+                                     "git log --format=%H:%s", "ls --color=auto", "grep -A2 x a.py"])
+def test_ordinary_looking_needs_no_ok_after_the_flag_checks(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert asked_about(workspace, command) == []
+
+
+def test_a_git_revision_and_path_is_not_a_drive_off_windows(workspace):
+    assert asked_about(workspace, "git show HEAD:a.py") == []
