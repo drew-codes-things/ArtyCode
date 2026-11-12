@@ -58,7 +58,7 @@ def test_a_one_shot_prompt_prints_the_answer(ready, capsys):
     assert cli.main(["-p", "hello"]) == 0
     assert "Hi there." in capsys.readouterr().out
     sent = FakeBrain.made[0].calls[0]
-    assert sent[0]["role"] == "system" and "arty-cli" in sent[0]["content"]
+    assert sent[0]["role"] == "system" and "ArtyCode" in sent[0]["content"]
     assert sent[-1] == {"role": "user", "content": "hello"}
 
 
@@ -1220,3 +1220,75 @@ def test_the_longest_command_time_comes_from_the_settings(ready, monkeypatch):
 
 def test_esc_is_named_as_a_way_to_stop_a_request(ready, monkeypatch, capsys):
     assert "Esc" in "\n".join(help_shown(monkeypatch, capsys))
+
+
+class StepClock:
+    def __init__(self):
+        self.now = 50.0
+
+    def __call__(self):
+        return self.now
+
+
+def thinking_terminal(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    out, err = Tty(), Tty()
+    terminal = cli.Terminal(out, err)
+    terminal.clock = StepClock()
+    return terminal, out, err
+
+
+def test_when_the_answer_starts_one_line_says_how_long_it_thought(monkeypatch):
+    terminal, out, err = thinking_terminal(monkeypatch)
+    with terminal.thinking():
+        terminal.clock.now += 12.4
+        terminal.show_text("Here ")
+        terminal.show_text("you go.")
+    assert err.getvalue().count(cli.THOUGHT_MARK) == 1
+    assert err.getvalue().endswith(f"{cli.THOUGHT_MARK} Thought for 12s\n")
+    assert out.getvalue() == "Here you go."
+
+
+def test_a_step_after_thinking_also_gets_the_thought_line_first(monkeypatch):
+    terminal, _out, err = thinking_terminal(monkeypatch)
+    with terminal.thinking():
+        terminal.clock.now += 75
+    terminal.show_step("Write calculator.py")
+    assert err.getvalue().endswith(f"{cli.THOUGHT_MARK} Thought for 1m 15s\n{cli.STEP_MARK} Write calculator.py\n")
+
+
+def test_an_answer_that_came_at_once_has_no_thought_line(monkeypatch):
+    terminal, _out, err = thinking_terminal(monkeypatch)
+    with terminal.thinking():
+        terminal.clock.now += 0.4
+        terminal.show_text("Hi")
+    assert cli.THOUGHT_MARK not in err.getvalue()
+
+
+def test_into_a_pipe_there_is_no_thought_line():
+    terminal = cli.Terminal(io.StringIO(), io.StringIO())
+    terminal.clock = StepClock()
+    with terminal.thinking():
+        terminal.clock.now += 30
+        terminal.show_text("Hi")
+    assert terminal.err.getvalue() == ""
+
+
+def test_reasoning_streamed_by_the_brain_counts_towards_the_tokens_so_far():
+    terminal = cli.Terminal(io.StringIO(), io.StringIO())
+    terminal.count_thinking("x" * 70)
+    assert terminal.tokens_so_far() == 20
+
+
+class ThinkingBrain(FakeBrain):
+    def reply(self, messages, tools, on_text):
+        self.on_thinking("pondering")
+        return super().reply(messages, tools, on_text)
+
+
+def test_the_session_listens_for_the_brains_reasoning(ready, monkeypatch):
+    heard = []
+    monkeypatch.setattr(cli.Terminal, "count_thinking", lambda self, text: heard.append(text))
+    monkeypatch.setattr(cli.brain, "Brain", ThinkingBrain)
+    assert cli.main(["-p", "hello"]) == 0
+    assert heard == ["pondering"]

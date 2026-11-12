@@ -4,6 +4,7 @@ import re
 import shutil
 import sys
 import time
+from dataclasses import dataclass
 
 from arty_cli import permissions, suggest
 
@@ -15,6 +16,12 @@ MODE_COLOURS = {permissions.DEFAULT: "dim", permissions.AUTO_EDIT: "accent", per
 SHIFT_TAB_SEQUENCE = r"\e[Z"
 MODE_MARK = "<arty-next-mode>"
 CLEAR_ROW_ABOVE = "\033[F\033[2K"
+UP_A_ROW = "\033[F"
+CLEAR_BELOW = "\033[J"
+BACK_TO_PROMPT_ROW = "\033[2A\r"
+RULE = "─"
+BAR_INDENT = "  "
+BAR_HINTS = "mode (shift+tab to cycle) · esc to interrupt"
 COLOUR_CODE = re.compile(r"(\033\[[0-9;]*m)")
 EXTENDED_KEYS = ("\x00", "\xe0")
 SHIFT_TAB_CODE = "\x0f"
@@ -50,16 +57,45 @@ def mode_prompt(terminal, mode: str, shared: bool = False) -> tuple[str, int]:
     return shown, len(f"{mode}{marker} {PROMPT_MARK}")
 
 
+def terminal_columns() -> int:
+    return shutil.get_terminal_size().columns
+
+
+@dataclass(frozen=True)
+class Box:
+    rule: str
+    bar: str
+
+    def opened(self) -> str:
+        return f"{CLEAR_BELOW}{self.rule}{NEW_LINE}{NEW_LINE}{self.rule}{NEW_LINE}{self.bar}{BACK_TO_PROMPT_ROW}"
+
+    def closed(self, rows: int) -> str:
+        return UP_A_ROW * (rows + 1) + CLEAR_BELOW
+
+    def left(self, rows: int) -> str:
+        return "\r" + UP_A_ROW * rows + CLEAR_BELOW
+
+
+def mode_box(terminal, mode: str, shared: bool = False, columns=terminal_columns) -> Box:
+    room = max(columns() - 1, 1)
+    bar = f"{BAR_INDENT}{mode} {BAR_HINTS}{REMOTE_MARK if shared else ''}"
+    return Box(terminal.paint(RULE * room, "dim"), terminal.paint(bar[:room], "dim"))
+
+
+def box_prompt(terminal) -> tuple[str, int]:
+    return terminal.paint(PROMPT_MARK, "accent"), len(PROMPT_MARK)
+
+
+def rows_of(width: int, typed: int, columns: int) -> int:
+    return max(1, math.ceil((width + typed) / max(1, columns)))
+
+
 def for_readline(prompt: str) -> str:
     return COLOUR_CODE.sub("\001\\1\002", prompt)
 
 
 def readline_safe(prompt: str) -> str:
     return for_readline(prompt) if "readline" in sys.modules else prompt
-
-
-def terminal_columns() -> int:
-    return shutil.get_terminal_size().columns
 
 
 class ReadlineLine:
@@ -70,7 +106,7 @@ class ReadlineLine:
         self.columns = columns or terminal_columns
         self.choices = choices
         self.models = models
-        self.prompt = ""
+        self.prompt, self.box = "", None
         self.found, self.meanings = [], {}
         module.parse_and_bind(f'"{SHIFT_TAB_SEQUENCE}": "{MODE_MARK}\\n"')
         if choices:
@@ -91,20 +127,29 @@ class ReadlineLine:
 
     def show_matches(self, _substitution, matches, _longest) -> None:
         lines = suggest.menu_lines(list(matches), self.meanings, self.columns())
-        self.write("\n" + "\n".join(lines) + "\n" + self.prompt + self.module.get_line_buffer())
+        lead, redrawn = (self.box.left(1), self.box.opened()) if self.box else ("\n", "")
+        self.write(lead + "\n".join(lines) + "\n" + redrawn + self.prompt + self.module.get_line_buffer())
 
-    def read(self, prompt: str, width: int, kept: str) -> tuple[str, bool]:
-        self.prompt = prompt
+    def read(self, prompt: str, width: int, kept: str, box: Box | None = None) -> tuple[str, bool]:
+        self.prompt, self.box = prompt, box
+        if box:
+            self.write(box.opened())
         self.module.set_startup_hook((lambda: self.module.insert_text(kept)) if kept else None)
         try:
             line = self.read_input(for_readline(prompt))
+        except BaseException:
+            if box:
+                self.write(box.left(rows_of(width, len(self.module.get_line_buffer()), self.columns())))
+            raise
         finally:
             self.module.set_startup_hook(None)
-        if MODE_MARK not in line:
-            return line, False
-        rows = max(1, math.ceil((width + len(line)) / max(1, self.columns())))
-        self.write(CLEAR_ROW_ABOVE * rows)
-        return line.replace(MODE_MARK, ""), True
+        rows = rows_of(width, len(line), self.columns())
+        wants_next_mode = MODE_MARK in line
+        if box:
+            self.write(box.closed(rows) + ("" if wants_next_mode else prompt + line + NEW_LINE))
+        elif wants_next_mode:
+            self.write(CLEAR_ROW_ABOVE * rows)
+        return line.replace(MODE_MARK, ""), wants_next_mode
 
 
 class ConsoleLine:
@@ -115,21 +160,32 @@ class ConsoleLine:
         self.models = models
         self.columns = columns or terminal_columns
         self.history = []
-        self.prompt = ""
+        self.prompt, self.width, self.box = "", 0, None
 
-    def read(self, prompt: str, width: int, kept: str) -> tuple[str, bool]:
-        self.prompt = prompt
-        self.write(prompt + kept)
+    def read(self, prompt: str, width: int, kept: str, box: Box | None = None) -> tuple[str, bool]:
+        self.prompt, self.width, self.box = prompt, width, box
+        self.write((box.opened() if box else "") + prompt + kept)
         self.typed, self.cursor, self.recalled = list(kept), len(kept), len(self.history)
+        try:
+            return self.read_keys(width)
+        except BaseException:
+            if box:
+                self.write(box.left(self.rows_to_cursor()))
+            raise
+
+    def rows_to_cursor(self) -> int:
+        return rows_of(self.width, self.cursor + 1, self.columns())
+
+    def read_keys(self, width: int) -> tuple[str, bool]:
         while True:
             key = self.key()
             if key in ENTER_KEYS:
                 return self.finished()
             if key == CTRL_C:
-                self.write(NEW_LINE)
+                self.write("" if self.box else NEW_LINE)
                 raise KeyboardInterrupt
             if key in END_OF_INPUT_KEYS and not self.typed:
-                self.write(NEW_LINE)
+                self.write("" if self.box else NEW_LINE)
                 raise EOFError
             if key in EXTENDED_KEYS:
                 code = self.key()
@@ -140,14 +196,20 @@ class ConsoleLine:
             self.edit(key)
 
     def finished(self) -> tuple[str, bool]:
+        rows = self.rows_to_cursor()
         self.write(NEW_LINE)
         line = "".join(self.typed)
+        if self.box:
+            self.write(self.box.closed(rows) + self.prompt + line + NEW_LINE)
         if line.strip():
             self.history = (self.history + [line])[-MAX_HISTORY:]
         return line, False
 
     def left_for_new_mode(self, width: int) -> tuple[str, bool]:
-        self.write("\r" + " " * (width + len(self.typed)) + "\r")
+        if self.box:
+            self.write(self.box.left(self.rows_to_cursor()))
+        else:
+            self.write("\r" + " " * (width + len(self.typed)) + "\r")
         return "".join(self.typed), True
 
     def edit(self, key: str) -> None:
@@ -176,7 +238,10 @@ class ConsoleLine:
     def show_menu(self, found: list[str], meanings: dict) -> None:
         lines = suggest.menu_lines(found, meanings, self.columns())
         tail = len(self.typed) - self.cursor
-        self.write(NEW_LINE + NEW_LINE.join(lines) + NEW_LINE + self.prompt + "".join(self.typed) + "\b" * tail)
+        lead, redrawn = NEW_LINE, ""
+        if self.box:
+            lead, redrawn = self.box.left(self.rows_to_cursor()), self.box.opened()
+        self.write(lead + NEW_LINE.join(lines) + NEW_LINE + redrawn + self.prompt + "".join(self.typed) + "\b" * tail)
 
     def extended(self, code: str) -> None:
         moves = {LEFT: self.move_left, RIGHT: self.move_right, HOME: self.move_home, END: self.move_end,

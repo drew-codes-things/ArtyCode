@@ -20,7 +20,7 @@ from arty_cli import rules
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
                        settings, skills, stopkey, suggest, tools, waiting, webfetch,
-                       websearch)
+                       websearch, wrap)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -56,8 +56,8 @@ MANUAL, AUTOMATIC = "manual", "auto"
 STARTUP, RESUME, CLEAR = "startup", "resume", "clear"
 MAX_TURN_CHARS = 80
 PERMISSION_PROMPT, PLAN_APPROVAL = "permission_prompt", "plan_approval"
-NOTIFICATION_LEADS = {PERMISSION_PROMPT: "Arty CLI needs your permission",
-                      PLAN_APPROVAL: "Arty CLI has a plan for you to approve"}
+NOTIFICATION_LEADS = {PERMISSION_PROMPT: "ArtyCode needs your permission",
+                      PLAN_APPROVAL: "ArtyCode has a plan for you to approve"}
 NOTE_LEAD = "(I added this note to the project's ARTY.md; follow it from now on:)"
 NOTE_ACK = "Noted."
 UNDO_LEAD = "(I undid your last file change with /undo:)"
@@ -110,8 +110,14 @@ PALETTE_ACCENT = "\033[38;5;167m"
 TRUE_COLOUR_NAMES = ("truecolor", "24bit")
 ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
-WORDMARK = "◆ Arty"
+WORDMARK = "◆ ArtyCode"
 STEP_MARK = "●"
+THOUGHT_MARK = "✻"
+MIN_THOUGHT_SECONDS = 1
+STEP_HANG = "  "
+OUTCOME_HANG = "    "
+CHECKBOX_INDENT = "    "
+CHECKBOX_HANG = "      "
 OUTCOME_MARK = "└"
 HOME_MARK = "~"
 WELCOME_LABEL_WIDTH = 8
@@ -185,6 +191,9 @@ class Terminal:
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
         self.stop_key = None
+        self.flow = wrap.Flow()
+        self.clock = time.monotonic
+        self.thinking_since = None
         self.start_turn()
 
     def start_turn(self) -> None:
@@ -239,7 +248,20 @@ class Terminal:
         return f"{self.colours[colour]}{text}{self.colours['reset']}" if self.colour else text
 
     def thinking(self):
+        self.thinking_since = self.clock() if self.shows_status() else None
         return self.working(waiting.LABEL)
+
+    def count_thinking(self, text: str) -> None:
+        self.streamed_chars += len(text)
+
+    def show_thought(self) -> None:
+        since, self.thinking_since = self.thinking_since, None
+        if since is None or self.clock() - since < MIN_THOUGHT_SECONDS:
+            return
+        self.end_line()
+        thought = f"{THOUGHT_MARK} Thought for {waiting.elapsed_text(self.clock() - since)}"
+        self.err.write(self.paint(thought, "dim") + "\n")
+        self.err.flush()
 
     def shown_now(self, text: str) -> None:
         self.err.write(text)
@@ -256,11 +278,22 @@ class Terminal:
             self.out.write("\n")
             self.out.flush()
             self.mid_line = False
+        self.flow.reset()
+
+    def err_lines(self, text: str, hang: str | None = None) -> list[str]:
+        return wrap.wrapped_line(text, wrap.room(), hang) if self.err.isatty() else [text]
+
+    def show_output(self, text: str) -> None:
+        self.end_line()
+        self.out.write(text)
+        self.out.flush()
+        self.mid_line = not text.endswith("\n")
 
     def show_text(self, text: str) -> None:
         if text:
+            self.show_thought()
             self.stop_thinking()
-        self.out.write(text)
+        self.out.write(self.flow.feed(text) if self.out.isatty() else text)
         self.out.flush()
         self.streamed_chars += len(text)
         self.mid_line = not text.endswith("\n")
@@ -282,9 +315,12 @@ class Terminal:
                                "is_error": result.startswith(ERROR_MARK)})
 
     def show_step(self, line: str) -> None:
+        self.show_thought()
         self.end_line()
         self.steps += 1
-        self.err.write(f"{self.paint(STEP_MARK, 'accent')} {line}\n")
+        first, *rest = self.err_lines(f"{STEP_MARK} {line}", STEP_HANG)
+        marked = self.paint(STEP_MARK, "accent") + first[len(STEP_MARK):]
+        self.err.write("\n".join([marked, *rest]) + "\n")
         self.err.flush()
 
     def show_todos(self, items: list[dict]) -> None:
@@ -292,24 +328,31 @@ class Terminal:
         for item in items:
             status = item.get("status", "pending")
             box = CHECKBOXES.get(status, CHECKBOXES["pending"])
-            self.err.write("    " + self.paint(f"{box} {item.get('text', '')}", CHECKBOX_COLOURS.get(status, "reset"))
-                           + "\n")
+            for line in self.err_lines(f"{CHECKBOX_INDENT}{box} {item.get('text', '')}", CHECKBOX_HANG):
+                self.err.write(self.paint(line, CHECKBOX_COLOURS.get(status, "reset")) + "\n")
         self.err.flush()
 
     def show_outcome(self, line: str, is_problem: bool) -> None:
         self.end_line()
-        self.err.write(self.paint(f"  {OUTCOME_MARK} {line}", "error" if is_problem else "dim") + "\n")
+        for shown in self.err_lines(f"  {OUTCOME_MARK} {line}", OUTCOME_HANG):
+            self.err.write(self.paint(shown, "error" if is_problem else "dim") + "\n")
         self.err.flush()
 
     def show_activity(self, line: str) -> None:
         self.end_line()
-        self.err.write(self.paint(f"  · {line}", "dim") + "\n")
+        for shown in self.err_lines(f"  · {line}", OUTCOME_HANG):
+            self.err.write(self.paint(shown, "dim") + "\n")
         self.err.flush()
 
     def note(self, line: str, colour: str = "dim") -> None:
         self.end_line()
-        self.err.write(self.paint(line, colour) + "\n")
+        for shown in self.err_lines(line):
+            self.err.write(self.paint(shown, colour) + "\n")
         self.err.flush()
+
+    def show_plan(self, plan: str) -> None:
+        flow = wrap.Flow()
+        self.err.write((flow.feed(plan.rstrip()) + flow.flush() if self.err.isatty() else plan.rstrip()) + "\n")
 
     def show_diff(self, preview: str) -> None:
         self.stop_thinking()
@@ -414,7 +457,7 @@ def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
         return permissions.NO, ""
     terminal.end_line()
     terminal.note("Arty's plan:", "accent")
-    terminal.err.write(plan.rstrip() + "\n")
+    terminal.show_plan(plan)
     prompt = terminal.show_choices(PLAN_QUESTION, PLAN_CHOICES)
     choice, by = terminal.answer(prompt, PLAN_ANSWERS, PLAN_QUESTION, plan)
     if choice != permissions.NO or by or not is_interactive():
@@ -423,7 +466,7 @@ def plan_review(terminal: "Terminal", plan: str) -> tuple[str, str]:
 
 
 def parse_arguments(argv):
-    parser = argparse.ArgumentParser(prog="arty-cli", description="Arty CLI: reads, edits and runs code in the "
+    parser = argparse.ArgumentParser(prog="arty-cli", description="ArtyCode: reads, edits and runs code in the "
                                      "current folder, asking before it changes anything. Runs on your Arty.")
     parser.add_argument("words", nargs="*", help="`login` to connect to Arty, or a question to ask once")
     parser.add_argument("-p", "--print", dest="once", help="ask once, print the answer and exit")
@@ -444,11 +487,11 @@ def parse_arguments(argv):
                         help="built-in working rules for this run: on (told and checked), tell-only or off")
     parser.add_argument("--sandbox", action="store_true",
                         help="run commands in a sandbox: only the project folder is writable, no network")
-    parser.add_argument("--version", action="version", version=f"arty-cli {__version__}")
+    parser.add_argument("--version", action="version", version=f"ArtyCode {__version__}")
     return parser.parse_args(argv)
 
 
-NO_ADDRESS = ("arty-cli doesn't know where your Arty brain is yet, so nothing was saved. Set its address, then run "
+NO_ADDRESS = ("ArtyCode doesn't know where your Arty brain is yet, so nothing was saved. Set its address, then run "
               "arty-cli login again:")
 HOME_ADDRESS = "http://<brain address>:8081/v1"
 ANYWHERE_ADDRESS = "https://<your address>/v1"
@@ -507,7 +550,7 @@ LOGIN_CHOICES = (
 
 
 def chosen_login(terminal: Terminal):
-    terminal.note("How should arty-cli log in to Arty?", "accent")
+    terminal.note("How should ArtyCode log in to Arty?", "accent")
     for number, (label, _handler) in enumerate(LOGIN_CHOICES, 1):
         terminal.note(f"  {number}. {label}")
     while True:
@@ -569,7 +612,7 @@ def project_notes_allowed(workspace, personal: Path, terminal: Terminal) -> bool
     if not is_interactive():
         reason = "its hooks or MCP servers changed since it was trusted" if state == memory.CHANGED else "this folder isn't trusted yet"
         terminal.note(f"Not following this project's ARTY.md or AGENTS.md, /commands, skills, helpers, hooks or MCP servers: {reason}. "
-                      "Start arty-cli here in a terminal to trust it.", "error")
+                      "Start ArtyCode here in a terminal to trust it.", "error")
         return False
     if state == memory.CHANGED:
         terminal.note("This folder's hooks or MCP servers changed since you trusted it.", "error")
@@ -611,6 +654,7 @@ class Session:
         self.choices = None
         self.turns = []
         self.request, self.done = "", []
+        client.on_thinking = terminal.count_thinking
         self.remote = None
         self.remote_name = ""
         self.messages = saved.messages or self.fresh()
@@ -713,7 +757,7 @@ class Session:
 
     def list_turns(self, turns: list[Turn]) -> None:
         if not turns:
-            self.terminal.note("No requests to go back to since arty-cli started (or since /clear or a summary).")
+            self.terminal.note("No requests to go back to since ArtyCode started (or since /clear or a summary).")
             return
         for number, turn in enumerate(turns, 1):
             first_line = turn.text.strip().splitlines()[0] if turn.text.strip() else ""
@@ -817,7 +861,7 @@ class Session:
 
     def run_shell(self, command: str) -> None:
         output = tools.run("run_command", {"command": command}, self.workspace)
-        self.terminal.show_text(output + "\n")
+        self.terminal.show_output(output + "\n")
         self.messages.append({"role": "user", "content": f"(I ran `{command}` myself. Output:)\n{output}"})
         self.messages.append({"role": "assistant", "content": "Noted."})
         self.remember()
@@ -1117,13 +1161,21 @@ def unknown_command_note(name: str, choices: dict) -> str:
     return f"Unknown command {name}.{hint} Type /help for the list."
 
 
+def line_from(session, reader, kept: str) -> tuple[str, bool]:
+    terminal, mode, shared = session.terminal, session.gate.mode, bool(session.remote)
+    if not terminal.shows_status():
+        prompt, width = prompt_line.mode_prompt(terminal, mode, shared=shared)
+        return reader.read(prompt, width, kept)
+    prompt, width = prompt_line.box_prompt(terminal)
+    return reader.read(prompt, width, kept, prompt_line.mode_box(terminal, mode, shared))
+
+
 def first_line(session, reader) -> str:
     if reader is None:
         return input(PROMPT)
     kept = ""
     while True:
-        prompt, width = prompt_line.mode_prompt(session.terminal, session.gate.mode, shared=bool(session.remote))
-        kept, wants_next_mode = reader.read(prompt, width, kept)
+        kept, wants_next_mode = line_from(session, reader, kept)
         if not wants_next_mode:
             return kept
         session.gate.mode = prompt_line.next_mode(session.gate.mode)
@@ -1173,7 +1225,7 @@ def rules_level(workspace) -> str:
 def welcome(session: Session) -> None:
     terminal = session.terminal
     mode = session.gate.mode
-    terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(f'CLI {__version__}', 'dim')}", "reset")
+    terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(__version__, 'dim')}", "reset")
     welcome_row(terminal, "Folder", shown_folder(session.workspace.root, Path.home()))
     welcome_row(terminal, "Model", session.client.model, "accent")
     welcome_row(terminal, "Mode", f"{mode}: {MODE_MEANINGS.get(mode, '')} (Shift+Tab to change)")
@@ -1221,7 +1273,7 @@ def ready_settings(arguments, terminal: Terminal) -> tuple[settings.Settings, bo
     config = settings.load()
     tried_login = not config.is_ready() and is_interactive()
     if tried_login:
-        terminal.note("First run: choose how arty-cli connects.", "accent")
+        terminal.note("First run: choose how ArtyCode connects.", "accent")
         login(terminal)
         config = settings.load()
     if arguments.model:
@@ -1249,7 +1301,7 @@ def main(argv=None) -> int:
         config, tried_login = ready_settings(arguments, terminal)
         if not config.is_ready():
             if not tried_login:
-                terminal.note("arty-cli isn't logged in to Arty yet. Run `arty-cli login` first.", "error")
+                terminal.note("ArtyCode isn't logged in to Arty yet. Run `arty-cli login` first.", "error")
             return NOT_SET_UP
         settings.positive_number(config, "context_tokens")
         workspace = tools.Workspace(arguments.project or Path.cwd())

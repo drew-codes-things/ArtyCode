@@ -265,3 +265,141 @@ def test_on_windows_tab_after_slash_model_finishes_the_one_model_that_fits():
     reader, _written = console_reader(list("/model o") + ["\t", "\r"], choices=lambda: COMMANDS)
     reader.models = lambda: MODEL_LIST
     assert reader.read("› ", 2, "") == ("/model own/Coder ", False)
+
+
+class Plain:
+    def paint(self, text, colour):
+        return text
+
+
+def mode_box(mode=permissions.DEFAULT, shared=False, columns=40):
+    return prompt_line.mode_box(Plain(), mode, shared, columns=lambda: columns)
+
+
+def test_the_box_is_a_rule_above_and_below_the_prompt_row_with_the_mode_bar_under_it():
+    box = mode_box()
+    assert box.rule == "─" * 39
+    assert box.bar.startswith("  default mode (shift+tab to cycle)") and len(box.bar) == 39
+    drawn = box.opened()
+    assert drawn.startswith(prompt_line.CLEAR_BELOW + box.rule)
+    assert drawn.count(box.rule) == 2 and drawn.index(box.bar) > drawn.rindex(box.rule)
+    assert drawn.endswith("\033[2A\r")
+
+
+def test_the_bar_names_the_mode_how_to_change_it_how_to_interrupt_and_remote_control():
+    wide = mode_box(permissions.PLAN, shared=True, columns=120)
+    assert wide.bar == "  plan mode (shift+tab to cycle) · esc to interrupt · remote"
+    assert mode_box(columns=120).bar == "  default mode (shift+tab to cycle) · esc to interrupt"
+    assert len(mode_box(columns=30).bar) == 29
+
+
+def test_on_linux_the_box_is_drawn_first_and_swapped_for_the_typed_line_on_enter():
+    reader, _module, written, prompts = readline_reader("fix the tests")
+    box = mode_box()
+    assert reader.read("› ", 2, "", box) == ("fix the tests", False)
+    shown = written.getvalue()
+    assert shown.startswith(box.opened())
+    assert shown.endswith(prompt_line.UP_A_ROW * 2 + prompt_line.CLEAR_BELOW + "› fix the tests\r\n")
+    assert prompts == ["› "]
+
+
+def test_on_linux_a_line_that_ran_onto_a_second_row_is_cleared_from_the_right_row():
+    typed = "x" * 100
+    reader, _module, written, _prompts = readline_reader(typed)
+    reader.read("› ", 2, "", mode_box())
+    assert (prompt_line.UP_A_ROW * 3 + prompt_line.CLEAR_BELOW) in written.getvalue()
+
+
+def test_on_linux_changing_mode_takes_the_box_away_so_the_next_one_shows_the_new_mode():
+    reader, _module, written, _prompts = readline_reader(f"fix{prompt_line.MODE_MARK}")
+    assert reader.read("› ", 2, "", mode_box()) == ("fix", True)
+    assert written.getvalue().endswith(prompt_line.UP_A_ROW * 2 + prompt_line.CLEAR_BELOW)
+
+
+@pytest.mark.parametrize("stopped", [KeyboardInterrupt, EOFError])
+def test_on_linux_leaving_the_prompt_takes_the_whole_box_away(stopped):
+    module, written = FakeReadline(), io.StringIO()
+
+    def read(prompt):
+        raise stopped
+
+    reader = prompt_line.ReadlineLine(module, read=read, write=written.write, columns=lambda: 80)
+    with pytest.raises(stopped):
+        reader.read("› ", 2, "", mode_box())
+    assert written.getvalue().endswith("\r" + prompt_line.UP_A_ROW + prompt_line.CLEAR_BELOW)
+
+
+def test_on_linux_the_command_menu_goes_above_a_fresh_box():
+    reader, module, written, _prompts = readline_reader("/model", choices=lambda: COMMANDS)
+    box = mode_box()
+    reader.read("› ", 2, "", box)
+    written.truncate(0)
+    written.seek(0)
+    module.buffer = "/mo"
+    module.completer("/mo", 0)
+    module.display_hook("/mo", ["/model", "/mode"], 6)
+    shown = written.getvalue()
+    assert shown.startswith("\r" + prompt_line.UP_A_ROW + prompt_line.CLEAR_BELOW)
+    assert shown.index("/model  switch model") < shown.index(box.rule)
+    assert shown.endswith(box.opened() + "› /mo")
+
+
+def test_on_windows_the_box_is_drawn_first_and_swapped_for_the_typed_line_on_enter():
+    reader, written = console_reader(["h", "i", "\r"])
+    box = mode_box()
+    assert reader.read("› ", 2, "", box) == ("hi", False)
+    shown = written.getvalue()
+    assert shown.startswith(box.opened() + "› ")
+    assert shown.endswith(prompt_line.UP_A_ROW * 2 + prompt_line.CLEAR_BELOW + "› hi\r\n")
+
+
+def test_on_windows_changing_mode_takes_the_box_away():
+    reader, written = console_reader(["h", "\x00", "\x0f"])
+    assert reader.read("› ", 2, "", mode_box()) == ("h", True)
+    assert written.getvalue().endswith("\r" + prompt_line.UP_A_ROW + prompt_line.CLEAR_BELOW)
+
+
+def test_on_windows_ctrl_c_takes_the_whole_box_away():
+    reader, written = console_reader(["\x03"])
+    box = mode_box()
+    with pytest.raises(KeyboardInterrupt):
+        reader.read("› ", 2, "", box)
+    assert written.getvalue() == box.opened() + "› " + "\r" + prompt_line.UP_A_ROW + prompt_line.CLEAR_BELOW
+
+
+def test_on_windows_the_command_menu_goes_above_a_fresh_box():
+    reader, written = console_reader(["/", "m", "o", "\t", "\r"], choices=lambda: COMMANDS)
+    box = mode_box()
+    reader.read("› ", 2, "", box)
+    shown = written.getvalue()
+    assert shown.count(box.opened()) == 3
+    assert shown.index("/model  switch model") < shown.rindex(box.opened())
+
+
+class Tty(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class BoxReader:
+    def __init__(self, *results):
+        self.results, self.calls = list(results), []
+
+    def read(self, prompt, width, kept, box=None):
+        self.calls.append((prompt, width, kept, box))
+        return self.results.pop(0)
+
+
+def test_on_a_terminal_the_prompt_is_boxed_with_the_mode_in_the_bar(ready_session):
+    ready_session.terminal.out, ready_session.terminal.err = Tty(), Tty()
+    reader = BoxReader(("fix", True), ("fix it", False))
+    assert cli.read_request(ready_session, reader) == "fix it"
+    (prompt, width, _kept, box), (_prompt, _width, kept, second) = reader.calls
+    assert (prompt, width, kept) == ("› ", 2, "fix")
+    assert "default mode" in box.bar and "auto-edit mode" in second.bar
+
+
+def test_into_a_pipe_the_prompt_stays_plain(ready_session):
+    reader = BoxReader(("hi", False))
+    cli.read_request(ready_session, reader)
+    assert reader.calls == [("default › ", 10, "", None)]

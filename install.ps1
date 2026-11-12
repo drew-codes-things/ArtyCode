@@ -155,7 +155,7 @@ function Install-ArtyCli {
     $python = Find-Python
     $source = Get-Source
     $spec = Get-PackageSpec $source
-    Write-Host "Installing arty-cli from $source into $AppHome"
+    Write-Host "Installing ArtyCode from $source into $AppHome"
     Write-ClashWarning
     New-Item -ItemType Directory -Force -Path $AppHome | Out-Null
     $venvPython = Join-Path $VenvDir 'Scripts\python.exe'
@@ -168,7 +168,7 @@ function Install-ArtyCli {
     Add-BinToUserPath
     $version = & (Join-Path $BinDir 'arty-cli.cmd') --version
     if ($LASTEXITCODE -ne 0) {
-        Stop-Install 'arty-cli was installed but does not start; run it from a new terminal to see why.'
+        Stop-Install 'ArtyCode was installed but does not start; run it from a new terminal to see why.'
     }
     Write-Host "Installed $version."
     Write-Host 'Type arty to start (the first run asks how to log in; arty login changes it later).'
@@ -188,7 +188,7 @@ function Uninstall-ArtyCli {
     if ((Test-Path -LiteralPath $AppHome) -and -not (Get-ChildItem -LiteralPath $AppHome -Force)) {
         Remove-Item -LiteralPath $AppHome -Force
     }
-    Write-Host 'Removed arty-cli. Your settings and conversations in %APPDATA%\arty-cli were kept.'
+    Write-Host 'Removed ArtyCode. Your settings and conversations in %APPDATA%\arty-cli were kept.'
 }
 
 if ($Uninstall) {

@@ -68,7 +68,7 @@ ERROR_LEAD = "Error"
 SAID_NO = "Not done: you said no"
 COUNTED_RESULTS = {"search": ("match", "matches"), "list_files": ("file", "files")}
 NOTHING_FOUND_LEADS = ("No matches", "No files")
-HELPER_ROLE = ("You are a helper inside arty-cli, called by the main agent for one job. Do it with your tools, then "
+HELPER_ROLE = ("You are a helper inside ArtyCode, called by the main agent for one job. Do it with your tools, then "
                "reply briefly with what you found or did, naming files and line numbers.")
 MAX_HELPERS = 4
 HELPER_STOPPED = "The helper was stopped."
@@ -80,7 +80,7 @@ EXPLORE_DEFINITION = tools.function(
     "or 'what calls parse_config?'. It reads and searches on its own and reports back, keeping this conversation "
     "short. It can't change anything. Call explore several times in one reply to run up to four helpers at once.",
     {"task": tools.TEXT}, ["task"])
-EXPLORER_PROMPT = ("You are a helper inside arty-cli. Answer the one question you are given by looking through the "
+EXPLORER_PROMPT = ("You are a helper inside ArtyCode. Answer the one question you are given by looking through the "
                    "project with your tools. Only look; never try to change anything. Reply briefly with what you "
                    "found, naming files and line numbers.")
 PLAN_DEFINITION = tools.function(

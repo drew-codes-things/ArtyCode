@@ -30,7 +30,7 @@ class Request:
 
 
 def device_name() -> str:
-    return f"Arty CLI on {socket.gethostname()}"
+    return f"ArtyCode on {socket.gethostname()}"
 
 
 def post(url: str, body: dict, headers: dict) -> tuple[int, dict]:

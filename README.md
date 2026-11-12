@@ -1,6 +1,6 @@
 <div align="center">
 
-# Arty CLI
+# ArtyCode
 
 **A coding assistant in your terminal: it reads, edits and runs code in the folder you start it in, and asks before it changes anything. It runs on your own Arty.**
 
@@ -12,13 +12,13 @@
 
 </div>
 
-![Arty CLI finding why a test fails, showing the fix as a diff and asking before it edits the file and runs the test](screenshot.png)
+![ArtyCode finding why a test fails, showing the fix as a diff and asking before it edits the file and runs the test](screenshot.png)
 
 ---
 
 ## Overview
 
-`arty-cli` is a coding assistant for the terminal on Debian (and other Linux) and Windows. You ask in plain words
+ArtyCode (the `arty` command, also `arty-cli`) is a coding assistant for the terminal on Debian (and other Linux) and Windows. You ask in plain words
 ("why does the login test fail?", "add a --dry-run flag"), and it looks through the project, makes the change and
 runs the tests. The file tools and the shell always run on your computer. The thinking happens on your own
 [Arty](https://github.com/drew-codes-things/Arty) brain (`arty/qwen3:14b` unless you pick another), so your
@@ -31,7 +31,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `multi_edit` | Several edits to one file in one step, applied in order; all or nothing, so if one edit doesn't match exactly once nothing is changed. One question with the whole diff, and one `/undo` puts it all back | Yes, like an edit |
 | `notebook_edit` | Replace, insert or delete one cell of a `.ipynb` notebook (a replaced code cell's old output is cleared) | Yes, like an edit |
 | `run_command` | Tests, builds, git (bash on Linux, PowerShell on Windows). A command is stopped after `timeout_seconds` (120 unless the model asks for more, up to 1800, or `max_command_seconds`), and the result starts by saying it was stopped and isn't running any more, then says to run a server in the background or give a long build more time, before the output it printed. `background: true` starts it and returns at once | Yes, except look-only commands (below) |
-| `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a watcher, a long build). `command_output` waits up to `wait_seconds` (5 unless asked for more) for the job to finish, then returns what it printed since the last read; background commands end when arty-cli does | No |
+| `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a watcher, a long build). `command_output` waits up to `wait_seconds` (5 unless asked for more) for the job to finish, then returns what it printed since the last read; background commands end when ArtyCode does | No |
 | `todo_write` | A checklist for jobs with several steps, drawn with boxes under the step each time it changes (☐ to do, ☑ done) and kept for `/todos` | No |
 | `web_fetch` | Read a public web page (documentation, an issue), marked as information rather than instructions | Yes, once per site with **a** |
 | `web_search` | Search the web through your Arty brain's own search (its `research__web_search` tool, so no other search key is needed); titles, links and snippets, marked as information rather than instructions. Helpers can search too | Yes, once per session with **a** (also in plan mode, since it changes nothing) |
@@ -44,7 +44,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `mcp__<server>__<tool>` | Tools from your MCP servers (below) | The first use of each server asks; after that, tools the server marks read-only don't, the others do |
 
 Each question lists its answers under it, one per line with its key, then asks `Choose y, a or n:`. Answer **y**
-(yes), **a** (yes, and don't ask again for this until you quit) or **n** (no). After **n** typed here, arty-cli asks
+(yes), **a** (yes, and don't ask again for this until you quit) or **n** (no). After **n** typed here, ArtyCode asks
 `What should Arty do instead?`: what you write goes to the model with the refusal, so it changes course instead of
 stopping, and Enter on its own just says no. "Always" lasts until you quit: for edits it covers every edit, for a
 command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
@@ -56,9 +56,12 @@ Every tool result the model sees is cut to 60,000 characters at most.
 without asking, apart from `.arty` and `.git` folders); `plan` (look and plan only, nothing changed or run; `/plan` switches it; when the model has a plan it
 presents it with the `present_plan` tool and you answer **y** to approve it, so plan mode ends and the work carries on
 in `default`, **a** to approve it and carry on in `auto-edit`, or **n** to keep planning, with what should change); `allow-all` (nothing asked,
-only for a folder you can throw away). The chat prompt starts with the current mode (`plan ›`), and **Shift+Tab** at
-the prompt moves on to the next one, keeping what you have typed: default, auto-edit, plan, then default again.
-allow-all is never reached that way, only with `/mode allow-all` or the flag. On Linux the prompt uses readline (so
+only for a folder you can throw away). On a terminal the prompt is a `›` between two rules, with a bar under it that
+names the mode: `default mode (shift+tab to cycle) · esc to interrupt`. **Shift+Tab** at the prompt moves on to the
+next mode, keeping what you have typed: default, auto-edit, plan, then default again. On Enter the box is swapped for
+the line you typed (`› add a --dry-run flag`), and the `/` menu shows above the box. When output isn't a terminal the
+prompt is the plain `plan ›` with the mode in front.
+allow-all is never reached with Shift+Tab, only with `/mode allow-all` or the flag. On Linux the prompt uses readline (so
 the arrow keys and history work too); on Windows it reads keys itself and handles typing, Backspace, Delete, the
 left and right arrows, Home, End, and up and down for earlier lines.
 
@@ -91,15 +94,15 @@ to the project), the command, the address or the list pattern. Deny wins over ev
 hooks, and is checked against each part of a chained command. An allow rule never matches a command with `;`, `&&`,
 `|`, `$` or redirection in it, and never lets plan mode change anything.
 
-## Arty, Arty CLI and starfire.ai
+## Arty, ArtyCode and starfire.ai
 
 These three projects are made to work together, and each one links to the other two.
 
 | Project | What it is | What it does for the other two |
 |---|---|---|
-| [Arty](https://github.com/drew-codes-things/Arty) | The assistant: the brain and its API, tools, memory and voice, plus the desktop, Android, iPhone and Quest apps | Answers for both. Arty CLI and starfire.ai send their chats to Arty's API and use its models and tools. Arty's approve page sends a browser that has no Arty key to starfire.ai |
-| [Arty CLI](https://github.com/drew-codes-things/ArtyCode) (ArtyCode) | Arty in your terminal: a coding agent that reads, edits and runs code in a project, asking first | Talks only to Arty. Logs in with an Arty API key, or by approving the computer in the browser. `/remote` shares a chat through Arty's brain so the Arty apps and starfire.ai can follow and steer it |
-| [starfire.ai](https://github.com/drew-codes-things/starfire.ai) | A web chat dashboard for local and hosted models | Lets you chat with Arty in the browser. Its admin-only **Arty devices** page approves a computer that is logging in (Arty CLI's browser login), lists and turns off approved devices, and makes a new key with a QR code for a phone. Its admin-only **Arty CLI** page follows and steers a shared Arty CLI chat |
+| [Arty](https://github.com/drew-codes-things/Arty) | The assistant: the brain and its API, tools, memory and voice, plus the desktop, Android, iPhone and Quest apps | Answers for both. ArtyCode and starfire.ai send their chats to Arty's API and use its models and tools. Arty's approve page sends a browser that has no Arty key to starfire.ai |
+| [ArtyCode](https://github.com/drew-codes-things/ArtyCode) | Arty in your terminal: a coding agent that reads, edits and runs code in a project, asking first | Talks only to Arty. Logs in with an Arty API key, or by approving the computer in the browser. `/remote` shares a chat through Arty's brain so the Arty apps and starfire.ai can follow and steer it |
+| [starfire.ai](https://github.com/drew-codes-things/starfire.ai) | A web chat dashboard for local and hosted models | Lets you chat with Arty in the browser. Its admin-only **Arty devices** page approves a computer that is logging in (ArtyCode's browser login), lists and turns off approved devices, and makes a new key with a QR code for a phone. Its admin-only **Arty CLI** page follows and steers a shared ArtyCode chat |
 
 How to link them:
 
@@ -109,17 +112,17 @@ How to link them:
   `ARTY_BASE_URL` in starfire's `.env` to exactly the same address (the **Arty devices** page needs it).
   `ARTY_PHONE_URL`, `ARTY_ACCESS_CLIENT_ID` and `ARTY_ACCESS_CLIENT_SECRET` are optional, for phone setup codes that
   work away from home.
-- **Arty CLI to Arty**: set `ARTY_URL` (home network) or `ARTY_REMOTE_URL` (from anywhere, with
+- **ArtyCode to Arty**: set `ARTY_URL` (home network) or `ARTY_REMOTE_URL` (from anywhere, with
   `ARTY_ACCESS_CLIENT_ID` and `ARTY_ACCESS_CLIENT_SECRET` if Cloudflare Access guards it), then run `arty login`.
 
-Arty works without the other two. Arty CLI needs Arty. starfire.ai works with other models on its own, but its
+Arty works without the other two. ArtyCode needs Arty. starfire.ai works with other models on its own, but its
 **Arty devices** page needs Arty.
 
 ## Install
 
 Python 3.11 or newer.
 
-**Debian (and other Linux):** from an arty-cli folder,
+**Debian (and other Linux):** from an ArtyCode folder,
 
 ```bash
 ./install.sh
@@ -130,7 +133,7 @@ It makes its own environment in `~/.local/share/arty-cli` (marked as its own wit
 use `arty-cli`. `./install.sh --uninstall` removes it again and keeps your settings; it refuses to touch a folder it
 didn't make. `ARTY_CLI_SOURCE` installs from another folder, a `.tar.gz`/`.zip` URL or a git URL (https only).
 
-**Windows:** in PowerShell, from an arty-cli folder,
+**Windows:** in PowerShell, from an ArtyCode folder,
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
@@ -155,7 +158,7 @@ it). When neither is known, `arty login` (and the first run) shows the lines to 
 `arty login` (or `arty-cli login`) then offers exactly two ways in:
 
 1. **API key.** Paste an Arty API key.
-2. **Browser login.** arty-cli shows a short code and opens Arty in your browser. Approve it there and arty-cli
+2. **Browser login.** ArtyCode shows a short code and opens Arty in your browser. Approve it there and ArtyCode
    receives a key of its own for this computer. From outside your home network this needs the Cloudflare Access id
    and secret first. Plain `http://` is only accepted for an address on your own network; a public address has to
    use https.
@@ -170,7 +173,7 @@ These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `A
 `ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`. Two optional limits can be set the same way,
 as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_TOKENS` and
 `ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (12288 tokens unless set, the brain's own default) and the
-longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops arty-cli at the start
+longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops ArtyCode at the start
 with a message saying where to fix it.
 
 When something goes wrong the message says what to do next. A refused key says to run `arty-cli login` again; a
@@ -215,7 +218,7 @@ Notes and questions still go to standard error, so standard output is only the J
 | `!command` | Run a command yourself; the model sees the output |
 | `line \` | Carry on typing on the next line |
 | `/undo` | Put back the last file change Arty made (again for the one before); a file Arty created is removed. Refused if the file changed again since |
-| `/rewind` | A numbered list of your requests since arty-cli started (or since `/clear` or a summary), with how many file changes going back would undo. `/rewind 2` drops request 2 and everything after it from the conversation and puts back the files Arty changed since, newest first, using `/undo`'s snapshots; a file you changed yourself since is left alone and the rewind of files stops there |
+| `/rewind` | A numbered list of your requests since ArtyCode started (or since `/clear` or a summary), with how many file changes going back would undo. `/rewind 2` drops request 2 and everything after it from the conversation and puts back the files Arty changed since, newest first, using `/undo`'s snapshots; a file you changed yourself since is left alone and the rewind of files stops there |
 | `/model` | A numbered list of every model downloaded on your Arty brain. The current one is marked with ● |
 | `/model <number or name>` | Switch to that model (`/model 3`, `/model arty/qwen2.5:72b`). Remembered for next time |
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |
@@ -229,16 +232,20 @@ Notes and questions still go to standard error, so standard output is only the J
 
 `ARTY.md` in the project and in the config folder (notes for every project) are added to what the model is told, and so
 is a project's `AGENTS.md` (the shared file other coding tools read), after `ARTY.md` when both are there. The
-first time you start arty-cli in a folder that has its own `ARTY.md` or `AGENTS.md`, `.arty/commands`, `.arty/skills`,
+first time you start ArtyCode in a folder that has its own `ARTY.md` or `AGENTS.md`, `.arty/commands`, `.arty/skills`,
 `.arty/settings.json` (hooks and permission rules) or `.arty/mcp.json`, it asks whether you trust that folder (a cloned
 repo could put instructions or programs there); until you say yes, they are left out. If `.arty/settings.json` or
 `.arty/mcp.json` change later (a pull, a branch switch), it asks again. Adding a `# note` never trusts a folder.
 Your own prompts go in `.arty/commands/<name>.md` (or `commands/` in the config folder) and run as `/<name> words`,
 with `$ARGUMENTS` replaced by the words. Conversations are saved per project in the config folder's `sessions/`.
 While it works, a dim status line says what it is doing, for how long the request has been going, how many tokens the
-model has written so far and how to stop it: `• Thinking (1m 05s · ↓ 1.2k tokens · esc to interrupt)` while it waits
+model has written so far and how to stop it: `• Thinking… (1m 05s · ↓ 1.2k tokens · esc to interrupt)` while it waits
 for the model, `• Run npm install (2m 10s · ...)` while a step runs. It is wiped as soon as the answer or a step
-appears (only when both output and errors go to a terminal, so piped and `-p` output stays plain). When a request that
+appears, and a dim `✻ Thought for 12s` line takes its place when the model took a second or more before its answer
+or step (if the brain streams its reasoning apart from the answer, that counts towards the tokens; it is never
+printed). All of this is only when both output and errors go to a terminal, so piped and `-p` output stays plain.
+On a terminal the answer, notes and steps wrap between words at the window's width, with a word that would run past
+the edge moved to the next line; code blocks, diffs and the output of `!commands` are left as written. When a request that
 took steps ends, one line says how long it worked, how many steps it took and how many tokens the model wrote.
 Esc or Ctrl-C stops the current request, helpers included (what it already changed or ran, MCP calls too, stays noted
 in the conversation); a question waiting for your answer reads keys normally. Ctrl-D leaves.
@@ -255,13 +262,13 @@ files in parts. A real question for you, or a second stop in a row, ends the req
 stops a job on its own is the same step with the same result over and over (it is warned once first); waiting on a
 background build that is still running doesn't count.
 
-Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected arty-cli waits as
+Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
 long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
 writes), and only five minutes of total silence counts as a lost connection.
 
 ### Checks after edits, project map and sandbox
 
-After every `write_file`, `edit_file` or `multi_edit`, arty-cli checks the file and tells the model what broke: Python
+After every `write_file`, `edit_file` or `multi_edit`, ArtyCode checks the file and tells the model what broke: Python
 syntax and JSON in-process, `ruff` or `flake8` when the project configures one (`ruff.toml`, `[tool.ruff]` in
 `pyproject.toml`, `.flake8`, or a `[flake8]` section in `setup.cfg` or `tox.ini`), `node --check` for JavaScript, and
 `bash -n` plus `shellcheck` for shell scripts. Only programs found outside the project folder are run, never ones the
@@ -278,7 +285,7 @@ usual:
 
 - Linux: bubblewrap (`bwrap`, install it with your package manager). The system is read-only, the project folder is
   writable, `/tmp` is private, and secrets in your home folder (`~/.ssh`, `~/.gnupg`, cloud and `gh` logins,
-  `.netrc`, `.git-credentials`, arty-cli's own config folder with your API key, and others) look empty. Your
+  `.netrc`, `.git-credentials`, ArtyCode's own config folder with your API key, and others) look empty. Your
   runtime folder (`/run/user/<uid>`, with the session bus and keyring and agent sockets) is empty too, the SSH agent
   socket is hidden wherever it lives, and environment variables that look secret (names with KEY, TOKEN, SECRET,
   PASSWORD, AUTH and the like) or point at the session bus or an agent are left out. The rest of your home folder
@@ -288,7 +295,7 @@ usual:
   holds your whole user folder is refused. Programs installed only for you (under `AppData`) can't be run inside it.
 - No network unless you also set `"sandboxNetwork": true` in your own `settings.json`.
 
-It is off by default. When it can't run (no `bwrap`, or a container that blocks it) arty-cli says so and runs commands
+It is off by default. When it can't run (no `bwrap`, or a container that blocks it) ArtyCode says so and runs commands
 without it; `"sandbox": "required"` refuses commands instead. A trusted project's `.arty/settings.json` can switch
 the sandbox on or make it required, never off, and can't turn the network on. Helpers' commands and the ones you type
 after `!` run in the sandbox too; hooks and MCP servers don't.
@@ -344,13 +351,13 @@ in the middle, the work carries on from the request, the checklist and what alre
 
 ### When Arty is busy
 
-When Arty's brain answers 429 or 503 (all its jobs are taken), or a gateway in front of it answers 502 or 504, arty-cli
+When Arty's brain answers 429 or 503 (all its jobs are taken), or a gateway in front of it answers 502 or 504, ArtyCode
 waits and tries again, about 1, 2, 4 seconds apart and then every 30 seconds, with a little randomness, or as long as
 the brain's Retry-After asks (up to a minute), showing `busy, retrying in N s`. A connection lost part way through a
 reply, or a brain that can't be reached after it has answered once, is retried the same way (`lost the connection to
 Arty's brain (...), retrying in N s`), and the reply is asked for again, so a long job carries on where it was. This
 goes on for up to 15 minutes before the request stops with the error; Esc or Ctrl-C stops it sooner. A brain that has
-never answered since arty-cli started is reported at once. When the brain's reply is its own "hit an error" note, or
+never answered since ArtyCode started is reported at once. When the brain's reply is its own "hit an error" note, or
 it answers 500, it is tried three times in all before the error is shown.
 
 ### Remote control
@@ -358,7 +365,7 @@ it answers 500, it is tried three times in all before the error is shown.
 `/remote` (or starting with `arty --remote`) shares the chat through your Arty brain, so the Arty app on Android or
 iPhone (**More > Computers**) and starfire.ai's admin **Arty CLI** page can follow it and steer it. The computer opens
 no port: it sends what happens to the brain and asks the brain for anything sent back. `/remote off` stops sharing,
-and so does leaving arty-cli.
+and so does leaving ArtyCode.
 
 Sharing sends the whole conversation so far first (a chat you resumed, or one you had been working in for a while),
 so the other device opens on everything up to now and then follows live. When the conversation is summarised to
@@ -371,7 +378,7 @@ added when another shared terminal already has that name (`greeter`, `greeter 2`
 this terminal a name of your choice.
 
 Turning it on says the name the chat is shared as and where to open it, and reminds you that a phone's device key
-needs its **Arty CLI** switch on. While it is on, the prompt reads `default · remote ›` and `/status` says
+needs its **Arty CLI** switch on. While it is on, the bar under the prompt ends with `· remote` (the plain prompt reads `default · remote ›`) and `/status` says
 `Remote control: on as "<name>"`. A request sent from afar shows as `From <device> (remote control): ...`; a question
 adds `Or answer Allow or Deny on another device.`, and an answer given there shows as `Allowed on <device> (remote
 control).` or `Refused on ...`. If the brain turns sharing down, or a shared session ends, the message says why and
@@ -494,7 +501,7 @@ Four more events:
 |---|---|---|---|
 | `SessionStart` | a chat or `-p` request starts, `--continue`/`--resume` picks one up, or `/clear` | `source`: `startup`, `resume` or `clear` (`matcher` matches it) | Anything printed (or `additionalContext`) is added to the conversation |
 | `PreCompact` | before the conversation is summarised | `trigger`: `manual` (`/compact`) or `auto` (`matcher` matches it) | Exit code 2 or `{"decision": "block"}` skips the summary; anything printed is added to the summary instructions |
-| `Notification` | arty-cli is waiting for your answer to a question | `message`, `notification_type`: `permission_prompt` | Tell you somewhere else (a desktop notice, a phone); its output is ignored |
+| `Notification` | ArtyCode is waiting for your answer to a question | `message`, `notification_type`: `permission_prompt` | Tell you somewhere else (a desktop notice, a phone); its output is ignored |
 | `SubagentStop` | an `explore` helper has finished | `agent_type`, `task`, `last_message`, `stop_hook_active` | Exit code 2 or `{"decision": "block", "reason": "..."}` sends the helper back to work with the reason (at most 3 times) | A hook that runs past its timeout
 (60 seconds unless set) is stopped together with everything it started.
 
@@ -517,7 +524,7 @@ With exit code 0, a hook can print a JSON object instead:
 
 ## MCP servers
 
-MCP servers add their tools to the model's list: local ones that arty-cli starts as a program (stdio), and ones
+MCP servers add their tools to the model's list: local ones that ArtyCode starts as a program (stdio), and ones
 already running somewhere that it reaches over HTTP (the streamable HTTP transport). Put them under `mcpServers` in
 `settings.json` in the config folder, or in `.arty/mcp.json` in a trusted project:
 
@@ -532,7 +539,7 @@ already running somewhere that it reaches over HTTP (the streamable HTTP transpo
 
 A server with a `url` (http or https) is reached over HTTP, with its `headers` sent on every request; `${NAME}` in a
 header is filled from that environment variable, so a token can stay out of the file (a missing one is reported and
-that server is skipped). arty-cli keeps the session the server gives it, answers its pings, and ends the session when
+that server is skipped). ArtyCode keeps the session the server gives it, answers its pings, and ends the session when
 it quits.
 
 They start with the session and stop when it ends; one that fails to start is reported and the rest carry on. A bare

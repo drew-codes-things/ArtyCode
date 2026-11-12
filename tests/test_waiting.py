@@ -23,7 +23,7 @@ def test_each_tick_redraws_one_line_with_the_time_so_far_and_how_to_interrupt():
     clock.now += 3.4
     line.tick()
     assert all(text.startswith("\r") and "\n" not in text for text in written)
-    assert "Thinking (0s" in written[0] and "Thinking (3s" in written[1]
+    assert "Thinking… (0s" in written[0] and "Thinking… (3s" in written[1]
     assert all("esc to interrupt" in text for text in written)
     assert written[0][1] != written[1][1]
 
@@ -100,3 +100,7 @@ def test_elapsed_time_and_tokens_read_naturally():
     assert waiting.elapsed_text(9.7) == "9s"
     assert waiting.elapsed_text(3600 + 61) == "61m 01s"
     assert waiting.tokens_text(999) == "999" and waiting.tokens_text(25_400) == "25.4k"
+
+
+def test_the_thinking_line_reads_like_a_spinner_with_time_tokens_and_how_to_interrupt():
+    assert waiting.status_text(0, 12, tokens=340, room=200) == "· Thinking… (12s · ↓ 340 tokens · esc to interrupt)"
