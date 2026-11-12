@@ -19,7 +19,8 @@ from arty_cli import rules
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
-                       settings, skills, stopkey, suggest, tools, waiting, webfetch)
+                       settings, skills, stopkey, suggest, tools, waiting, webfetch,
+                       websearch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -1259,7 +1260,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     workspace.rules = rules.Rules(rules.chosen(settings.config_dir(), workspace.root, trusted, arguments.rules))
     choice = sandbox.chosen(settings.config_dir(), workspace.root, trusted, arguments.sandbox)
     workspace.sandbox = sandbox.Sandbox(workspace.root, choice, secret_paths=(settings.config_dir(),))
-    loaded = session_extras(workspace, trusted, terminal, client.search_web, eyes.Eyes(workspace, client))
+    loaded = session_extras(workspace, trusted, terminal, chosen_search(client, config, terminal),
+                            eyes.Eyes(workspace, client))
     gate.ask = notifying(terminal.ask, loaded, terminal)
     gate.instead = terminal.instead
     gate.review = notifying(terminal.review_plan, loaded, terminal, PLAN_APPROVAL)
@@ -1359,6 +1361,14 @@ def answered_as_stream(session: Session, request: str) -> int:
         session.terminal.events = None
     events.write(result_event(session, answered))
     return 0 if answered else FAILED
+
+
+def chosen_search(client, config, terminal: Terminal):
+    try:
+        return websearch.searcher(client, config.search_with or websearch.DESKTOP)
+    except brain.BrainError as error:
+        terminal.note(f"{error} Searching through Arty's desktop instead.", "error")
+        return client.search_web
 
 
 def session_extras(workspace, trusted: bool, terminal: Terminal, search, looks=None):
