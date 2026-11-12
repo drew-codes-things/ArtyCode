@@ -99,6 +99,12 @@ def test_every_chat_asks_the_brain_for_agent_mode(home_brain):
     assert headers["X-Arty-Client-Tools"] == "1"
 
 
+def test_every_chat_asks_the_brain_to_stream_the_models_reasoning(home_brain):
+    client = brain.Brain(settings.Settings(base_url=home_brain, api_key="key"))
+    client.reply([{"role": "user", "content": "hi"}], tools=[], on_text=lambda text: None)
+    assert FakeBrain.seen[-1]["headers"]["X-Arty-Reasoning"] == "1"
+
+
 def test_the_local_address_gets_no_access_headers(home_brain):
     client = brain.Brain(settings.Settings(base_url=home_brain, api_key="key", access_client_id="id",
                                            access_client_secret="s"))

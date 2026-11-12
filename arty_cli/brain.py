@@ -378,6 +378,7 @@ class Brain:
         headers = {"Authorization": f"Bearer {self.settings.api_key}", "Content-Type": "application/json",
                    "Accept": "text/event-stream", "User-Agent": f"arty-cli/{__version__}",
                    "X-Arty-Client-Tools": "1", "X-Arty-Agent": "1", "X-Arty-Any-Model": "1", "X-Arty-Skip-Groups": SKIPPED_GROUPS,
+                   "X-Arty-Reasoning": "1",
                    **route.headers}
         return urllib.request.Request(f"{route.url}/chat/completions", data=json.dumps(body).encode(),
                                       headers=headers, method="POST")
