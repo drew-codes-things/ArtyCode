@@ -687,3 +687,12 @@ def test_reading_a_background_server_waits_only_as_long_as_asked(workspace):
     workspace.stop_jobs()
     assert "listening" in output and tools.STILL_RUNNING in output
     assert 0.9 <= waited < 10
+
+
+def test_a_stopped_command_says_so_before_its_output_so_a_server_is_not_taken_for_running(workspace, monkeypatch):
+    process = EndlessProcess()
+    monkeypatch.setattr(tools, "start_process", lambda workspace, command: process)
+    monkeypatch.setattr(tools, "output_after_stop", lambda process: " * Serving Flask app 'app'\n")
+    result = tools.run("run_command", {"command": "python3 app.py"}, workspace)
+    assert result.startswith("[stopped after 120 s while still running, so it is not running now.")
+    assert result.endswith(" * Serving Flask app 'app'\n")

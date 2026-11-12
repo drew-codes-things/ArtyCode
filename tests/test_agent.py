@@ -1106,3 +1106,8 @@ def test_each_tool_run_shows_a_working_line_and_each_reply_is_counted(tmp_path):
                    permissions.Gate(workspace, permissions.refuse), screen)
     assert screen.labels == ["Read a.txt"]
     assert screen.counted == ["", "Read it."]
+
+
+def test_a_command_stopped_at_its_timeout_shows_as_a_problem_not_as_its_last_output():
+    result = tools.timed_out_note(120, 1800) + " * Serving Flask app 'app'\n"
+    assert agent.outcome_line("run_command", result) == ("stopped after 120 s while still running", True)

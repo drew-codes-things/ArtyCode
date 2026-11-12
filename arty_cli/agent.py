@@ -148,6 +148,8 @@ def read_outcome(result: str) -> str:
 
 
 def command_outcome(result: str) -> tuple[str, bool]:
+    if result.startswith(tools.STOPPED_LEAD):
+        return one_line(result.split(",", 1)[0].removeprefix("[")), True
     lines = [line.strip() for line in result.splitlines() if line.strip()]
     ending = EXIT_CODE.fullmatch(lines[-1]) if lines else None
     if ending is None:

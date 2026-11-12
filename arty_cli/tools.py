@@ -816,10 +816,13 @@ def output_after_stop(process: subprocess.Popen) -> str:
         return text_of(error.output) + STRAY_OUTPUT_NOTE
 
 
+STOPPED_LEAD = "[stopped after"
+
+
 def timed_out_note(seconds: int, most: int) -> str:
-    return (f"\n[stopped after {seconds} s. A server or watcher should run with background: true, then "
-            f"command_output reads it; a long install or build can run again with a bigger timeout_seconds "
-            f"(up to {most})]")
+    return (f"{STOPPED_LEAD} {seconds} s while still running, so it is not running now. A server or watcher "
+            f"should run with background: true, then command_output reads it; a long install or build can run "
+            f"again with a bigger timeout_seconds (up to {most}). Its output before it was stopped:]\n")
 
 
 def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, background=False):
@@ -832,7 +835,7 @@ def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, bac
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
         stop(process)
-        return clipped(output_after_stop(process)) + timed_out_note(seconds, most)
+        return timed_out_note(seconds, most) + clipped(output_after_stop(process))
     except KeyboardInterrupt:
         stop(process)
         process.wait()
