@@ -376,17 +376,24 @@ def loose_starts(lines: list[str], pattern: list[str], looseness: Looseness) -> 
     return [start for start in range(len(keys) - size + 1) if keys[start:start + size] == wanted]
 
 
-def reindented_line(line: str, model_indent: str, file_indent: str) -> str:
+def indentation_pairs(pattern: list[str], matched: list[str]) -> list[tuple[str, str]]:
+    pairs = {leading_space(line): leading_space(original) for line, original in zip(pattern, matched) if line.strip()}
+    return sorted(pairs.items(), key=lambda pair: len(pair[0]), reverse=True)
+
+
+def reindented_line(line: str, pairs: list[tuple[str, str]]) -> str:
     if not line.strip():
         return ""
-    return file_indent + line[len(model_indent):] if line.startswith(model_indent) else line
+    for model_indent, file_indent in pairs:
+        if line.startswith(model_indent):
+            return file_indent + line[len(model_indent):]
+    return line
 
 
 def with_file_indentation(new_lines: list[str], pattern: list[str], matched: list[str]) -> list[str]:
     unchanged = {line: original for line, original in zip(pattern, matched) if line.strip()}
-    first = next(index for index, line in enumerate(pattern) if line.strip())
-    model_indent, file_indent = leading_space(pattern[first]), leading_space(matched[first])
-    return [unchanged.get(line) or reindented_line(line, model_indent, file_indent) for line in new_lines]
+    pairs = indentation_pairs(pattern, matched)
+    return [unchanged.get(line) or reindented_line(line, pairs) for line in new_lines]
 
 
 def spliced(lines: list[str], start: int, pattern: list[str], new_text: str, looseness: Looseness) -> str:

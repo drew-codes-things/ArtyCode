@@ -566,6 +566,14 @@ def test_old_text_with_other_indentation_applies_with_the_files_own_indentation(
     assert after == "def f(x):\n    if x:  \n        log(x)\n        return 2\n    return 0\n"
 
 
+def test_old_text_indented_less_at_every_level_keeps_each_level_of_the_file():
+    before = "def greet(name):\n    message = \"Hi\"\n    return message\n"
+    old = "def greet(name):\n  message = \"Hi\"\n  return message"
+    new = "def greet(name):\n  message = \"Hey\"\n  return message"
+    after = tools.edited_text(before, old, new, False)
+    assert after == "def greet(name):\n    message = \"Hey\"\n    return message\n"
+
+
 def test_typographic_quotes_dashes_and_spaces_in_old_text_still_match():
     before = 'msg = "it\'s" - 1\n'
     old = "msg = \u201cit\u2019s\u201d\u00a0\u2013 1"
