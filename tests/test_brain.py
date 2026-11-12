@@ -567,3 +567,16 @@ def test_the_tokens_the_brain_counted_come_back_with_the_reply():
 def test_a_context_size_can_be_set_for_the_brain():
     assert brain.Brain(settings.Settings(context_tokens="32768")).context_tokens() == 32768
     assert brain.Brain(settings.Settings()).context_tokens() is None
+
+
+@pytest.mark.parametrize("field", ["reasoning", "reasoning_content", "thinking"])
+def test_reasoning_the_brain_streams_apart_from_the_answer_is_passed_on_but_not_shown(field):
+    thought, shown = [], []
+    message = brain.read_reply(sse({field: "Let me think. "}, {field: "Two plus two."}, {"content": "4"}),
+                               shown.append, thought.append)
+    assert thought == ["Let me think. ", "Two plus two."] and shown == ["4"]
+    assert message["content"] == "4"
+
+
+def test_reasoning_is_ignored_when_nothing_listens_for_it():
+    assert brain.read_reply(sse({"reasoning": "hm"}, {"content": "4"}), lambda text: None)["content"] == "4"

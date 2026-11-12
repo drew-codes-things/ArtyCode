@@ -112,6 +112,8 @@ ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
 WORDMARK = "◆ ArtyCode"
 STEP_MARK = "●"
+THOUGHT_MARK = "✻"
+MIN_THOUGHT_SECONDS = 1
 STEP_HANG = "  "
 OUTCOME_HANG = "    "
 CHECKBOX_INDENT = "    "
@@ -186,6 +188,8 @@ class Terminal:
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
         self.stop_key = None
         self.flow = wrap.Flow()
+        self.clock = time.monotonic
+        self.thinking_since = None
         self.start_turn()
 
     def start_turn(self) -> None:
@@ -240,7 +244,20 @@ class Terminal:
         return f"{self.colours[colour]}{text}{self.colours['reset']}" if self.colour else text
 
     def thinking(self):
+        self.thinking_since = self.clock() if self.shows_status() else None
         return self.working(waiting.LABEL)
+
+    def count_thinking(self, text: str) -> None:
+        self.streamed_chars += len(text)
+
+    def show_thought(self) -> None:
+        since, self.thinking_since = self.thinking_since, None
+        if since is None or self.clock() - since < MIN_THOUGHT_SECONDS:
+            return
+        self.end_line()
+        thought = f"{THOUGHT_MARK} Thought for {waiting.elapsed_text(self.clock() - since)}"
+        self.err.write(self.paint(thought, "dim") + "\n")
+        self.err.flush()
 
     def shown_now(self, text: str) -> None:
         self.err.write(text)
@@ -270,6 +287,7 @@ class Terminal:
 
     def show_text(self, text: str) -> None:
         if text:
+            self.show_thought()
             self.stop_thinking()
         self.out.write(self.flow.feed(text) if self.out.isatty() else text)
         self.out.flush()
@@ -293,6 +311,7 @@ class Terminal:
                                "is_error": result.startswith(ERROR_MARK)})
 
     def show_step(self, line: str) -> None:
+        self.show_thought()
         self.end_line()
         self.steps += 1
         first, *rest = self.err_lines(f"{STEP_MARK} {line}", STEP_HANG)
@@ -631,6 +650,7 @@ class Session:
         self.choices = None
         self.turns = []
         self.request, self.done = "", []
+        client.on_thinking = terminal.count_thinking
         self.remote = None
         self.remote_name = ""
         self.messages = saved.messages or self.fresh()

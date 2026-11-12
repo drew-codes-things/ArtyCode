@@ -264,7 +264,14 @@ def is_brain_fault(content: str) -> bool:
     return content.rstrip().endswith(BRAIN_FAULT_NOTE)
 
 
-def read_reply(lines, on_text) -> dict:
+REASONING_FIELDS = ("reasoning", "reasoning_content", "thinking")
+
+
+def reasoning_in(delta: dict) -> str:
+    return "".join(delta[field] for field in REASONING_FIELDS if isinstance(delta.get(field), str))
+
+
+def read_reply(lines, on_text, on_thinking=None) -> dict:
     content, calls, finished, usage = [], {}, False, None
     for line in lines:
         if not line.startswith(DATA_PREFIX):
@@ -280,6 +287,8 @@ def read_reply(lines, on_text) -> dict:
         usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else usage
         finished = finished or bool(choice.get("finish_reason"))
         delta = choice.get("delta") or {}
+        if on_thinking and reasoning_in(delta):
+            on_thinking(reasoning_in(delta))
         if delta.get("content"):
             content.append(delta["content"])
             on_text(delta["content"])
@@ -336,6 +345,7 @@ class Brain:
         self.model = settings.model
         self.route = None
         self.reached = ""
+        self.on_thinking = None
 
     def address(self) -> str:
         return self.route.url if self.route else ""
@@ -435,7 +445,7 @@ class Brain:
             if "html" in (response.headers.get("Content-Type") or ""):
                 raise BrainError("The remote address answered with a web page: Cloudflare Access turned the "
                                  "request away. Check access_client_id and access_client_secret.")
-            return read_reply(decoded_lines(response), on_text)
+            return read_reply(decoded_lines(response), on_text, self.on_thinking)
 
     def answered_once(self, body: dict, on_text) -> dict:
         try:

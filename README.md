@@ -56,9 +56,12 @@ Every tool result the model sees is cut to 60,000 characters at most.
 without asking, apart from `.arty` and `.git` folders); `plan` (look and plan only, nothing changed or run; `/plan` switches it; when the model has a plan it
 presents it with the `present_plan` tool and you answer **y** to approve it, so plan mode ends and the work carries on
 in `default`, **a** to approve it and carry on in `auto-edit`, or **n** to keep planning, with what should change); `allow-all` (nothing asked,
-only for a folder you can throw away). The chat prompt starts with the current mode (`plan ›`), and **Shift+Tab** at
-the prompt moves on to the next one, keeping what you have typed: default, auto-edit, plan, then default again.
-allow-all is never reached that way, only with `/mode allow-all` or the flag. On Linux the prompt uses readline (so
+only for a folder you can throw away). On a terminal the prompt is a `›` between two rules, with a bar under it that
+names the mode: `default mode (shift+tab to cycle) · esc to interrupt`. **Shift+Tab** at the prompt moves on to the
+next mode, keeping what you have typed: default, auto-edit, plan, then default again. On Enter the box is swapped for
+the line you typed (`› add a --dry-run flag`), and the `/` menu shows above the box. When output isn't a terminal the
+prompt is the plain `plan ›` with the mode in front.
+allow-all is never reached with Shift+Tab, only with `/mode allow-all` or the flag. On Linux the prompt uses readline (so
 the arrow keys and history work too); on Windows it reads keys itself and handles typing, Backspace, Delete, the
 left and right arrows, Home, End, and up and down for earlier lines.
 
@@ -236,9 +239,13 @@ repo could put instructions or programs there); until you say yes, they are left
 Your own prompts go in `.arty/commands/<name>.md` (or `commands/` in the config folder) and run as `/<name> words`,
 with `$ARGUMENTS` replaced by the words. Conversations are saved per project in the config folder's `sessions/`.
 While it works, a dim status line says what it is doing, for how long the request has been going, how many tokens the
-model has written so far and how to stop it: `• Thinking (1m 05s · ↓ 1.2k tokens · esc to interrupt)` while it waits
+model has written so far and how to stop it: `• Thinking… (1m 05s · ↓ 1.2k tokens · esc to interrupt)` while it waits
 for the model, `• Run npm install (2m 10s · ...)` while a step runs. It is wiped as soon as the answer or a step
-appears (only when both output and errors go to a terminal, so piped and `-p` output stays plain). When a request that
+appears, and a dim `✻ Thought for 12s` line takes its place when the model took a second or more before its answer
+or step (if the brain streams its reasoning apart from the answer, that counts towards the tokens; it is never
+printed). All of this is only when both output and errors go to a terminal, so piped and `-p` output stays plain.
+On a terminal the answer, notes and steps wrap between words at the window's width, with a word that would run past
+the edge moved to the next line; code blocks, diffs and the output of `!commands` are left as written. When a request that
 took steps ends, one line says how long it worked, how many steps it took and how many tokens the model wrote.
 Esc or Ctrl-C stops the current request, helpers included (what it already changed or ran, MCP calls too, stays noted
 in the conversation); a question waiting for your answer reads keys normally. Ctrl-D leaves.
@@ -361,7 +368,7 @@ no port: it sends what happens to the brain and asks the brain for anything sent
 and so does leaving ArtyCode.
 
 Turning it on says the name the chat is shared as and where to open it, and reminds you that a phone's device key
-needs its **Arty CLI** switch on. While it is on, the prompt reads `default · remote ›` and `/status` says
+needs its **Arty CLI** switch on. While it is on, the bar under the prompt ends with `· remote` (the plain prompt reads `default · remote ›`) and `/status` says
 `Remote control: on as "<name>"`. A request sent from afar shows as `From <device> (remote control): ...`; a question
 adds `Or answer Allow or Deny on another device.`, and an answer given there shows as `Allowed on <device> (remote
 control).` or `Refused on ...`. If the brain turns sharing down, or a shared session ends, the message says why and
