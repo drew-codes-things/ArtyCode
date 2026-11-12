@@ -16,6 +16,7 @@ JSON_SUFFIXES = (".json",)
 RUFF_FILES = ("ruff.toml", ".ruff.toml")
 FLAKE8_FILES = (".flake8",)
 FLAKE8_SECTION_FILES = ("setup.cfg", "tox.ini")
+FLAKE8_LOCAL_PLUGINS = "flake8:local-plugins"
 
 
 def wanted(personal_folder: Path, project_root: Path, include_project: bool) -> bool:
@@ -54,7 +55,7 @@ class Checker:
     def python_linter(self, path: Path, shown: str) -> str:
         if self.uses_ruff():
             return self.outside_program("ruff", ["check", "--quiet", "--no-cache", str(path)], shown)
-        if self.uses_flake8():
+        if self.uses_flake8() and not self.flake8_loads_project_plugins():
             return self.outside_program("flake8", [str(path)], shown)
         return ""
 
@@ -74,6 +75,17 @@ class Checker:
             except configparser.Error:
                 continue
             if parser.has_section("flake8"):
+                return True
+        return False
+
+    def flake8_loads_project_plugins(self) -> bool:
+        for name in FLAKE8_FILES + FLAKE8_SECTION_FILES:
+            parser = configparser.RawConfigParser()
+            try:
+                parser.read(self.root / name, encoding="utf-8")
+            except configparser.Error:
+                return True
+            if any(section.lower() == FLAKE8_LOCAL_PLUGINS for section in parser.sections()):
                 return True
         return False
 

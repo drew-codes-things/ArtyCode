@@ -69,6 +69,17 @@ def test_flake8_config_in_setup_cfg_picks_flake8(project, tmp_path):
     assert "E999" in lint.Checker(project).problems(project / "app.py", "x = 1\n")
 
 
+@stand_in_linters
+@pytest.mark.parametrize("config", [".flake8", "setup.cfg", "tox.ini"])
+def test_flake8_is_not_run_when_its_config_loads_plugins_from_the_project(project, tmp_path, config):
+    fake_program(tmp_path / "bin", "flake8", "ran project plugin")
+    (project / "setup.cfg").write_text("[flake8]\nmax-line-length = 100\n")
+    with open(project / config, "a") as handle:
+        handle.write("\n[flake8:local-plugins]\nextension =\n    X1 = plugin:Check\npaths = .\n")
+    assert lint.Checker(project).problems(project / "app.py", "x = 1\n") == ""
+    assert "line 1" in lint.Checker(project).problems(project / "app.py", "x = (\n")
+
+
 def test_a_linter_inside_the_project_folder_is_never_run(project, monkeypatch):
     fake_program(project / ".venv" / "bin", "ruff", "ran project code")
     monkeypatch.setenv("PATH", str(project / ".venv" / "bin") + os.pathsep + "/usr/bin" + os.pathsep + "/bin")

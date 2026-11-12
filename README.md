@@ -220,7 +220,8 @@ After every `write_file`, `edit_file` or `multi_edit`, arty-cli checks the file 
 syntax and JSON in-process, `ruff` or `flake8` when the project configures one (`ruff.toml`, `[tool.ruff]` in
 `pyproject.toml`, `.flake8`, or a `[flake8]` section in `setup.cfg` or `tox.ini`), `node --check` for JavaScript, and
 `bash -n` plus `shellcheck` for shell scripts. Only programs found outside the project folder are run, never ones the
-project ships, and each gets 15 seconds. Turn it off with `"lintAfterEdits": false` in `settings.json`.
+project ships, and each gets 15 seconds. flake8 is skipped when its config has a `[flake8:local-plugins]` section,
+because that loads Python code from the project. Turn it off with `"lintAfterEdits": false` in `settings.json`.
 
 At the start (and after `/clear` or a summary) the model gets a short map of the project: the files with their main
 classes and functions, the most used first, tests last, about 3,600 characters at most. It is built with the standard
