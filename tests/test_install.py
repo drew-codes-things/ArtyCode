@@ -82,3 +82,8 @@ def test_the_debian_installer_refuses_plain_http_sources(tmp_path):
 def test_the_windows_installer_refuses_plain_http_sources():
     script = (PROJECT / "install.ps1").read_text()
     assert "'^http://'" in script and "'^git\\+http://'" in script
+
+
+def test_the_interface_library_is_installed_with_it():
+    project = tomllib.loads((PROJECT / "pyproject.toml").read_text())["project"]
+    assert [name.split(">")[0] for name in project["dependencies"]] == ["prompt_toolkit"]
