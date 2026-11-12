@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -552,6 +553,40 @@ def test_the_banner_starts_with_a_small_arty_wordmark(ready, monkeypatch, capsys
     chat_with(monkeypatch, "/exit")
     first = capsys.readouterr().err.splitlines()[0]
     assert first.startswith(cli.WORDMARK)
+
+
+def test_the_welcome_names_the_folder_model_and_mode_on_their_own_rows(ready, monkeypatch, capsys):
+    chat_with(monkeypatch, "/exit")
+    rows = capsys.readouterr().err.splitlines()
+    assert any(row.split(maxsplit=1) == ["Folder", cli.shown_folder(ready, Path.home())] for row in rows)
+    assert any(row.split()[:2] == ["Model", "arty/qwen3:14b"] for row in rows)
+    assert any(row.split()[:2] == ["Mode", "default:"] and "Shift+Tab" in row for row in rows)
+
+
+def test_the_welcome_gives_a_few_tips_and_says_where_help_is(ready, monkeypatch, capsys):
+    chat_with(monkeypatch, "/exit")
+    shown = capsys.readouterr().err
+    assert "/help for commands" in shown
+    assert "Ctrl-C stops a request" in shown
+    assert "@file" in shown and "!command" in shown
+
+
+def test_the_welcome_suggests_init_only_where_there_are_no_notes_yet(ready, monkeypatch, capsys):
+    chat_with(monkeypatch, "/exit")
+    assert "/init" in capsys.readouterr().err
+    (ready / "ARTY.md").write_text("- tests run with pytest\n")
+    chat_with(monkeypatch, "/exit")
+    assert "/init" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("folder, shown", [("Projects/demo", "~{sep}Projects{sep}demo"), ("", "~")])
+def test_a_folder_in_the_home_folder_is_shown_from_the_tilde(tmp_path, folder, shown):
+    home = tmp_path / "home"
+    assert cli.shown_folder(home / folder, home) == shown.format(sep=os.sep)
+
+
+def test_a_folder_outside_the_home_folder_is_shown_in_full(tmp_path):
+    assert cli.shown_folder(tmp_path / "work", tmp_path / "home") == str(tmp_path / "work")
 
 
 class CommandBrain(FakeBrain):

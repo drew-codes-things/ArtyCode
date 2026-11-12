@@ -86,6 +86,16 @@ TRUE_COLOUR_NAMES = ("truecolor", "24bit")
 ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
 WORDMARK = "◆ Arty"
+HOME_MARK = "~"
+WELCOME_LABEL_WIDTH = 8
+MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
+                 permissions.AUTO_EDIT: "edits without asking, asks before commands",
+                 permissions.PLAN: "looks and plans, changes nothing",
+                 permissions.ALLOW_ALL: "asks nothing"}
+WELCOME_TIPS = ('Ask in plain words, e.g. "why does the login test fail?" or "add a --dry-run flag"',
+                "@file attaches a file · !command runs one yourself · # note saves a project note",
+                "/help for commands · Ctrl-C stops a request · Ctrl-D leaves")
+NO_NOTES_TIP = "No ARTY.md here yet: /init looks through the project and writes notes Arty reads every time."
 ANSWERS = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO,
            "a": permissions.ALWAYS, "always": permissions.ALWAYS}
 SAVE_ANSWERS = {"s": permissions.SAVE, "save": permissions.SAVE}
@@ -832,15 +842,37 @@ def handle(session: Session, line: str) -> bool:
     return True
 
 
-def chat(session: Session, share: bool = False) -> None:
+def shown_folder(folder: Path, home: Path) -> str:
+    try:
+        inside = folder.relative_to(home)
+    except ValueError:
+        return str(folder)
+    return HOME_MARK if inside == Path() else f"{HOME_MARK}{os.sep}{inside}"
+
+
+def welcome_row(terminal: Terminal, label: str, value: str, colour: str = "reset") -> None:
+    terminal.note(f"  {terminal.paint(f'{label:{WELCOME_LABEL_WIDTH}}', 'dim')}{terminal.paint(value, colour)}", "reset")
+
+
+def welcome(session: Session) -> None:
     terminal = session.terminal
+    mode = session.gate.mode
     terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(f'CLI {__version__}', 'dim')}", "reset")
-    terminal.note(f"{session.client.model} · {session.gate.mode} · "
-                  f"{session.workspace.root}", "accent")
-    if session.gate.mode == permissions.ALLOW_ALL:
+    welcome_row(terminal, "Folder", shown_folder(session.workspace.root, Path.home()))
+    welcome_row(terminal, "Model", session.client.model, "accent")
+    welcome_row(terminal, "Mode", f"{mode}: {MODE_MEANINGS.get(mode, '')} (Shift+Tab to change)")
+    if mode == permissions.ALLOW_ALL:
         terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
-    terminal.note("Ask for anything in this project. /help for commands and shortcuts, Shift+Tab to change mode, "
-                  "Ctrl-D to leave.")
+    terminal.note("")
+    for tip in WELCOME_TIPS:
+        terminal.note(f"  {tip}")
+    if not memory.project_note_files(session.workspace.root):
+        terminal.note(f"  {NO_NOTES_TIP}")
+    terminal.note("")
+
+
+def chat(session: Session, share: bool = False) -> None:
+    welcome(session)
     reader = prompt_line.line_reader(is_interactive)
     if share:
         session.start_remote()
