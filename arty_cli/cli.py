@@ -752,7 +752,7 @@ class Session:
         return context.compact_limit(self.client, self.offered())
 
     def refresh_budget(self) -> None:
-        self.workspace.result_chars = context.result_chars(self.compact_limit())
+        self.workspace.result_chars = context.result_chars(self.compact_limit(), self.client)
 
     def is_too_long(self, messages: list[dict]) -> bool:
         return context.estimated_tokens(messages, self.client) > self.compact_limit()

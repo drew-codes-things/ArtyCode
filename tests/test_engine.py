@@ -325,3 +325,13 @@ def test_resume_with_an_id_switches_in_place_at_the_plain_prompt(project):
     session.personal = project.parent
     session.command(f"/resume {saved.id}")
     assert session.saved.id == saved.id and session.messages[1]["content"] == "make calc.py"
+
+
+def test_real_token_counts_from_the_brain_calibrate_the_estimate_and_warn_near_the_window(project):
+    (project / "a.txt").write_text("alpha\n" * 100)
+    brain = ScriptedBrain([[("read_file", {"path": "a.txt"})], "Done."],
+                          usage=lambda messages: {"prompt_tokens": 23_500, "completion_tokens": 10})
+    session = session_for(project, brain)
+    session.ask("read a.txt")
+    assert context.chars_per_token(brain) < context.CHARS_PER_TOKEN
+    assert "near the end of the model's context window" in session.terminal.err.getvalue()

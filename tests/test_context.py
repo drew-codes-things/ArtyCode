@@ -39,3 +39,32 @@ def test_the_reply_room_follows_the_brain_and_falls_back_to_2048():
     assert context.reply_room(Client(24_576, 4_096)) == 4_096
     assert context.compact_limit(Client(24_576, 4_096), TOOLS) < context.compact_limit(Client(24_576), TOOLS)
 
+
+MESSAGES = [{"role": "user", "content": "word " * 700}]
+
+
+def test_a_brain_counting_more_tokens_than_estimated_moves_the_estimate_up_at_once():
+    client = Client(24_576)
+    before = context.estimated_tokens(MESSAGES, client)
+    context.calibrate(client, MESSAGES, [], {"usage": {"prompt_tokens": before * 3 // 2}})
+    assert abs(context.estimated_tokens(MESSAGES, client) - before * 3 // 2) <= 2
+
+
+def test_a_smaller_count_is_ignored_because_a_cached_prompt_reports_fewer_tokens():
+    client = Client(24_576)
+    before = context.estimated_tokens(MESSAGES, client)
+    context.calibrate(client, MESSAGES, [], {"usage": {"prompt_tokens": before // 3}})
+    context.calibrate(client, MESSAGES, [], {})
+    assert context.estimated_tokens(MESSAGES, client) == before
+
+
+def test_the_ratio_never_goes_below_a_floor():
+    client = Client(24_576)
+    context.calibrate(client, MESSAGES, [], {"usage": {"prompt_tokens": 10_000_000}})
+    assert context.chars_per_token(client) == context.SMALLEST_CHARS_PER_TOKEN
+
+
+def test_a_prompt_near_the_window_is_reported():
+    assert context.near_window(Client(24_576), {"usage": {"prompt_tokens": 23_000}})
+    assert not context.near_window(Client(24_576), {"usage": {"prompt_tokens": 12_000}})
+    assert not context.near_window(Client(24_576), {})

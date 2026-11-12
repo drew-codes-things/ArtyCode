@@ -38,6 +38,8 @@ STUCK_NOTE = ("You have made the same tool calls several times in a row with the
               "again: answer now with what you have, or say what is blocking you.")
 STUCK_STOPPED = "I stopped because I kept repeating the same step. Tell me how you'd like to go on."
 STUCK_WINDOW = 8
+NEAR_WINDOW_NOTE = ("The last prompt used {used} of the model's {window} tokens, near the end of the model's context "
+                    "window; older results will be hidden to make room.")
 WINDOW_OVERFLOW = re.compile(r"context (?:window|length|size)|too long|too many tokens|exceeds", re.I)
 STUCK_FAILING_NOTE = ("You have made the same tool calls several times and they keep failing with the same error. "
                       "Don't make that call again: do it another way (for an edit that keeps missing, replace the "
@@ -630,13 +632,18 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
     helpers = Helpers(brain, workspace, gate, screen, extras)
     recent, continued, steered_from, nudges = [], 0, None, []
     approved_with, reminded = None, False
-    failures, steered_failures, misses = [], set(), {}
+    failures, steered_failures, misses, warned_near_window = [], set(), {}, False
     while True:
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
         with thinking(screen):
             reply = replied(brain, messages, offered, screen, squeeze)
         tell(screen, "count_reply", reply)
+        context.calibrate(brain, messages, offered, reply)
+        if context.near_window(brain, reply) and not warned_near_window:
+            warned_near_window = True
+            tell(screen, "show_activity", NEAR_WINDOW_NOTE.format(used=context.prompt_tokens_of(reply),
+                                                                  window=context.window_tokens(brain)))
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
         content = reply.get("content") or ""

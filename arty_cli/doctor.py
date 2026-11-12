@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from arty_cli import __version__, brain, headless, sandbox, settings, websearch
+from arty_cli import __version__, brain, context, headless, sandbox, settings, websearch
 
 TICK = "✓"
 CROSS = "✗"
@@ -21,6 +21,7 @@ REFUSED_CODES = (401, 403)
 SEARCH_PROBE = "arty"
 SEARCH_RESULTS = 1
 LOG_IN = "run `arty login`"
+SMALL_WINDOW_TOKENS = 16_384
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,20 @@ def coding_check(client) -> Check:
     return extra(False, "Coding models aren't marked by this brain, so /model lists every model")
 
 
+def context_check(client) -> Check:
+    try:
+        window = client.context_tokens()
+    except brain.BrainError as error:
+        return extra(False, f"Context window: {error}")
+    if not window:
+        return extra(False, "Context window: the brain doesn't report it, so ArtyCode assumes "
+                            f"{context.DEFAULT_WINDOW_TOKENS} tokens")
+    if window < SMALL_WINDOW_TOKENS:
+        return extra(False, f"Context window: {window} tokens, below {SMALL_WINDOW_TOKENS}, so long files and long "
+                            "jobs are cut down and summarised often; give the model a bigger num_ctx on the brain")
+    return extra(True, f"Context window: {window} tokens")
+
+
 def search_check(client, config: settings.Settings) -> Check:
     place = config.search_with or websearch.DESKTOP
     try:
@@ -124,7 +139,8 @@ def search_check(client, config: settings.Settings) -> Check:
 
 def skipped(why: str) -> list[Check]:
     return [missing(f"API key: not checked, {why}"), missing(f"Models: not checked, {why}"),
-            extra(False, f"Coding models: not checked, {why}"), extra(False, f"Web search: not checked, {why}")]
+            extra(False, f"Coding models: not checked, {why}"), extra(False, f"Context window: not checked, {why}"),
+            extra(False, f"Web search: not checked, {why}")]
 
 
 def brain_checks(world: World, config: settings.Settings) -> list[Check]:
@@ -140,7 +156,7 @@ def brain_checks(world: World, config: settings.Settings) -> list[Check]:
     if problem:
         return [reached, missing(f"API key: {problem}"), *skipped("the key wasn't accepted")[1:]]
     return [reached, good("API key accepted by the brain"), models_check(client, config), coding_check(client),
-            search_check(client, config)]
+            context_check(client), search_check(client, config)]
 
 
 def sandbox_check(world: World) -> Check:

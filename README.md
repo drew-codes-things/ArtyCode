@@ -199,6 +199,7 @@ With [pipx](https://pipx.pypa.io) instead: `pipx install .`
 - the brain accepts this computer's key;
 - the model list can be read, and which model this computer uses;
 - the brain marks its coding models;
+- the context window the brain reports (a cross below 16,384 tokens, where long files and long jobs are cut down and summarised often);
 - web search works, through the desktop browser or through the brain;
 - the sandbox tool is there (bubblewrap on Linux);
 - a browser is found for screenshots;
@@ -413,7 +414,7 @@ show the state.
 
 ### Long conversations
 
-The conversation size is estimated in tokens. When it no longer leaves room in the model's context
+The conversation size is estimated in tokens (about 3.5 characters each until the brain reports a real count: when its `usage.prompt_tokens` shows a prompt was bigger than estimated, the estimate is raised to match for the rest of the session, and a prompt within 10% of the window is noted on screen). The room kept for the reply is the smallest `reply_tokens` the brain's model list reports, or 2,048 tokens. When it no longer leaves room in the model's context
 window (`context_tokens` if set, otherwise the size the brain reports, otherwise 12288 tokens) for the tool list and a full reply, older
 results are hidden first, with no model call: each becomes one line naming the step and what it showed (`[Hidden to
 save room: run_command pytest -q (3 failed, 9 passed, exit code 1). ...]`). Earlier reads of the same lines of a file

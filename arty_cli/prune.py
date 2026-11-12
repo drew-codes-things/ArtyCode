@@ -180,7 +180,7 @@ def cut_newest(messages: list[dict], limit: int, client) -> None:
         start -= 1
     if start == len(messages) or estimated(messages, client) <= limit:
         return
-    share = context.room_chars(limit, estimated(messages[:start], client)) // (len(messages) - start)
+    share = context.room_chars(limit, estimated(messages[:start], client), client) // (len(messages) - start)
     for index in range(start, len(messages)):
         content = str(messages[index].get("content") or "")
         if len(content) > share:

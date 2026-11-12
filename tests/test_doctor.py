@@ -21,6 +21,7 @@ class FakeClient:
     desktop_page = "results from the desktop"
     brain_search = "results from the brain"
     listing_fails = False
+    window = 24_576
 
     def __init__(self, config):
         self.settings = config
@@ -41,6 +42,9 @@ class FakeClient:
 
     def desktop_search(self, query):
         return FakeClient.desktop_page
+
+    def context_tokens(self):
+        return FakeClient.window
 
     def brain_tool(self, name, arguments):
         if FakeClient.brain_search is None:
@@ -71,6 +75,7 @@ def refuses(request, timeout=None):
 def world(tmp_path, monkeypatch):
     FakeClient.reachable, FakeClient.marks_coding, FakeClient.listing_fails = HOME, True, False
     FakeClient.desktop_page, FakeClient.brain_search = "results from the desktop", "results from the brain"
+    FakeClient.window = 24_576
     config = tmp_path / "config" / "arty-cli" / "config.json"
     settings.save(settings.Settings(base_url=HOME, remote_url=AWAY, api_key=KEY, access_client_secret=ACCESS_SECRET,
                                     access_client_id="access-id"), config)
@@ -96,7 +101,8 @@ def test_a_healthy_setup_gets_a_tick_on_every_line_and_exit_code_0(world):
     lines = [line for line in shown.splitlines() if line.strip()]
     assert code == 0
     assert all(line.startswith(doctor.TICK) for line in lines[:-1]), shown
-    assert len(lines) == 11
+    assert len(lines) == 12
+    assert "24576" in line_about(shown, "Context window")
     assert "private" in line_about(shown, "Settings")
     assert HOME in line_about(shown, "answered") and "home" in line_about(shown, "answered")
     assert "accepted" in line_about(shown, "key")
@@ -192,3 +198,16 @@ def test_the_default_world_uses_the_real_computer():
     made = doctor.World()
     assert made.make_client is brain.Brain and made.platform and callable(made.which)
     assert isinstance(settings.config_path(made.environ), Path)
+
+
+def test_a_context_window_below_16k_is_warned_about_without_failing_the_check(world):
+    FakeClient.window = 12_288
+    code, shown = report(world)
+    line = line_about(shown, "Context window")
+    assert code == 0 and line.startswith(doctor.CROSS) and "12288" in line and doctor.OPTIONAL in line
+
+
+def test_a_brain_that_does_not_report_its_window_is_said_so(world):
+    FakeClient.window = None
+    _code, shown = report(world)
+    assert "doesn't report" in line_about(shown, "Context window")
