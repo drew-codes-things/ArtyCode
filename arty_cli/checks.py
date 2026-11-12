@@ -54,9 +54,10 @@ NOT_CHECKING_PROGRAMS = {
     "write-host", "get-content", "get-childitem", "select-string", "set-location", "new-item", "remove-item",
 }
 HITS_LEAD = "Rule check: remove these from the lines you added (the task can't finish while they are there):"
-HITS_ADVICE = ("Say it in code instead: a clearer name, a smaller function or a named constant; reasons go in the "
-               "history entry. Only tool directives may stay (shebangs, encoding lines, lint or type suppressions, "
-               "license headers). Replace an em dash with a comma, colon or brackets.")
+HITS_ADVICE = ("Delete each comment or docstring (one turned into a # comment is still a comment) and say it in "
+               "code instead: a clearer name, a smaller function or a named constant; reasons go in the history "
+               "entry. Only tool directives may stay (shebangs, encoding lines, lint or type suppressions, license "
+               "headers). Replace an em dash with a comma, colon or brackets.")
 FINISH_LEAD = "Before you finish (ArtyCode's built-in rules):"
 VERIFY_REQUEST = ("You changed files but ran nothing to check them after the last change. Run the project's tests "
                   "now with run_command (or a build, a lint or the program itself) and read the result. If it can't "

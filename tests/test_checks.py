@@ -415,3 +415,7 @@ def test_a_check_run_in_the_background_counts_once_its_output_shows_it_finished(
                                             ("\n[job 3 finished with exit code 127]", False)])
 def test_which_command_results_show_the_command_ran(ending, counts):
     assert checks.ran_to_the_end(f"output{ending}") is counts
+
+
+def test_the_advice_says_a_docstring_turned_into_a_comment_still_counts():
+    assert "Delete" in checks.HITS_ADVICE and "still a comment" in checks.HITS_ADVICE
