@@ -5,7 +5,7 @@ import re
 import threading
 
 from arty_cli import extras as extra_tools
-from arty_cli import checks, hooks, permissions, tools
+from arty_cli import checks, finish, hooks, permissions, tools
 
 STUCK_REPEATS = 3
 ANNOUNCED_STEP = re.compile(r"\b(let'?s|let me(?! know)|i'?ll|i will|i'?m going to|next,? i)\b[^.?!]{0,80}\b(check|look|"
@@ -230,9 +230,10 @@ class Quiet:
 
 
 class WaitingQuestion:
-    def __init__(self, question: str, preview: str):
+    def __init__(self, question: str, preview: str, scope: str):
         self.question = question
         self.preview = preview
+        self.scope = scope
         self.answer = permissions.NO
         self.answered = threading.Event()
 
@@ -249,16 +250,16 @@ class Helpers:
         self.asking_thread = threading.current_thread()
         self.waiting = queue.Queue()
 
-    def ask(self, question: str, preview: str = "") -> str:
+    def ask(self, question: str, preview: str = "", scope: str = "") -> str:
         if self.stopped.is_set():
             return permissions.NO
         if threading.current_thread() is not self.asking_thread:
-            return self.asked_for_helper(question, preview)
+            return self.asked_for_helper(question, preview, scope)
         with self.lock:
-            return permissions.NO if self.stopped.is_set() else self.gate.ask(question, preview)
+            return permissions.NO if self.stopped.is_set() else self.gate.ask(question, preview, scope)
 
-    def asked_for_helper(self, question: str, preview: str) -> str:
-        waiting = WaitingQuestion(question, preview)
+    def asked_for_helper(self, question: str, preview: str, scope: str) -> str:
+        waiting = WaitingQuestion(question, preview, scope)
         self.waiting.put(waiting)
         while not waiting.answered.wait(HELPER_JOIN_SECONDS):
             if self.stopped.is_set():
@@ -268,7 +269,7 @@ class Helpers:
     def answer_waiting_questions(self) -> None:
         while not self.waiting.empty():
             waiting = self.waiting.get_nowait()
-            waiting.answer = self.ask(waiting.question, waiting.preview)
+            waiting.answer = self.ask(waiting.question, waiting.preview, waiting.scope)
             waiting.answered.set()
 
     def helper_gate(self, mode: str):
@@ -359,6 +360,7 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
         if recorded:
             done.append(f"{activity_line(name, arguments)} (stopped part way)")
         raise
+    finish.record(workspace, name, arguments, result)
     if recorded and (name == "run_command" or not result.startswith("Error")):
         done.append(activity_line(name, arguments))
     return checks.checked_result(workspace, watched, result)
@@ -548,6 +550,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
     offered = offered_definitions(extras) + planning_definitions(gate) if offered is None else offered
     if stop_hooks:
         checks.start_turn(workspace)
+        finish.start_request(workspace)
     done = [] if done is None else done
     helpers = Helpers(brain, workspace, gate, screen, extras)
     recent, continued, steered_from, nudges = [], 0, None, []
@@ -573,6 +576,8 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
             if reason:
                 nudges.append(reason)
                 messages.append({"role": "user", "content": answer})
+                continue
+            if stop_hooks and finish.sent_back(workspace, gate.mode == permissions.PLAN, messages, screen):
                 continue
             if stop_hooks and checks.sent_back(workspace, messages, content, screen):
                 continue

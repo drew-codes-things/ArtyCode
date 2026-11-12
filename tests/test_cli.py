@@ -1008,6 +1008,24 @@ def test_in_a_trusted_project_the_question_also_offers_saving_a_rule(monkeypatch
     assert prompts_seen == ["Choose y, a, s or n: "]
 
 
+def test_a_command_question_names_the_commands_that_always_and_save_cover(monkeypatch):
+    terminal, err, _prompts_seen = asked_with(monkeypatch, "a")
+    terminal.offers_rules = True
+    assert terminal.ask("Run: python3 -m pytest | tail -40", "", "`python3 -m pytest`") == cli.permissions.ALWAYS
+    rows = err.getvalue().splitlines()
+    assert rows[2].split(maxsplit=1)[1] == "Yes, and don't ask again for `python3 -m pytest` commands until you quit"
+    assert rows[3].split(maxsplit=1)[1] == "Yes, and save an allow rule for `python3 -m pytest` commands in this project"
+
+
+def test_a_question_without_a_scope_keeps_the_plain_wording(monkeypatch):
+    terminal, err, _prompts_seen = asked_with(monkeypatch, "y")
+    terminal.offers_rules = True
+    assert terminal.ask("Edit a.py?", "", "") == cli.permissions.YES
+    rows = err.getvalue().splitlines()
+    assert rows[2].split(maxsplit=1)[1] == cli.ALWAYS_CHOICE[1]
+    assert rows[3].split(maxsplit=1)[1] == cli.SAVE_CHOICE[1]
+
+
 def test_an_answer_that_is_not_offered_asks_again_with_the_same_choices(monkeypatch):
     terminal, err, prompts_seen = asked_with(monkeypatch, "maybe", "yes")
     assert terminal.ask("Run: ls") == cli.permissions.YES
@@ -1292,3 +1310,11 @@ def test_the_session_listens_for_the_brains_reasoning(ready, monkeypatch):
     monkeypatch.setattr(cli.brain, "Brain", ThinkingBrain)
     assert cli.main(["-p", "hello"]) == 0
     assert heard == ["pondering"]
+
+
+def test_the_finish_check_follows_the_settings(ready, monkeypatch):
+    monkeypatch.setattr(cli.settings, "load", lambda *a, **k: settings.Settings(base_url="http://b/v1", api_key="k",
+                                                                              finish_check="off"))
+    made = started_workspaces(monkeypatch)
+    cli.main(["-p", "hello"])
+    assert made[0].finish_check.enabled is False

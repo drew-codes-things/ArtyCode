@@ -48,9 +48,14 @@ Each question lists its answers under it, one per line with its key, then asks `
 (yes), **a** (yes, and don't ask again for this until you quit) or **n** (no). After **n** typed here, ArtyCode asks
 `What should Arty do instead?`: what you write goes to the model with the refusal, so it changes course instead of
 stopping, and Enter on its own just says no. "Always" lasts until you quit: for edits it covers every edit, for a
-command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
-written to `.arty/settings.json` as an allow rule (below) for that exact command, that file, that site or that tool, so
-later sessions don't ask either. When no rule fits (a chained command, say), **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
+command the program and its subcommand words, which the question names (`Yes, and don't ask again for
+\`python3 -m pytest\` commands until you quit`), so `python3 -m pytest -q`, `python3 -m pytest 2>&1 | tail -40` and
+`python3 -m pytest | grep -E "FAILED|ERROR"` are covered too. A command whose words decide what it touches or runs
+(`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like) or one with `$`, backticks,
+`(`, `<` or output written to a file is only ever remembered exactly, as before. In a trusted project there is also
+**s** (save as a project rule): the answer is written to `.arty/settings.json` as an allow rule (below), for a command
+as `run_command(python3 -m pytest:*)`, for that file, that site or that tool, so later sessions don't ask either. When
+no rule fits, **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
 Every tool result the model sees is cut to 60,000 characters at most.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project
@@ -101,7 +106,8 @@ when output isn't a terminal, with `-p`, and when the interface can't start (it 
 
 ### Look-only commands
 
-`ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project.
+`ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project,
+also when joined by pipes or `&&` (`cat a.py | grep -n x`), as long as there is no `$`, backtick or file redirection.
 Every path is read the way the shell would: `~`, `~+` and `~-`, wildcards (each match is followed through links), and
 Windows backslash, drive and network paths. Anything that reaches outside the project, or can't be read, asks first,
 in plan mode and in helpers too. A command also asks when it uses an option that writes, runs a program or follows
@@ -124,9 +130,14 @@ Saved rules skip or forbid questions. Put them in `settings.json` in the config 
 ```
 
 A rule is a tool name, or a tool name with a wildcard pattern in brackets that is matched against the path (relative
-to the project), the command, the address or the list pattern. Deny wins over everything, including `allow-all` and
-hooks, and is checked against each part of a chained command. An allow rule never matches a command with `;`, `&&`,
-`|`, `$` or redirection in it, and never lets plan mode change anything.
+to the project), the command, the address or the list pattern. A command pattern ending in `:*`, such as
+`run_command(npm test:*)`, is a prefix: it matches any command whose first words are those words. Deny wins over
+everything, including `allow-all` and hooks, and is checked against each part of a chained command. A chained command
+or pipeline (`|`, `&&`, `||`, `;`, a new line) is allowed only when every part is: a part matches an allow rule or a
+prefix allowed with **a**, or, after a `|`, is only a look-only filter (`tail`, `head`, `grep`, `wc`, `sort`, `uniq`,
+or `cat` with nothing after it) that reads nothing outside the project. Nothing is allowed this way with `$`,
+backticks, `(`, `<`, or output sent to a file (`2>&1` and `>/dev/null` are fine). An allow rule never lets plan mode
+change anything.
 
 ## Arty, ArtyCode and starfire.ai
 
@@ -239,7 +250,8 @@ key being sent; a per-device key is proved through its SHA-256), so on another n
 address never sees it.
 
 These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `ARTY_API_KEY`,
-`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`. Two optional limits can be set the same way,
+`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET`, `ARTY_CLI_MODEL` and `ARTY_CLI_FINISH_CHECK` (`on` or `off`, the
+finish check above). Two optional limits can be set the same way,
 as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_TOKENS` and
 `ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (unless set, the size the brain reports in its model list, or 12288 tokens for a brain that doesn't say) and the
 longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops ArtyCode at the start
@@ -331,9 +343,19 @@ files in parts. A real question for you, or a second stop in a row, ends the req
 stops a job on its own is the same step with the same result over and over (it is warned once first); waiting on a
 background build that is still running doesn't count.
 
+The finish check: when the model ends a request while the last test run it made in that request still fails (a
+non-zero exit, or output such as `13 failed, 17 passed`, `FAILED (failures=2)` or `Tests: 2 failed`, so a pytest piped
+through `tail` counts too), ArtyCode sends it back with that summary line and the end of the test output, asking it to
+keep fixing or to explain clearly why the tests can't pass. A dim `Finish check:` line shows when that happens. It is
+sent at most twice per request, the second time only if fewer tests fail than the first time, never in plan mode, and
+not for a request you stopped. Set `finish_check` to `off` in the config file (or `ARTY_CLI_FINISH_CHECK=off`) to
+turn it off.
+
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
 long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
-writes), and only five minutes of total silence counts as a lost connection.
+writes), so a long task that keeps sending that line is never cut off. If nothing at all arrives for 120 seconds,
+not even that line (the brain was restarted part way, say), the request ends with "Arty's brain stopped answering"
+instead of waiting forever; send it again once the brain is back.
 
 ### Checks after edits, project map and sandbox
 
@@ -390,7 +412,8 @@ They are also checked, not only told:
 - When the model says it has finished a request that changed files, it is sent back if comments or em dashes it added
   are still there (up to three times), once if nothing was run to check the work after the last change (a test,
   build, lint or the program; looking around with `ls`, `cat` or `git` doesn't count) and the report doesn't say
-  `UNVERIFIED` (a command that wasn't found doesn't count), and once more if no entry was added to
+  `UNVERIFIED` (a command that wasn't found, or a test run that failed, doesn't count; with the finish check off, a
+  failing last test run is named in that send-back), and once more if no entry was added to
   `.arty/history.md`. Those two are asked for one at a time, and every send-back ends with the report shape.
 
 Arty writes `.arty/scratchpad.md` and `.arty/history.md` without asking, and `.arty/history.md` only at its end:

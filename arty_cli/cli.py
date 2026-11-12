@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from arty_cli import extras as extras_module
 from arty_cli import eyes
+from arty_cli import finish
 from arty_cli import rules
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
@@ -156,6 +157,8 @@ PLAN_FEEDBACK_QUESTION = "What should change? (Enter to skip) "
 YES_CHOICE = ("y", "Yes")
 ALWAYS_CHOICE = ("a", "Yes, and don't ask again for this until you quit")
 SAVE_CHOICE = ("s", "Yes, and save it as an allow rule for this project")
+SCOPED_ALWAYS = "Yes, and don't ask again for {scope} commands until you quit"
+SCOPED_SAVE = "Yes, and save an allow rule for {scope} commands in this project"
 NO_CHOICE = ("n", "No, and tell Arty what to do instead")
 INSTEAD_QUESTION = "What should Arty do instead? (Enter to just say no) "
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
@@ -180,6 +183,10 @@ REMOTE_ONLY_IN_CHAT = "--remote works in the chat, not with a single question."
 
 def is_interactive() -> bool:
     return sys.stdin.isatty()
+
+
+def scoped_choice(choice: tuple[str, str], scoped: str, scope: str) -> tuple[str, str]:
+    return (choice[0], scoped.format(scope=scope)) if scope else choice
 
 
 class JsonLines:
@@ -414,11 +421,11 @@ class Terminal:
             colour = "green" if line.startswith("+") else "removed" if line.startswith("-") else "dim"
             self.err.write(self.paint(line, colour) + "\n")
 
-    def ask(self, question: str, preview: str = "") -> str:
+    def ask(self, question: str, preview: str = "", scope: str = "") -> str:
         with self.keys_paused():
-            return self.asked_about(question, preview)
+            return self.asked_about(question, preview, scope)
 
-    def asked_about(self, question: str, preview: str = "") -> str:
+    def asked_about(self, question: str, preview: str = "", scope: str = "") -> str:
         if not is_interactive() and not self.remote:
             self.note(f"Refused without asking (no terminal to ask in): {question}", "error")
             return permissions.NO
@@ -426,8 +433,9 @@ class Terminal:
         if preview:
             self.show_diff(preview)
         answers = {**ANSWERS, **SAVE_ANSWERS} if self.offers_rules else ANSWERS
-        saving = (SAVE_CHOICE,) if self.offers_rules else ()
-        prompt = self.show_choices(question, (YES_CHOICE, ALWAYS_CHOICE, *saving, NO_CHOICE))
+        saving = (scoped_choice(SAVE_CHOICE, SCOPED_SAVE, scope),) if self.offers_rules else ()
+        always = scoped_choice(ALWAYS_CHOICE, SCOPED_ALWAYS, scope)
+        prompt = self.show_choices(question, (YES_CHOICE, always, *saving, NO_CHOICE))
         choice, by = self.answer(prompt, answers, question, preview)
         self.answered_here = not by
         return choice
@@ -1576,6 +1584,7 @@ def main(argv=None) -> int:
         settings.positive_number(config, "context_tokens")
         workspace = tools.Workspace(arguments.project or Path.cwd())
         workspace.max_command_seconds = settings.positive_number(config, "max_command_seconds") or tools.MAX_COMMAND_SECONDS
+        workspace.finish_check = finish.FinishCheck(enabled=settings.is_on(config, "finish_check"))
         try:
             return run_session(arguments, config, workspace, terminal)
         finally:

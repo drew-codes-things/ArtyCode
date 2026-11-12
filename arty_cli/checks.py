@@ -8,7 +8,7 @@ import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from arty_cli import rules, tools
+from arty_cli import finish, rules, tools
 
 PYTHON_SUFFIXES = {".py", ".pyi"}
 HASH_SUFFIXES = {".sh", ".bash", ".zsh", ".rb", ".pl", ".pm", ".r", ".ps1", ".psm1", ".nim", ".ex", ".exs", ".jl",
@@ -65,6 +65,9 @@ VERIFY_REQUEST = ("You changed files but ran nothing to check them after the las
 HISTORY_REQUEST = (f"Now append one entry for this task to the end of {rules.HISTORY.as_posix()}: create it with "
                    "write_file if it is missing, otherwise read it and add the entry after its last line with "
                    "edit_file. Never change earlier entries. The shape:\n{template}")
+FAILING_LEAD = "Your last test run still fails:"
+FAILING_REQUEST = (FAILING_LEAD + " {summary}\nFix the code and run the tests again. If they can't pass, write "
+                   f"{rules.UNVERIFIED} in your report and say why.")
 REPORT_REMINDER = (f"Then finish with your report: Outcome (DONE, PARTIAL, BLOCKED or {rules.UNVERIFIED}), Changed, "
                    "Verification (each command and its result), Assumptions, Open items.")
 VERIFY_STEP, HISTORY_STEP = "verify", "history"
@@ -87,6 +90,7 @@ class Turn:
     changed_at: int = 0
     checked_at: int = 0
     comment_send_backs: int = 0
+    failing_run: finish.TestRun | None = None
     asked: set = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -277,8 +281,12 @@ def ran_to_the_end(result: str) -> bool:
 
 
 def after_command(turn: Turn, watched: Watched, result: str) -> None:
-    if is_checking_command(watched.command) and ran_to_the_end(result):
-        with turn.lock:
+    if not (is_checking_command(watched.command) and ran_to_the_end(result)):
+        return
+    run = finish.test_run_of(watched.command, result)
+    with turn.lock:
+        turn.failing_run = run if run is not None and run.failed else None
+        if turn.failing_run is None:
             turn.checked_at = turn.next_step()
 
 
@@ -317,10 +325,17 @@ def history_appended(workspace, turn: Turn) -> bool:
     return len(now.strip()) > len(before.strip()) and now.startswith(before)
 
 
+def verify_request(workspace, turn: Turn) -> str:
+    if turn.failing_run is None:
+        return VERIFY_REQUEST
+    return "" if finish.is_on(workspace) else FAILING_REQUEST.format(summary=turn.failing_run.summary)
+
+
 def missing_steps(workspace, turn: Turn, answer: str) -> list[tuple[str, str]]:
     missing = []
-    if turn.checked_at <= turn.changed_at and rules.UNVERIFIED not in answer:
-        missing.append((VERIFY_STEP, VERIFY_REQUEST))
+    request = verify_request(workspace, turn)
+    if turn.checked_at <= turn.changed_at and rules.UNVERIFIED not in answer and request:
+        missing.append((VERIFY_STEP, request))
     if not history_appended(workspace, turn):
         missing.append((HISTORY_STEP, HISTORY_REQUEST.format(template=rules.history_template(rules.today_text()))))
     return [(step, request) for step, request in missing if step not in turn.asked]
@@ -363,4 +378,6 @@ def sent_back(workspace, messages: list[dict], answer: str, screen=None) -> bool
 def sent_for(reason: str) -> str:
     if reason.startswith(HITS_LEAD):
         return "remove comments or em dashes"
+    if reason.startswith(FAILING_LEAD):
+        return "fix the failing tests"
     return "check the work" if reason == VERIFY_REQUEST else "write the history entry"
