@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -315,7 +316,103 @@ def unescaped_new_text(new_text: str, before: str) -> str:
     return WRITTEN_OUT_ESCAPE.sub(replaced, new_text)
 
 
-def edited_text(before: str, old_text: str, new_text: str, replace_all: bool) -> str:
+TYPOGRAPHIC_MARKS = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'", "\u2032": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"', "\u2033": '"',
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2015": "-", "\u2212": "-",
+    "\u00a0": " ", "\u2007": " ", "\u2009": " ", "\u200a": " ", "\u202f": " ", "\u3000": " ",
+})
+FILE_LINE = re.compile(r"[^\n]*\n|[^\n]+$")
+
+
+def in_plain_marks(line: str) -> str:
+    return line.translate(TYPOGRAPHIC_MARKS).strip()
+
+
+@dataclass(frozen=True)
+class Looseness:
+    how: str
+    key: Callable[[str], str]
+    keeps_file_indentation: bool
+
+
+LOOSER_MATCHES = (
+    Looseness("ignoring spaces at line ends", str.rstrip, False),
+    Looseness("ignoring indentation and spaces at line ends, keeping the file's indentation", str.strip, True),
+    Looseness("after turning curly quotes, long dashes and odd spaces into plain ones, keeping the file's "
+              "indentation", in_plain_marks, True),
+)
+
+
+@dataclass(frozen=True)
+class AppliedEdit:
+    after: str
+    how: str = ""
+
+
+def file_lines(text: str) -> list[str]:
+    return FILE_LINE.findall(text)
+
+
+def content_of(line: str) -> str:
+    return line.removesuffix("\n").removesuffix("\r")
+
+
+def pattern_lines(text: str) -> list[str]:
+    return [line.removesuffix("\r") for line in text.removesuffix("\n").removesuffix("\r").split("\n")]
+
+
+def leading_space(line: str) -> str:
+    return line[:len(line) - len(line.lstrip())]
+
+
+def loose_starts(lines: list[str], pattern: list[str], looseness: Looseness) -> list[int]:
+    wanted = [looseness.key(line) for line in pattern]
+    keys = [looseness.key(content_of(line)) for line in lines]
+    size = len(wanted)
+    return [start for start in range(len(keys) - size + 1) if keys[start:start + size] == wanted]
+
+
+def reindented_line(line: str, model_indent: str, file_indent: str) -> str:
+    if not line.strip():
+        return ""
+    return file_indent + line[len(model_indent):] if line.startswith(model_indent) else line
+
+
+def with_file_indentation(new_lines: list[str], pattern: list[str], matched: list[str]) -> list[str]:
+    unchanged = {line: original for line, original in zip(pattern, matched) if line.strip()}
+    first = next(index for index, line in enumerate(pattern) if line.strip())
+    model_indent, file_indent = leading_space(pattern[first]), leading_space(matched[first])
+    return [unchanged.get(line) or reindented_line(line, model_indent, file_indent) for line in new_lines]
+
+
+def spliced(lines: list[str], start: int, pattern: list[str], new_text: str, looseness: Looseness) -> str:
+    matched = lines[start:start + len(pattern)]
+    line_end = "\r\n" if matched[0].endswith("\r\n") else "\n"
+    new_lines = pattern_lines(new_text) if new_text else []
+    if looseness.keeps_file_indentation:
+        new_lines = with_file_indentation(new_lines, pattern, [content_of(line) for line in matched])
+    last_end = matched[-1][len(content_of(matched[-1])):]
+    replacement = line_end.join(new_lines) + last_end if new_lines else ""
+    return "".join(lines[:start]) + replacement + "".join(lines[start + len(pattern):])
+
+
+def loosely_edited(before: str, old_text: str, new_text: str) -> AppliedEdit | None:
+    pattern = pattern_lines(old_text)
+    if not any(line.strip() for line in pattern):
+        return None
+    lines = file_lines(before)
+    for looseness in LOOSER_MATCHES:
+        starts = loose_starts(lines, pattern, looseness)
+        if len(starts) > 1:
+            raise ToolError(f"old_text is in {len(starts)} places when matched {looseness.how}; "
+                            "add more surrounding text")
+        if starts:
+            return AppliedEdit(spliced(lines, starts[0], pattern, new_text, looseness), looseness.how)
+    return None
+
+
+def applied_edit(before: str, old_text: str, new_text: str, replace_all: bool) -> AppliedEdit:
     if not old_text:
         raise ToolError("old_text is empty; use write_file to create a file")
     found = before.count(old_text)
@@ -323,26 +420,49 @@ def edited_text(before: str, old_text: str, new_text: str, replace_all: bool) ->
         old_text, new_text = unescaped(old_text), unescaped_new_text(new_text, before)
         found = before.count(old_text)
     if found == 0:
-        raise ToolError("old_text was not found; read the file again and copy the text exactly")
+        loose = loosely_edited(before, old_text, new_text)
+        if loose is None:
+            raise ToolError("old_text was not found; read the file again and copy the text exactly")
+        return loose
     if found > 1 and not replace_all:
         raise ToolError(f"old_text is in {found} places; add more surrounding text or set replace_all")
-    return before.replace(old_text, new_text)
+    return AppliedEdit(before.replace(old_text, new_text))
 
 
-def multi_edited_text(before: str, edits) -> str:
+def edited_text(before: str, old_text: str, new_text: str, replace_all: bool) -> str:
+    return applied_edit(before, old_text, new_text, replace_all).after
+
+
+def applied_edits(before: str, edits) -> tuple[str, list[str]]:
     if not isinstance(edits, list) or not edits:
         raise ToolError("edits needs at least one {old_text, new_text} change")
-    after = before
+    after, notes = before, []
     for number, edit in enumerate(edits, start=1):
         if not isinstance(edit, dict):
             raise ToolError(f"edit {number} should be an object with old_text and new_text; nothing was changed")
         old_text = in_line_style_of(str(edit.get("old_text", "")), before)
         new_text = in_line_style_of(str(edit.get("new_text", "")), before)
         try:
-            after = edited_text(after, old_text, new_text, bool(edit.get("replace_all", False)))
+            applied = applied_edit(after, old_text, new_text, bool(edit.get("replace_all", False)))
         except ToolError as error:
             raise ToolError(f"edit {number}: {error}; nothing was changed") from None
-    return after
+        after = applied.after
+        notes += [f"edit {number} matched {applied.how}"] if applied.how else []
+    return after, notes
+
+
+def multi_edited_text(before: str, edits) -> str:
+    return applied_edits(before, edits)[0]
+
+
+def match_note(name: str, arguments: dict, before: str) -> str:
+    if name == "multi_edit":
+        notes = applied_edits(before, arguments.get("edits"))[1]
+        return f" ({'; '.join(notes)})" if notes else ""
+    old_text = in_line_style_of(str(arguments.get("old_text", "")), before)
+    new_text = in_line_style_of(str(arguments.get("new_text", "")), before)
+    how = applied_edit(before, old_text, new_text, bool(arguments.get("replace_all", False))).how
+    return f" (old_text matched {how})" if how else ""
 
 
 def source_lines(text: str) -> list[str]:
@@ -444,13 +564,16 @@ def write_file(workspace, path, content):
 
 def edit_file(workspace, path, old_text, new_text, replace_all=False):
     arguments = {"path": path, "old_text": old_text, "new_text": new_text, "replace_all": replace_all}
-    target, _before, after = changed_file(workspace, "edit_file", arguments)
-    return f"Edited {workspace.shown(target)}" + workspace.lint_note(target, after)
+    target, before, after = changed_file(workspace, "edit_file", arguments)
+    note = match_note("edit_file", arguments, before)
+    return f"Edited {workspace.shown(target)}{note}" + workspace.lint_note(target, after)
 
 
 def multi_edit(workspace, path, edits):
-    target, _before, after = changed_file(workspace, "multi_edit", {"path": path, "edits": edits})
-    return f"Made {len(edits)} edits to {workspace.shown(target)}" + workspace.lint_note(target, after)
+    arguments = {"path": path, "edits": edits}
+    target, before, after = changed_file(workspace, "multi_edit", arguments)
+    note = match_note("multi_edit", arguments, before)
+    return f"Made {len(edits)} edits to {workspace.shown(target)}{note}" + workspace.lint_note(target, after)
 
 
 def notebook_edit(workspace, path, cell, source="", cell_type="", edit_mode="replace"):

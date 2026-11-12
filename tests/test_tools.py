@@ -551,3 +551,43 @@ def test_escaped_text_that_still_does_not_match_gives_the_usual_error():
 def test_escaped_text_found_in_several_places_needs_more_context():
     with pytest.raises(tools.ToolError, match="2 places"):
         tools.edited_text("a\nb\na\nb\n", "a\\nb", "c", False)
+
+
+INDENTED = "def f(x):\n    if x:  \n        return 1\n    return 0\n"
+
+
+def test_old_text_that_differs_only_in_spaces_at_line_ends_still_applies():
+    after = tools.edited_text(INDENTED, "    if x:\n        return 1", "    if x:\n        return 2", False)
+    assert after == "def f(x):\n    if x:\n        return 2\n    return 0\n"
+
+
+def test_old_text_with_other_indentation_applies_with_the_files_own_indentation():
+    after = tools.edited_text(INDENTED, "if x:\n    return 1\n", "if x:\n    log(x)\n    return 2\n", False)
+    assert after == "def f(x):\n    if x:  \n        log(x)\n        return 2\n    return 0\n"
+
+
+def test_typographic_quotes_dashes_and_spaces_in_old_text_still_match():
+    before = 'msg = "it\'s" - 1\n'
+    old = "msg = \u201cit\u2019s\u201d\u00a0\u2013 1"
+    assert tools.edited_text(before, old, 'msg = "ok"', False) == 'msg = "ok"\n'
+
+
+def test_a_loose_match_in_several_places_is_refused():
+    before = "a:\n    x = 1  \nb:\n    x = 1  \n"
+    with pytest.raises(tools.ToolError, match="2 places"):
+        tools.edited_text(before, "x = 1\n", "x = 2\n", True)
+
+
+def test_the_tool_result_says_how_old_text_matched(workspace):
+    (workspace.root / "f.py").write_text(INDENTED)
+    tools.run("read_file", {"path": "f.py"}, workspace)
+    exact = tools.run("edit_file", {"path": "f.py", "old_text": "    return 0", "new_text": "    return -1"}, workspace)
+    assert exact == "Edited f.py"
+    loose = tools.run("edit_file", {"path": "f.py", "old_text": "if x:\n    return 1", "new_text": "if x:\n    return 3"},
+                      workspace)
+    assert loose.startswith("Edited f.py") and "ignoring indentation" in loose
+    made = tools.run("multi_edit", {"path": "f.py", "edits": [
+        {"old_text": "def f(x):", "new_text": "def g(x):"},
+        {"old_text": "    if x:\n        return 3", "new_text": "    if x:\n        return 4"}]}, workspace)
+    assert made.startswith("Made 2 edits to f.py") and "edit 2" in made and "spaces at line ends" in made
+    assert (workspace.root / "f.py").read_text() == "def g(x):\n    if x:\n        return 4\n    return -1\n"
