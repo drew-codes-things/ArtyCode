@@ -371,3 +371,28 @@ def test_the_checker_passes_its_own_source():
     for module in (checks, rules):
         source = Path(module.__file__).read_text(encoding="utf-8")
         assert checks.added_hits(Path(module.__file__), "", source) == []
+
+
+def changed_through_the_checks(workspace, name, arguments):
+    watched = checks.watch(workspace, name, arguments)
+    return checks.checked_result(workspace, watched, tools.run(name, arguments, workspace))
+
+
+def test_a_check_run_in_the_background_counts_once_its_output_shows_it_finished(tmp_path):
+    workspace = ruled_workspace(tmp_path)
+    checks.start_turn(workspace)
+    changed_through_the_checks(workspace, "write_file", {"path": "app.py", "content": "x = 1\n"})
+    changed_through_the_checks(workspace, "run_command", {"command": CHECK, "background": True})
+    workspace.jobs["1"].process.wait()
+    turn = checks.current_turn(workspace)
+    assert turn.checked_at < turn.changed_at
+    changed_through_the_checks(workspace, "command_output", {"job": "1"})
+    assert turn.checked_at > turn.changed_at
+
+
+@pytest.mark.parametrize("ending, counts", [("\n[exit code 1]", True), ("\n[stopped after 120 s]", True),
+                                            ("\n[stopped after 120 s. Run it in the background]", True),
+                                            ("\n[job 2 finished with exit code 0]", True),
+                                            ("\n[job 2 still running]", False), ("Job 1 started", False)])
+def test_which_command_results_show_the_command_ran(ending, counts):
+    assert bool(checks.RAN_TO_THE_END.search(f"output{ending}")) is counts

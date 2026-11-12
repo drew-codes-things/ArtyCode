@@ -42,7 +42,8 @@ EM_DASH = "\u2014"
 COMMENT, DOCSTRING, EM_DASH_KIND = "comment", "docstring", "em dash"
 MAX_SHOWN_CHARS = 120
 MAX_COMMENT_SEND_BACKS = 3
-RAN_TO_THE_END = re.compile(r"\[(exit code -?\d+|stopped after \d+ s)\]\s*$")
+RAN_TO_THE_END = re.compile(r"\[(exit code -?\d+|stopped after \d+ s\b[^\]]*|"
+                            r"job \S+ finished with exit code -?\d+)\]\s*$")
 COMMAND_SEPARATORS = re.compile(r"&&|\|\||[;|&\n]")
 ENVIRONMENT_SETTING = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 NOT_CHECKING_PROGRAMS = {
@@ -250,6 +251,9 @@ def watch(workspace, name: str, arguments: dict) -> Watched | None:
         return None
     if name == "run_command":
         return Watched(name, str(arguments.get("command") or ""), None, None)
+    if name == "command_output":
+        job = workspace.jobs.get(str(arguments.get("job")))
+        return Watched(name, job.command if job is not None else "", None, None)
     if name not in tools.CHANGING_TOOLS:
         return None
     try:
