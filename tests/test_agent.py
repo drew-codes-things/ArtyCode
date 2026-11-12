@@ -855,3 +855,71 @@ def test_a_screen_without_a_thinking_line_still_works(tmp_path):
     answer = agent.run_turn([{"role": "user", "content": "hi"}], ScriptedBrain(("Hello.", [])), workspace,
                             permissions.Gate(workspace, permissions.refuse), Screen())
     assert answer == "Hello."
+
+
+@pytest.mark.parametrize("name, arguments, shown", [
+    ("read_file", {"path": "greet.py"}, "Read greet.py"),
+    ("edit_file", {"path": "greet.py", "old_text": "a", "new_text": "b"}, "Edit greet.py"),
+    ("write_file", {"path": "new.py", "content": ""}, "Write new.py"),
+    ("run_command", {"command": "pytest -q"}, "Run pytest -q"),
+    ("search", {"pattern": "def greet", "path": "src"}, "Search for def greet in src"),
+    ("list_files", {"pattern": "**/*.py"}, "List **/*.py"),
+    ("web_fetch", {"url": "https://docs.python.org/3/"}, "Fetch https://docs.python.org/3/"),
+    ("web_search", {"query": "pytest fixtures"}, "Search the web for pytest fixtures"),
+    ("todo_write", {"items": []}, "Update the checklist"),
+    ("explore", {"task": "find the config loader"}, "Explore: find the config loader"),
+    ("mcp__notes__find", {"query": "deploy"}, "notes: find deploy"),
+    ("something_new", {}, "something_new"),
+])
+def test_a_step_is_named_in_plain_words(name, arguments, shown):
+    assert agent.step_line(name, arguments) == shown
+
+
+def test_a_long_or_several_line_command_is_shortened_to_one_line():
+    shown = agent.step_line("run_command", {"command": "python - <<'EOF'\n" + "x" * 300 + "\nEOF"})
+    assert "\n" not in shown and len(shown) <= agent.MAX_STEP_CHARS + len("Run ") + 1
+
+
+@pytest.mark.parametrize("name, result, shown, is_problem", [
+    ("read_file", "1\tdef greet(name):\n2\t    return name", "2 lines", False),
+    ("read_file", "1\ta\n2\tb\n... 38 more lines; read on with offset=3", "2 lines (38 more below)", False),
+    ("run_command", "....\n1 passed in 0.01s\n[exit code 0]", "1 passed in 0.01s (exit code 0)", False),
+    ("run_command", "E   AssertionError\n1 failed\n[exit code 1]", "1 failed (exit code 1)", True),
+    ("run_command", "[exit code 0]", "no output (exit code 0)", False),
+    ("search", "a.py:1:def greet\nb.py:4:greet()", "2 matches", False),
+    ("search", "No matches for greet", "No matches for greet", False),
+    ("list_files", "a.py\nb.py\nc.py", "3 files", False),
+    ("list_files", "a.py\nb.py\n... and 30 more", "32 files", False),
+    ("list_files", "a.py", "1 file", False),
+    ("edit_file", "Edited greet.py\nlint: fine", "Edited greet.py", False),
+    ("edit_file", "Error: old_text wasn't found in greet.py\nmore detail", "Error: old_text wasn't found in greet.py",
+     True),
+    ("edit_file", permissions.REFUSED, "Not done: you said no", False),
+])
+def test_a_result_is_summed_up_in_one_short_line(name, result, shown, is_problem):
+    assert agent.outcome_line(name, result) == (shown, is_problem)
+
+
+class StepScreen(Screen):
+    def __init__(self):
+        super().__init__()
+        self.shown = []
+
+    def show_step(self, line):
+        self.shown.append(("step", line))
+
+    def show_outcome(self, line, is_problem):
+        self.shown.append(("outcome", line, is_problem))
+
+
+def test_each_call_shows_a_step_then_its_outcome(tmp_path):
+    (tmp_path / "a.txt").write_text("one\ntwo\n")
+    workspace = tools.Workspace(tmp_path)
+    screen = StepScreen()
+    scripted = ScriptedBrain(("", [call("read_file", path="a.txt"), call("search", "c2", pattern="zzz")]),
+                             ("Done.", []))
+    agent.run_turn([{"role": "user", "content": "look"}], scripted, workspace,
+                   permissions.Gate(workspace, permissions.refuse), screen)
+    assert screen.shown == [("step", "Read a.txt"), ("outcome", "2 lines", False),
+                            ("step", "Search for zzz"), ("outcome", "No matches for zzz", False)]
+    assert screen.activity == []

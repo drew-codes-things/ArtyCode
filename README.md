@@ -412,7 +412,10 @@ and their tools.
 Arty's own red on your terminal's background: the wordmark at the start, prompts, questions and the current model are
 in Arty red (#e5383b, in 24-bit colour when `COLORTERM` says the terminal has it, the nearest of the 256 colours
 otherwise). Errors are bold yellow so they never look like the accent; activity is dim; diffs are green
-and red. `NO_COLOR`, or output that isn't a terminal, gives plain text.
+and red. Each step the model takes is one line after a red `●` in plain words (`Read greet.py`, `Run pytest -q`,
+`Search for def greet in src`), with a short dim result under it (`└ 40 lines`, `└ 1 passed in 0.02s (exit code 0)`,
+`└ Edited greet.py`, `└ Not done: you said no`); an error or a command that exits with a failure code is shown in the
+error colour. The model still gets the whole result. `NO_COLOR`, or output that isn't a terminal, gives plain text.
 
 ## Limits
 

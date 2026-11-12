@@ -947,3 +947,31 @@ def test_without_a_terminal_on_both_sides_nothing_about_thinking_is_written(out_
         terminal.show_text("Hi")
     assert err.getvalue() == ""
     assert out.getvalue() == "Hi"
+
+
+def test_a_step_is_one_marked_line_and_its_outcome_sits_indented_under_it(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    err = io.StringIO()
+    terminal = cli.Terminal(io.StringIO(), err)
+    terminal.show_step("Read greet.py")
+    terminal.show_outcome("2 lines", False)
+    assert err.getvalue() == f"{cli.STEP_MARK} Read greet.py\n  {cli.OUTCOME_MARK} 2 lines\n"
+
+
+def test_a_failed_outcome_uses_the_error_colour_and_a_good_one_stays_dim(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    err = Tty()
+    terminal = cli.Terminal(Tty(), err)
+    terminal.show_outcome("1 failed (exit code 1)", True)
+    terminal.show_outcome("2 lines", False)
+    failed, fine = err.getvalue().splitlines()
+    assert failed.startswith(cli.ERROR_STYLE) and fine.startswith(cli.COLOURS["dim"])
+
+
+def test_steps_go_to_standard_error_so_a_one_shot_answer_stays_plain(ready, monkeypatch, capsys):
+    (ready / "a.py").write_text("x = 1\n")
+    monkeypatch.setattr(cli.brain, "Brain", ReadingBrain)
+    assert cli.main(["-p", "what is in a.py?"]) == 0
+    shown = capsys.readouterr()
+    assert shown.out == "Looking. \nHi there.\n"
+    assert f"{cli.STEP_MARK} Read a.py" in shown.err and "1 line" in shown.err

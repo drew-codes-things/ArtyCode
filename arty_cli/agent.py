@@ -31,6 +31,24 @@ EXPLORE_NAME = "explore"
 NOTHING_CHANGED_YET = ("You haven't changed anything since the plan was approved; the earlier attempts were refused. "
                        "Make the changes with your tools now, then say what you changed.")
 HELPER_TOOL = "helper"
+MAX_STEP_CHARS = 100
+STEP_TARGETS = ("path", "pattern", "command", "url", "query", "task", "job", "name")
+STEP_LABELS = {"read_file": "Read", "write_file": "Write", "edit_file": "Edit", "multi_edit": "Edit",
+               "notebook_edit": "Edit the notebook", "list_files": "List", "search": "Search for", "run_command": "Run",
+               "command_output": "Read the output of job", "stop_command": "Stop job",
+               "todo_write": "Update the checklist", "web_fetch": "Fetch", "web_search": "Search the web for",
+               "explore": "Explore", HELPER_TOOL: "Hand to the helper", "skill": "Load the skill",
+               permissions.PLAN_TOOL: "Present the plan"}
+STEP_JOINS = {"explore": ": "}
+MCP_PREFIX, MCP_SEPARATOR = "mcp__", "__"
+NUMBERED_LINE = re.compile(r"\d+\t")
+MORE_LINES = re.compile(r"^\.\.\. (\d+) more lines", re.M)
+MORE_ITEMS = re.compile(r"^\.\.\. and (\d+) more$", re.M)
+EXIT_CODE = re.compile(r"\[exit code (-?\d+)\]")
+ERROR_LEAD = "Error"
+SAID_NO = "Not done: you said no"
+COUNTED_RESULTS = {"search": ("match", "matches"), "list_files": ("file", "files")}
+NOTHING_FOUND_LEADS = ("No matches", "No files")
 HELPER_ROLE = ("You are a helper inside arty-cli, called by the main agent for one job. Do it with your tools, then "
                "reply briefly with what you found or did, naming files and line numbers.")
 MAX_HELPERS = 4
@@ -67,6 +85,82 @@ def activity_line(name: str, arguments: dict) -> str:
     target = (arguments.get("path") or arguments.get("pattern") or arguments.get("command") or arguments.get("url")
               or arguments.get("task") or arguments.get("job") or "")
     return f"{name} {target}".strip()
+
+
+def one_line(text: str, limit: int = MAX_STEP_CHARS) -> str:
+    first = next((line.strip() for line in str(text).splitlines() if line.strip()), "")
+    return first if len(first) <= limit else first[:limit - 1] + "…"
+
+
+def step_target(name: str, arguments: dict) -> str:
+    if name == "search":
+        folder = arguments.get("path")
+        return f"{arguments.get('pattern') or ''}{f' in {folder}' if folder else ''}"
+    if name == HELPER_TOOL:
+        return f"{arguments.get('name') or ''}: {arguments.get('task') or ''}"
+    return str(next((arguments[key] for key in STEP_TARGETS if arguments.get(key)), ""))
+
+
+def step_label(name: str) -> str:
+    if name.startswith(MCP_PREFIX) and name.count(MCP_SEPARATOR) >= 2:
+        _prefix, server, tool = name.split(MCP_SEPARATOR, 2)
+        return f"{server}: {tool}"
+    return STEP_LABELS.get(name, name)
+
+
+def step_line(name: str, arguments: dict) -> str:
+    target = one_line(step_target(name, arguments))
+    return f"{step_label(name)}{STEP_JOINS.get(name, ' ')}{target}".strip() if target else step_label(name)
+
+
+def counted(number: int, thing: str, things: str = "") -> str:
+    return f"{number} {thing if number == 1 else things or thing + 's'}"
+
+
+def read_outcome(result: str) -> str:
+    numbered = sum(1 for line in result.splitlines() if NUMBERED_LINE.match(line))
+    if not numbered:
+        return one_line(result)
+    more = MORE_LINES.search(result)
+    return counted(numbered, "line") + (f" ({more.group(1)} more below)" if more else "")
+
+
+def command_outcome(result: str) -> tuple[str, bool]:
+    lines = [line.strip() for line in result.splitlines() if line.strip()]
+    ending = EXIT_CODE.fullmatch(lines[-1]) if lines else None
+    if ending is None:
+        return one_line(result), False
+    last = one_line(lines[-2]) if len(lines) > 1 else "no output"
+    return f"{last} (exit code {ending.group(1)})", ending.group(1) != "0"
+
+
+def listed_count(result: str) -> int:
+    shown = len([line for line in result.splitlines() if not line.startswith("...")])
+    more = MORE_ITEMS.search(result)
+    return shown + (int(more.group(1)) if more else 0)
+
+
+def outcome_line(name: str, result: str) -> tuple[str, bool]:
+    if result.startswith(ERROR_LEAD):
+        return one_line(result), True
+    if result.startswith(REFUSED):
+        return SAID_NO, False
+    if name == "run_command":
+        return command_outcome(result)
+    if name == "read_file":
+        return read_outcome(result), False
+    if name in COUNTED_RESULTS and not result.startswith(NOTHING_FOUND_LEADS):
+        return counted(listed_count(result), *COUNTED_RESULTS[name]), False
+    return one_line(result), False
+
+
+def show_step(screen, name: str, arguments: dict) -> None:
+    shown = getattr(screen, "show_step", None)
+    line = step_line(name, arguments)
+    if shown is None:
+        screen.show_activity(line)
+    else:
+        shown(line)
 
 
 def helper_definition(found: dict) -> dict:
@@ -255,11 +349,13 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
     name, arguments, problem = call_parts(call)
     if arguments is None:
         return problem
-    helpers.screen.show_activity(activity_line(name, arguments))
+    show_step(helpers.screen, name, arguments)
     before = extras.hook("PreToolUse", {"tool_name": name, "tool_input": arguments}, name)
     show_problems(helpers.screen, before)
     if before.blocked:
-        return f"{HOOK_BLOCKED} {before.feedback}".strip()
+        blocked = f"{HOOK_BLOCKED} {before.feedback}".strip()
+        tell(helpers.screen, "show_outcome", one_line(blocked), True)
+        return blocked
     if name == "explore":
         if not can_explore:
             return "Error: a helper can't start another helper; look for it yourself"
@@ -271,6 +367,7 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
     else:
         result = performed(name, arguments, helpers.workspace, helpers.gate, extras, done, before.decision,
                            before.feedback)
+    tell(helpers.screen, "show_outcome", *outcome_line(name, result))
     result = tools.clipped(result, MAX_RESULT_CHARS)
     if before.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {before.context}"

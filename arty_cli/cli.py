@@ -99,6 +99,8 @@ TRUE_COLOUR_NAMES = ("truecolor", "24bit")
 ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
 WORDMARK = "◆ Arty"
+STEP_MARK = "●"
+OUTCOME_MARK = "└"
 HOME_MARK = "~"
 WELCOME_LABEL_WIDTH = 8
 MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
@@ -203,6 +205,16 @@ class Terminal:
             self.events.write({"type": "tool_result", "tool_use_id": call.get("id") or "",
                                "name": (call.get("function") or {}).get("name", ""), "content": result,
                                "is_error": result.startswith(ERROR_MARK)})
+
+    def show_step(self, line: str) -> None:
+        self.end_line()
+        self.err.write(f"{self.paint(STEP_MARK, 'accent')} {line}\n")
+        self.err.flush()
+
+    def show_outcome(self, line: str, is_problem: bool) -> None:
+        self.end_line()
+        self.err.write(self.paint(f"  {OUTCOME_MARK} {line}", "error" if is_problem else "dim") + "\n")
+        self.err.flush()
 
     def show_activity(self, line: str) -> None:
         self.end_line()
