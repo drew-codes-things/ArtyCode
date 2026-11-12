@@ -39,7 +39,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `view_image` | Looks at a picture in the project (PNG, JPEG, WebP, GIF) with your Arty brain's vision model and answers a question about it (below) | Only outside the project folder |
 | `screenshot` | Opens a page (a local dev server, an HTML file in the project, any web address) in a headless browser, saves screenshots and reports the status, console errors and failed requests (below) | Not for this computer or a project file; other addresses yes, once per site with **a** |
 | `http_check` | GET or HEAD an address, including localhost and home-network services, with an optional expected status and text (below) | Not for this computer; other addresses yes, once per site with **a** |
-| `explore` | A helper with its own fresh conversation that looks through the project and reports back; up to four run at once | It can only look |
+| `explore` | A helper with its own fresh conversation that looks through the project and reports back; up to four run at once. A helper keeps its conversation inside the window: once it is too long, older results it has read again or no longer needs are dropped | It can only look |
 | `helper` | Hands a job to one of your own helpers (below) | Depends on the helper's tools |
 | `skill` | Loads one of your skills (below) when the job matches it | No |
 | `mcp__<server>__<tool>` | Tools from your MCP servers (below) | The first use of each server asks; after that, tools the server marks read-only don't, the others do |

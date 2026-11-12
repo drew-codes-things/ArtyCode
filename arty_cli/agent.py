@@ -5,7 +5,7 @@ import re
 import threading
 
 from arty_cli import extras as extra_tools
-from arty_cli import checks, hooks, permissions, tools
+from arty_cli import checks, context, hooks, permissions, prune, tools
 
 STUCK_REPEATS = 3
 ANNOUNCED_STEP = re.compile(r"\b(let'?s|let me(?! know)|i'?ll|i will|i'?m going to|next,? i)\b[^.?!]{0,80}\b(check|look|"
@@ -301,6 +301,15 @@ class Helpers:
         return self.helped(helper.name, f"{HELPER_ROLE}\n\n{helper.prompt}", str(arguments.get("task") or ""),
                            offered, permissions.PLAN if planning else self.gate.mode)
 
+    def kept_in_room(self, offered: list[dict]):
+        limit = context.compact_limit(self.brain, offered)
+
+        def squeeze(messages: list[dict]) -> None:
+            prune.cut_newest(messages, limit, self.brain)
+            prune.prune(messages, limit, self.brain)
+
+        return squeeze
+
     def helped(self, kind: str, prompt: str, task: str, offered: list[dict], mode: str) -> str:
         gate = self.helper_gate(mode)
         messages = [{"role": "system", "content": prompt}, {"role": "user", "content": task}]
@@ -308,7 +317,7 @@ class Helpers:
         while True:
             answer = run_turn(messages, self.brain, self.workspace, gate, Quiet(self.screen, self.lock),
                               offered=offered, can_explore=False, extras=self.extras, stop_hooks=False,
-                              stopped=self.stopped)
+                              stopped=self.stopped, squeeze=self.kept_in_room(offered))
             if self.stopped.is_set() or not self.sent_back(kind, task, answer, messages, continued):
                 return answer[:MAX_EXPLORE_ANSWER_CHARS] or "The helper found nothing to report."
             continued += 1

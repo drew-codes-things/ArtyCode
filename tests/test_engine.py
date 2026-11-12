@@ -107,3 +107,15 @@ def test_a_fail_read_fail_read_cycle_is_caught_and_the_model_is_told_to_rewrite(
     assert any(text.startswith("You have made the same tool calls") for text in told)
     assert brain.log.count("edit_file") <= 4
     assert session.messages[-1]["content"] == agent.STUCK_STOPPED
+
+
+def test_an_explore_helper_reading_a_big_file_page_after_page_stays_inside_the_window(project):
+    copy_of_arty_cli_source(project)
+    pages = [[("read_file", {"path": "big.py", "offset": offset})] for offset in (1, 401, 801, 1201, 1)]
+    brain = ScriptedBrain([[("explore", {"task": "how does big.py compact?"})], *pages, "It summarises.", "Done."])
+    session_for(project, brain).ask("how does big.py compact? use explore")
+    helper_prompts = [prompt for prompt in brain.prompts if prompt[0]["content"] == agent.EXPLORER_PROMPT]
+    assert len(helper_prompts) == 6
+    limit = context.compact_limit(brain, agent.explorer_definitions())
+    assert max(context.estimated_tokens(prompt, brain) for prompt in helper_prompts) <= limit
+    assert brain.tool_results()[-1].startswith("It summarises.")

@@ -22,7 +22,7 @@ from arty_cli import (__version__, agent, authorise, brain, commands, context, h
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
                        settings, skills, stopkey, suggest, tools, waiting, webfetch,
                        websearch, wrap)
-from arty_cli import upkeep
+from arty_cli import prune, upkeep
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -881,25 +881,8 @@ class Session:
             parts.append(f"{DONE_LEAD}\n" + "\n".join(f"- {step}" for step in self.done[-MAX_LISTED_DONE:]))
         return "\n\n".join(parts)
 
-    def newest_round(self, messages: list[dict]) -> int:
-        start = len(messages)
-        while start > 0 and messages[start - 1].get("role") == "tool":
-            start -= 1
-        return start
-
-    def cut_newest_results(self, messages: list[dict]) -> None:
-        start = self.newest_round(messages)
-        if start == len(messages) or not self.is_too_long(messages):
-            return
-        used = context.estimated_tokens(messages[:start], self.client)
-        share = context.room_chars(self.compact_limit(), used) // (len(messages) - start)
-        for index in range(start, len(messages)):
-            content = str(messages[index].get("content") or "")
-            if len(content) > share:
-                messages[index] = {**messages[index], "content": tools.clipped(content, share)}
-
     def squeeze(self, messages: list[dict]) -> None:
-        self.cut_newest_results(messages)
+        prune.cut_newest(messages, self.compact_limit(), self.client)
         if not self.is_too_long(messages):
             return
         instructions = self.compact_instructions(AUTOMATIC)
