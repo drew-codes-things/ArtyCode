@@ -1,3 +1,4 @@
+import contextlib
 import json
 import queue
 import re
@@ -331,6 +332,11 @@ def tell(screen, event: str, *details) -> None:
         shown(*details)
 
 
+def thinking(screen):
+    shown = getattr(screen, "thinking", None)
+    return shown() if shown is not None else contextlib.nullcontext()
+
+
 def signature_of(calls: list[dict]) -> str:
     return json.dumps([(call.get("function") or {}).get("name") for call in calls]
                       + [(call.get("function") or {}).get("arguments") for call in calls])
@@ -361,7 +367,8 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
     for _round in range(MAX_ROUNDS + 1):
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
-        reply = brain.reply(messages, tools=offered, on_text=screen.show_text)
+        with thinking(screen):
+            reply = brain.reply(messages, tools=offered, on_text=screen.show_text)
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
         content = reply.get("content") or ""

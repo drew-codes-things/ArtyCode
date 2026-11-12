@@ -3,6 +3,8 @@ import random
 import sys
 import time
 
+from arty_cli import waiting
+
 MAX_TRIES = 4
 FIRST_WAIT_SECONDS = 1.0
 MAX_WAIT_SECONDS = 30.0
@@ -41,8 +43,10 @@ def retry_after_of(headers) -> float | None:
 
 
 def show_dim(text: str) -> None:
-    painted = sys.stderr.isatty() and not os.environ.get("NO_COLOR")
-    sys.stderr.write((f"{DIM}{text}{RESET}" if painted else text) + "\n")
+    on_terminal = sys.stderr.isatty()
+    shown = text.ljust(waiting.LINE_ROOM) if on_terminal else text
+    painted = on_terminal and not os.environ.get("NO_COLOR")
+    sys.stderr.write(("\r" if on_terminal else "") + (f"{DIM}{shown}{RESET}" if painted else shown) + "\n")
     sys.stderr.flush()
 
 

@@ -16,7 +16,7 @@ from arty_cli import extras as extras_module
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
                        mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
-                       settings, skills, tools, webfetch)
+                       settings, skills, tools, waiting, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -151,6 +151,7 @@ class Terminal:
         self.mid_line = False
         self.offers_rules = False
         self.remote = None
+        self.waiting = None
         self.colour = self.err.isatty() and not os.environ.get("NO_COLOR")
         true_colour = os.environ.get("COLORTERM", "").lower() in TRUE_COLOUR_NAMES
         self.colours = {**COLOURS, "accent": TRUE_COLOUR_ACCENT if true_colour else PALETTE_ACCENT}
@@ -158,13 +159,31 @@ class Terminal:
     def paint(self, text: str, colour: str) -> str:
         return f"{self.colours[colour]}{text}{self.colours['reset']}" if self.colour else text
 
+    def thinking(self):
+        if not (self.out.isatty() and self.err.isatty()):
+            return contextlib.nullcontext()
+        self.waiting = waiting.ThinkingLine(self.shown_now, lambda text: self.paint(text, "dim"))
+        return self.waiting
+
+    def shown_now(self, text: str) -> None:
+        self.err.write(text)
+        self.err.flush()
+
+    def stop_thinking(self) -> None:
+        if self.waiting:
+            self.waiting.stop()
+            self.waiting = None
+
     def end_line(self) -> None:
+        self.stop_thinking()
         if self.mid_line:
             self.out.write("\n")
             self.out.flush()
             self.mid_line = False
 
     def show_text(self, text: str) -> None:
+        if text:
+            self.stop_thinking()
         self.out.write(text)
         self.out.flush()
         self.mid_line = not text.endswith("\n")
@@ -196,6 +215,7 @@ class Terminal:
         self.err.flush()
 
     def show_diff(self, preview: str) -> None:
+        self.stop_thinking()
         for line in preview.splitlines():
             colour = "green" if line.startswith("+") else "removed" if line.startswith("-") else "dim"
             self.err.write(self.paint(line, colour) + "\n")

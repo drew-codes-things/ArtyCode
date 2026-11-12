@@ -214,6 +214,8 @@ repo could put instructions or programs there); until you say yes, they are left
 `.arty/mcp.json` change later (a pull, a branch switch), it asks again. Adding a `# note` never trusts a folder.
 Your own prompts go in `.arty/commands/<name>.md` (or `commands/` in the config folder) and run as `/<name> words`,
 with `$ARGUMENTS` replaced by the words. Conversations are saved per project in the config folder's `sessions/`.
+While it waits for the model, a dim `Thinking 4s · Ctrl-C to stop` line counts the seconds and is wiped as soon as the
+answer or a step appears (only when both output and errors go to a terminal, so piped and `-p` output stays plain).
 Ctrl-C stops the current request, helpers included (what it already changed or ran, MCP calls too, stays noted in the
 conversation); Ctrl-D leaves.
 

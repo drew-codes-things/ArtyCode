@@ -912,3 +912,38 @@ def test_the_sandbox_hides_your_arty_settings_folder(ready, monkeypatch):
     made = started_workspaces(monkeypatch)
     cli.main(["-p", "hello"])
     assert cli.settings.config_dir() in made[0].sandbox.secret_paths
+
+
+def test_on_a_terminal_the_thinking_line_is_cleared_before_the_answer_starts(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    out, err = Tty(), Tty()
+    terminal = cli.Terminal(out, err)
+    with terminal.thinking() as line:
+        line.tick()
+        terminal.show_text("Hi")
+        cleared_when_text_came = err.getvalue()
+    assert "Thinking" in cleared_when_text_came
+    assert cleared_when_text_came.endswith("\r")
+    assert out.getvalue() == "Hi"
+    assert err.getvalue() == cleared_when_text_came
+
+
+def test_on_a_terminal_a_note_or_question_also_clears_the_thinking_line(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    out, err = Tty(), Tty()
+    terminal = cli.Terminal(out, err)
+    with terminal.thinking() as line:
+        line.tick()
+        terminal.note("Read a.py")
+    assert err.getvalue().split("\r")[-1] == "Read a.py\n"
+
+
+@pytest.mark.parametrize("out_is_terminal, err_is_terminal", [(False, True), (True, False), (False, False)])
+def test_without_a_terminal_on_both_sides_nothing_about_thinking_is_written(out_is_terminal, err_is_terminal):
+    out = Tty() if out_is_terminal else io.StringIO()
+    err = Tty() if err_is_terminal else io.StringIO()
+    terminal = cli.Terminal(out, err)
+    with terminal.thinking():
+        terminal.show_text("Hi")
+    assert err.getvalue() == ""
+    assert out.getvalue() == "Hi"

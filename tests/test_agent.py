@@ -805,3 +805,53 @@ def test_a_model_that_claims_the_work_after_approval_without_changing_anything_i
     approval = [m["content"] for m in messages if m["role"] == "tool"][2]
     assert "Nothing has been changed yet" in approval
     assert sum(m["content"] == agent.NOTHING_CHANGED_YET for m in messages if m["role"] == "user") == 1
+
+
+class WaitingScreen(Screen):
+    def __init__(self):
+        super().__init__()
+        self.waiting = False
+        self.events = []
+
+    def thinking(self):
+        screen = self
+
+        class Context:
+            def __enter__(self):
+                screen.waiting = True
+                screen.events.append("start")
+
+            def __exit__(self, *details):
+                screen.waiting = False
+                screen.events.append("stop")
+
+        return Context()
+
+
+class WatchedBrain(ScriptedBrain):
+    def __init__(self, screen, *replies):
+        super().__init__(*replies)
+        self.screen = screen
+        self.waited = []
+
+    def reply(self, messages, tools, on_text):
+        self.waited.append(self.screen.waiting)
+        return super().reply(messages, tools, on_text)
+
+
+def test_every_wait_for_the_model_is_shown_as_thinking_and_ends_with_the_reply(tmp_path):
+    (tmp_path / "a.txt").write_text("a\n")
+    workspace = tools.Workspace(tmp_path)
+    screen = WaitingScreen()
+    watched = WatchedBrain(screen, ("", [call("read_file", path="a.txt")]), ("Done.", []))
+    agent.run_turn([{"role": "user", "content": "look"}], watched, workspace,
+                   permissions.Gate(workspace, permissions.refuse), screen)
+    assert watched.waited == [True, True]
+    assert screen.events == ["start", "stop", "start", "stop"]
+
+
+def test_a_screen_without_a_thinking_line_still_works(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    answer = agent.run_turn([{"role": "user", "content": "hi"}], ScriptedBrain(("Hello.", [])), workspace,
+                            permissions.Gate(workspace, permissions.refuse), Screen())
+    assert answer == "Hello."
