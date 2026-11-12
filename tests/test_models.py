@@ -171,3 +171,78 @@ def test_long_lists_keep_their_columns_lined_up():
     found = models.Choices([models.Choice(f"arty/m{n}", "") for n in range(12)])
     shown = found.lines("arty/m0")
     assert shown[0] == "●  1. arty/m0" and shown[11] == "  12. arty/m11"
+
+
+def coding_model_from(*entries):
+    listing = {"object": "list", "data": list(entries)}
+    with serving([(200, json.dumps(listing))], "application/json") as (url, recorder):
+        found = brain.Brain(settings.Settings(remote_url=url, api_key="secret")).coding_model()
+    assert [sent["path"] for sent in recorder.requests] == ["/models?all=1"]
+    return found
+
+
+def test_the_brains_coding_model_is_its_first_arty_entry_marked_for_coding():
+    assert coding_model_from({"id": "arty/qwen3:14b", "coding": False}, {"id": "own/Coder", "coding": True},
+                             {"id": "arty/mimo-v2.6:9b", "coding": True},
+                             {"id": "arty/other:7b", "coding": True}) == "arty/mimo-v2.6:9b"
+
+
+def test_a_brain_that_marks_no_coding_model_names_none():
+    assert coding_model_from({"id": "arty/qwen3:14b"}, {"id": "arty/b", "coding": False}) is None
+
+
+def test_a_brain_that_cannot_be_reached_or_listed_names_no_coding_model():
+    assert brain.Brain(settings.Settings(remote_url="http://127.0.0.1:9/v1", api_key="k")).coding_model() is None
+    with serving([(500, json.dumps({"error": "down"}))], "application/json") as (url, _recorder):
+        assert brain.Brain(settings.Settings(remote_url=url, api_key="k")).coding_model() is None
+
+
+class CodingBrain(ListingBrain):
+    def coding_model(self):
+        return "arty/mimo-v2.6:9b"
+
+
+@pytest.fixture
+def nothing_chosen(arty_set_up, monkeypatch):
+    monkeypatch.setattr(cli.providers, "make", CodingBrain)
+    monkeypatch.delenv("ARTY_CLI_MODEL", raising=False)
+    return cli.settings.config_path()
+
+
+def test_with_no_model_ever_picked_it_starts_on_the_brains_coding_model_without_saving_it(nothing_chosen, monkeypatch,
+                                                                                         capsys):
+    chat(monkeypatch, "/exit")
+    assert ListingBrain.made[0].model == "arty/mimo-v2.6:9b"
+    assert "arty/mimo-v2.6:9b" in capsys.readouterr().err
+    assert not nothing_chosen.exists() or "mimo" not in nothing_chosen.read_text()
+
+
+def test_a_model_given_for_this_run_wins_over_the_brains_coding_model(nothing_chosen, monkeypatch):
+    chat(monkeypatch, "/exit", arguments=["--model", "arty/qwen3:14b"])
+    assert ListingBrain.made[0].model == "arty/qwen3:14b"
+
+
+def test_a_model_the_user_saved_or_set_in_the_environment_wins(nothing_chosen, monkeypatch):
+    nothing_chosen.parent.mkdir(parents=True, exist_ok=True)
+    nothing_chosen.write_text(json.dumps({"model": "arty/qwen3:14b"}))
+    chat(monkeypatch, "/exit")
+    nothing_chosen.unlink()
+    monkeypatch.setenv("ARTY_CLI_MODEL", "arty/env:1b")
+    chat(monkeypatch, "/exit")
+    assert [made.model for made in ListingBrain.made] == ["arty/qwen3:14b", settings.DEFAULT_MODEL]
+
+
+def test_a_brain_with_no_coding_model_leaves_the_default(nothing_chosen, monkeypatch):
+    monkeypatch.setattr(CodingBrain, "coding_model", lambda self: None)
+    chat(monkeypatch, "/exit")
+    assert ListingBrain.made[0].model == settings.DEFAULT_MODEL
+
+
+def test_a_saved_default_that_was_retired_does_not_count_as_a_choice(tmp_path):
+    path = tmp_path / "config.json"
+    assert not settings.model_was_chosen(path, environ={})
+    path.write_text(json.dumps({"model": settings.RETIRED_DEFAULT_MODELS[0]}))
+    assert not settings.model_was_chosen(path, environ={})
+    path.write_text(json.dumps({"model": "arty/qwen3:14b"}))
+    assert settings.model_was_chosen(path, environ={})
+    assert settings.model_was_chosen(tmp_path / "none.json", environ={"ARTY_CLI_MODEL": "arty/x"})

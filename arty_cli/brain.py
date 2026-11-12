@@ -26,6 +26,7 @@ FAULT_REASON = "Arty's brain hit an error"
 UNREACHABLE_REASON = "can't reach it"
 DEVICE_KEY_PREFIX = "arty_dev_"
 LIST_SECONDS = 30
+QUICK_LIST_SECONDS = 5
 MODEL_PREFIX = "arty/"
 OWN_MODEL_PREFIX = "own/"
 AGENT_MODEL_PREFIXES = (MODEL_PREFIX, OWN_MODEL_PREFIX)
@@ -390,12 +391,20 @@ class Brain:
         return [(model, str(entry.get("description") or "")) for model, entry in entries.items()
                 if is_arty_model(model) and (entry.get(CODING_MARK) is True or not marks_coding)]
 
-    def model_entries(self, path: str) -> list[dict]:
+    def coding_model(self) -> str | None:
+        try:
+            entries = self.model_entries(DOWNLOADED_MODELS, QUICK_LIST_SECONDS)
+        except BrainError:
+            return None
+        marked = (str(entry.get("id", "")) for entry in entries if entry.get(CODING_MARK) is True)
+        return next((model for model in marked if model.startswith(MODEL_PREFIX)), None)
+
+    def model_entries(self, path: str, seconds: float = LIST_SECONDS) -> list[dict]:
         route = self.pick_route()
         request = urllib.request.Request(f"{route.url}{path}", headers={
             "Authorization": f"Bearer {self.settings.api_key}", "User-Agent": f"arty-cli/{__version__}", **route.headers})
         try:
-            with urllib.request.urlopen(request, timeout=LIST_SECONDS) as response:
+            with urllib.request.urlopen(request, timeout=seconds) as response:
                 listed = json.loads(response.read() or b"{}").get("data") or []
         except urllib.error.HTTPError as error:
             raise BrainError(f"Arty's brain couldn't list its models: {error_message(error) or error.code}") from None

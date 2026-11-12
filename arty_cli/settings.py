@@ -83,6 +83,11 @@ def without_retired_default(stored: dict) -> dict:
             if not (name == "model" and value in RETIRED_DEFAULT_MODELS)}
 
 
+def model_was_chosen(path: Path | None = None, environ=os.environ) -> bool:
+    saved = without_retired_default(read_file(path or config_path(environ)))
+    return bool(environ.get(ENVIRONMENT_NAMES["model"]) or saved.get("model"))
+
+
 def load(path: Path | None = None, environ=os.environ) -> Settings:
     loaded = Settings(**without_retired_default(read_file(path or config_path(environ))))
     overrides = {name: environ[variable] for name, variable in ENVIRONMENT_NAMES.items() if environ.get(variable)}

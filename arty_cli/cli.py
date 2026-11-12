@@ -1315,6 +1315,11 @@ def main(argv=None) -> int:
         return FAILED
 
 
+def brains_coding_model(client) -> str | None:
+    named = getattr(client, "coding_model", None)
+    return named() if named is not None else None
+
+
 def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     mode = permissions.AUTO_EDIT if arguments.auto_edit else arguments.permission_mode
     gate = permissions.Gate(workspace, terminal.ask, mode=mode)
@@ -1323,6 +1328,8 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     client = providers.make(config)
     if saved.model and not arguments.model and brain.is_arty_model(saved.model):
         client.model = saved.model
+    elif not arguments.model and not settings.model_was_chosen():
+        client.model = brains_coding_model(client) or client.model
     trusted = project_notes_allowed(workspace, settings.config_dir(), terminal)
     gate.rules, problems = permissions.load_rules(settings.config_dir(), workspace, trusted)
     if trusted:
