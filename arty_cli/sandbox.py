@@ -1,3 +1,5 @@
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,7 +17,11 @@ LINUX_SHELL = "/bin/bash"
 SECRET_FOLDERS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".config/arty-cli", ".config/Arty",
                   ".config/gh", ".password-store", ".local/share/keyrings")
 SECRET_FILES = (".netrc", ".git-credentials", ".npmrc", ".pypirc", ".arty-android.properties")
-LINUX_ISOLATION = ["--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent"]
+LINUX_ISOLATION = ["--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session"]
+SESSION_VARIABLES = ("SSH_AUTH_SOCK", "SSH_AGENT_PID", "DBUS_SESSION_BUS_ADDRESS", "GPG_AGENT_INFO")
+SECRET_NAME = re.compile(r"(^|_)(KEYS?|TOKENS?|SECRETS?|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|AUTH|COOKIE)(_|$)"
+                         r"|(KEY|TOKEN|SECRET|PASSWORD)$")
+BUS_PATH_PREFIX = "unix:path="
 FALLBACK_NOTE = ("The sandbox is switched on but can't run here ({reason}), so commands run without the sandbox, "
                  "behind the usual approvals.")
 REFUSED_NOTE = ("The sandbox is set to required but can't run here ({reason}), so commands are refused. "
@@ -47,6 +53,28 @@ def hidden_paths(home: Path, extra: tuple = ()) -> list[Path]:
     home = Path(home)
     candidates = [home / name for name in SECRET_FOLDERS + SECRET_FILES] + [Path(path) for path in extra]
     return list(dict.fromkeys(path for path in candidates if path.exists()))
+
+
+def is_secret_name(name: str) -> bool:
+    return bool(SECRET_NAME.search(name.upper()))
+
+
+def sandbox_environment(environ) -> dict:
+    return {name: value for name, value in environ.items()
+            if name not in SESSION_VARIABLES and not is_secret_name(name)}
+
+
+def bus_paths(address: str) -> list[Path]:
+    return [Path(part.split(",")[0][len(BUS_PATH_PREFIX):]) for part in address.split(";")
+            if part.startswith(BUS_PATH_PREFIX)]
+
+
+def session_paths(environ) -> list[Path]:
+    runtime = Path(environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    agent = [Path(environ["SSH_AUTH_SOCK"])] if environ.get("SSH_AUTH_SOCK") else []
+    candidates = [runtime, *agent, *bus_paths(environ.get("DBUS_SESSION_BUS_ADDRESS", ""))]
+    found = [path for path in dict.fromkeys(candidates) if path.exists()]
+    return [path for path in found if not any(path != other and path.is_relative_to(other) for other in found)]
 
 
 def linux_arguments(bwrap: str, root: Path, command: str, network: bool, hidden: list[Path]) -> list[str]:
@@ -121,7 +149,7 @@ class Sandbox:
             if self.choice.mode == REQUIRED:
                 raise tools.ToolError(self.problem)
             return None
-        hidden = hidden_paths(self.home, self.secret_paths)
+        hidden = hidden_paths(self.home, self.secret_paths + tuple(session_paths(os.environ)))
         return linux_arguments(shutil.which("bwrap"), self.root, command, self.choice.network, hidden)
 
     def start(self, command: str, **options):
@@ -130,4 +158,4 @@ class Sandbox:
         arguments = self.wrapped(command)
         if arguments is None:
             return None
-        return subprocess.Popen(arguments, start_new_session=True, **options)
+        return subprocess.Popen(arguments, start_new_session=True, env=sandbox_environment(os.environ), **options)

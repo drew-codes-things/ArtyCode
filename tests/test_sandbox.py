@@ -1,5 +1,7 @@
 import json
+import os
 import shutil
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -9,6 +11,10 @@ import pytest
 from arty_cli import sandbox, tools
 
 needs_bwrap = pytest.mark.skipif(not sandbox.linux_sandbox_works(), reason="bubblewrap can't run here")
+needs_user_bus = pytest.mark.skipif(
+    not (sys.platform.startswith("linux") and shutil.which("systemd-run")
+         and Path(f"/run/user/{os.getuid() if hasattr(os, 'getuid') else 0}/bus").exists()),
+    reason="no systemd user bus here")
 
 
 def settings_file(folder, table):
@@ -161,3 +167,58 @@ def test_secrets_stay_hidden_when_the_project_folder_holds_them(tmp_path):
         assert (home / ".ssh" / "id_ed25519").read_text() == "SECRET-KEY\n"
     finally:
         shutil.rmtree(home)
+
+
+def test_secret_looking_and_session_variables_are_left_out_and_the_rest_kept():
+    kept = sandbox.sandbox_environment({"PATH": "/usr/bin", "HOME": "/home/x", "GIT_AUTHOR_NAME": "x",
+                                         "ARTY_API_KEY": "k", "GITHUB_TOKEN": "t", "AWS_SECRET_ACCESS_KEY": "s",
+                                         "DB_PASSWORD": "p", "SSH_AUTH_SOCK": "/a", "SSH_AGENT_PID": "1",
+                                         "DBUS_SESSION_BUS_ADDRESS": "unix:path=/b", "GPG_AGENT_INFO": "/c",
+                                         "OPENAIAPIKEY": "o", "XDG_RUNTIME_DIR": "/run/user/1"})
+    assert kept == {"PATH": "/usr/bin", "HOME": "/home/x", "GIT_AUTHOR_NAME": "x", "XDG_RUNTIME_DIR": "/run/user/1"}
+
+
+def test_the_runtime_folder_and_agent_sockets_are_among_the_hidden_paths(tmp_path):
+    runtime = tmp_path / "run"
+    (runtime / "keyring").mkdir(parents=True)
+    elsewhere = tmp_path / "agent.sock"
+    elsewhere.write_text("")
+    environ = {"XDG_RUNTIME_DIR": str(runtime), "SSH_AUTH_SOCK": str(elsewhere),
+               "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime / 'bus'}"}
+    (runtime / "bus").write_text("")
+    assert sandbox.session_paths(environ) == [runtime, elsewhere]
+
+
+@needs_bwrap
+@needs_user_bus
+def test_the_user_session_bus_cannot_start_programs_outside_the_sandbox(tmp_path):
+    workspace = tools.Workspace(tmp_path)
+    workspace.sandbox = sandbox.Sandbox(tmp_path, sandbox.Choice(sandbox.ON, True), home=tmp_path / "home")
+    result = tools.run_command(workspace, "systemd-run --user --quiet --collect --wait true && echo ESCAPED; "
+                                          "echo runtime=$(ls -A /run/user/$(id -u) | wc -l)")
+    assert "ESCAPED" not in result
+    assert "runtime=0" in result
+
+
+@needs_bwrap
+def test_the_ssh_agent_and_secret_variables_are_out_of_reach(tmp_path, monkeypatch):
+    cache = Path.home() / ".cache"
+    cache.mkdir(exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix="arty-sandbox-test-", dir=cache))
+    agent = socket.socket(socket.AF_UNIX)
+    try:
+        agent.bind(str(folder / "agent"))
+        agent.listen(1)
+        monkeypatch.setenv("SSH_AUTH_SOCK", str(folder / "agent"))
+        monkeypatch.setenv("ARTY_API_KEY", "arty-test-key-value")
+        workspace = tools.Workspace(tmp_path)
+        workspace.sandbox = sandbox.Sandbox(tmp_path, sandbox.Choice(sandbox.ON, True), home=tmp_path / "home")
+        probe = (f"{sys.executable} -c \"import socket; s = socket.socket(socket.AF_UNIX); "
+                 f"s.connect('{folder / 'agent'}'); print('AGENT_' + 'REACHED')\"; "
+                 "echo agent=${SSH_AUTH_SOCK:-unset} key=${ARTY_API_KEY:-unset} home=$HOME")
+        result = tools.run_command(workspace, probe)
+        assert "AGENT_REACHED" not in result
+        assert "agent=unset key=unset" in result and f"home={Path.home()}" in result
+    finally:
+        agent.close()
+        shutil.rmtree(folder)

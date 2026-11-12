@@ -233,7 +233,11 @@ usual:
 
 - Linux: bubblewrap (`bwrap`, install it with your package manager). The system is read-only, the project folder is
   writable, `/tmp` is private, and secrets in your home folder (`~/.ssh`, `~/.gnupg`, cloud and `gh` logins,
-  `.netrc`, `.git-credentials`, arty-cli's own config folder with your API key, and others) look empty.
+  `.netrc`, `.git-credentials`, arty-cli's own config folder with your API key, and others) look empty. Your
+  runtime folder (`/run/user/<uid>`, with the session bus and keyring and agent sockets) is empty too, the SSH agent
+  socket is hidden wherever it lives, and environment variables that look secret (names with KEY, TOKEN, SECRET,
+  PASSWORD, AUTH and the like) or point at the session bus or an agent are left out. The rest of your home folder
+  stays readable so toolchains keep working.
 - Windows: an AppContainer and a Job Object. The command can change only the project folder (it starts in a
   `Project:` drive there), can't read your user folder, and everything it started ends with it. A project folder that
   holds your whole user folder is refused. Programs installed only for you (under `AppData`) can't be run inside it.
