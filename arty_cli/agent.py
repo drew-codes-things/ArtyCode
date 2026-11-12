@@ -7,17 +7,30 @@ import threading
 from arty_cli import extras as extra_tools
 from arty_cli import hooks, permissions, tools
 
-MAX_ROUNDS = 40
 STUCK_REPEATS = 3
 ANNOUNCED_STEP = re.compile(r"\b(let'?s|let me|i'?ll|i will|i'?m going to|next,? i)\b[^.?!]{0,80}\b(check|look|read|open|run|"
                             r"search|find|inspect|examine|fix|edit|change|update|try|see)\b", re.I)
 ANNOUNCED_STEP_TAIL_CHARS = 300
 DO_IT_NOW = "Do that now with your tools rather than describing it."
+ASKS_TO_CARRY_ON = re.compile(r"\b(?:(?:shall|should|can|may) i|would you like me to|do you want me to|want me to|"
+                              r"let me know if you(?:'d like| would like| want) me to)\s+(?:continue|proceed|go ahead|"
+                              r"go on|carry on|keep going|move on)\b", re.I)
+CARRY_ON_ANSWER = "Yes, carry on until the whole job is done; you don't need to ask me before each step."
+UNFINISHED_LEAD = "Your checklist still has unfinished items:"
+UNFINISHED_ASK = ("Carry on with them now. Only stop to ask me if you are blocked or need a decision only I can "
+                  "make; if an item is already done or no longer needed, update the checklist.")
+CUT_SHORT_NOTE = "(I hit my reply length limit, so this was cut short. Ask me to continue.)"
+CUT_SHORT_ANSWER = ("Your last reply was cut off at the reply length limit, so nothing in it was used. Carry on from "
+                    "where you were in smaller steps: write a long file in parts (create it with the first part, "
+                    "then add the rest with edit_file).")
+CUT_REPLY_KEPT_CHARS = 600
+CUT_SHORT, ANNOUNCED, ASKED, UNFINISHED = "cut short", "announced", "asked", "unfinished"
+NUDGES_PER_STRETCH = {CUT_SHORT: 3, ANNOUNCED: 1, ASKED: 1, UNFINISHED: 1}
+UNFINISHED_STATUSES = ("pending", "in_progress")
 MAX_EXPLORE_ANSWER_CHARS = 8_000
 MAX_RESULT_CHARS = 60_000
 REFUSED = permissions.REFUSED
 RECORDED_TOOLS = tools.CHANGING_TOOLS + ("run_command",)
-STEP_LIMIT_REACHED = "I stopped after a lot of steps. Tell me if you want me to keep going."
 STUCK_NOTE = ("You have made the same tool calls several times in a row with the same results. Don't call them "
               "again: answer now with what you have, or say what is blocking you.")
 STUCK_STOPPED = "I stopped because I kept repeating the same step. Tell me how you'd like to go on."
@@ -115,6 +128,13 @@ def step_line(name: str, arguments: dict) -> str:
     return f"{step_label(name)}{STEP_JOINS.get(name, ' ')}{target}".strip() if target else step_label(name)
 
 
+def checklist_outcome(result: str) -> str:
+    marks = [line[:3] for line in result.splitlines()]
+    done = marks.count(tools.TODO_MARKS["done"])
+    listed = sum(mark in tools.TODO_MARKS.values() for mark in marks)
+    return f"{done} of {listed} done" if listed else one_line(result)
+
+
 def counted(number: int, thing: str, things: str = "") -> str:
     return f"{number} {thing if number == 1 else things or thing + 's'}"
 
@@ -152,6 +172,8 @@ def outcome_line(name: str, result: str) -> tuple[str, bool]:
         return command_outcome(result)
     if name == "read_file":
         return read_outcome(result), False
+    if name == "todo_write":
+        return checklist_outcome(result), False
     if name in COUNTED_RESULTS and not result.startswith(NOTHING_FOUND_LEADS):
         return counted(listed_count(result), *COUNTED_RESULTS[name]), False
     return one_line(result), False
@@ -348,6 +370,11 @@ def call_parts(call: dict) -> tuple[str, dict | None, str]:
         return name, None, f"Error: {error}; send the call again"
 
 
+def working(screen, line: str, on_main_thread: bool):
+    shown = getattr(screen, "working", None)
+    return shown(line) if shown is not None and on_main_thread else contextlib.nullcontext()
+
+
 def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extras) -> str:
     name, arguments, problem = call_parts(call)
     if arguments is None:
@@ -359,18 +386,11 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
         blocked = f"{HOOK_BLOCKED} {before.feedback}".strip()
         tell(helpers.screen, "show_outcome", one_line(blocked), True)
         return blocked
-    if name == "explore":
-        if not can_explore:
-            return "Error: a helper can't start another helper; look for it yourself"
-        result = helpers.explore(str(arguments.get("task", "")))
-    elif name == HELPER_TOOL and can_explore and extras.helpers:
-        result = helpers.custom(extras.helpers, arguments)
-    elif name == permissions.PLAN_TOOL and can_explore:
-        result = helpers.gate.review_plan(str(arguments.get("plan") or ""))
-    else:
-        result = performed(name, arguments, helpers.workspace, helpers.gate, extras, done, before.decision,
-                           before.feedback)
+    with working(helpers.screen, step_line(name, arguments), threading.current_thread() is helpers.asking_thread):
+        result = tool_result(name, arguments, helpers, can_explore, done, extras, before)
     tell(helpers.screen, "show_outcome", *outcome_line(name, result))
+    if name == "todo_write" and not result.startswith(ERROR_LEAD):
+        tell(helpers.screen, "show_todos", helpers.workspace.todos)
     result = tools.clipped(result, MAX_RESULT_CHARS)
     if before.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {before.context}"
@@ -379,6 +399,19 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
     if after.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {after.context}"
     return f"{result}\n\n{HOOK_FEEDBACK} {after.feedback}".rstrip() if after.blocked else result
+
+
+def tool_result(name: str, arguments: dict, helpers: Helpers, can_explore: bool, done: list, extras, before) -> str:
+    if name == "explore":
+        if not can_explore:
+            return "Error: a helper can't start another helper; look for it yourself"
+        return helpers.explore(str(arguments.get("task", "")))
+    if name == HELPER_TOOL and can_explore and extras.helpers:
+        return helpers.custom(extras.helpers, arguments)
+    if name == permissions.PLAN_TOOL and can_explore:
+        return helpers.gate.review_plan(str(arguments.get("plan") or ""))
+    return performed(name, arguments, helpers.workspace, helpers.gate, extras, done, before.decision,
+                     before.feedback)
 
 
 def is_explore(call: dict) -> bool:
@@ -437,9 +470,15 @@ def thinking(screen):
     return shown() if shown is not None else contextlib.nullcontext()
 
 
-def signature_of(calls: list[dict]) -> str:
+def signature_of(calls: list[dict], results: list[str]) -> str:
     return json.dumps([(call.get("function") or {}).get("name") for call in calls]
-                      + [(call.get("function") or {}).get("arguments") for call in calls])
+                      + [(call.get("function") or {}).get("arguments") for call in calls] + results)
+
+
+def waits_on_running_jobs(calls: list[dict], results: list[str]) -> bool:
+    names = {(call.get("function") or {}).get("name") for call in calls}
+    return names == {"command_output"} and all(result.rstrip().endswith(f"{tools.STILL_RUNNING}]")
+                                               for result in results)
 
 
 def asked_to_carry_on(messages: list[dict], extras, screen, continued: int) -> bool:
@@ -456,48 +495,90 @@ def announces_a_next_step(content: str) -> bool:
     return bool(tail) and not tail.endswith("?") and bool(ANNOUNCED_STEP.search(tail))
 
 
+def asks_to_carry_on(content: str) -> bool:
+    return bool(ASKS_TO_CARRY_ON.search(content.strip()[-ANNOUNCED_STEP_TAIL_CHARS:]))
+
+
+def is_cut_short(content: str) -> bool:
+    return content.rstrip().endswith(CUT_SHORT_NOTE)
+
+
+def unfinished_items(todos: list[dict]) -> list[dict]:
+    return [item for item in todos if item.get("status") in UNFINISHED_STATUSES]
+
+
+def unfinished_note(todos: list[dict]) -> str:
+    listed = "\n".join(f"{tools.TODO_MARKS[item['status']]} {item.get('text', '')}" for item in unfinished_items(todos))
+    return f"{UNFINISHED_LEAD}\n{listed}\n{UNFINISHED_ASK}"
+
+
+def nudge_for(content: str, workspace, gate, carries_the_job: bool, used: list[str]) -> tuple[str, str]:
+    keeps_working = carries_the_job and gate.mode != permissions.PLAN
+    checks = ((CUT_SHORT, is_cut_short(content), CUT_SHORT_ANSWER),
+              (ANNOUNCED, announces_a_next_step(content), DO_IT_NOW),
+              (ASKED, keeps_working and asks_to_carry_on(content), CARRY_ON_ANSWER),
+              (UNFINISHED, keeps_working and bool(unfinished_items(workspace.todos)), ""))
+    for reason, applies, answer in checks:
+        if applies and used.count(reason) < NUDGES_PER_STRETCH[reason]:
+            return reason, answer or unfinished_note(workspace.todos)
+    return "", ""
+
+
+def kept_reply(content: str, reason: str) -> str:
+    if reason != CUT_SHORT or len(content) <= CUT_REPLY_KEPT_CHARS:
+        return content
+    return content[:CUT_REPLY_KEPT_CHARS] + "…"
+
+
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
              squeeze=None, extras=None, stop_hooks=True, stopped=None) -> str:
     extras = extras or extra_tools.NONE
     offered = offered_definitions(extras) + planning_definitions(gate) if offered is None else offered
     done = [] if done is None else done
     helpers = Helpers(brain, workspace, gate, screen, extras)
-    recent, continued, steered_from, nudged = [], 0, None, False
+    recent, continued, steered_from, nudges = [], 0, None, []
     approved_with, reminded = None, False
-    for _round in range(MAX_ROUNDS + 1):
+    while True:
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
         with thinking(screen):
             reply = brain.reply(messages, tools=offered, on_text=screen.show_text)
+        tell(screen, "count_reply", reply)
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
         content = reply.get("content") or ""
         calls = reply.get("tool_calls") or []
         if not calls:
-            messages.append({"role": "assistant", "content": content})
             if approved_with is not None and not reminded and len(done) == approved_with:
+                messages.append({"role": "assistant", "content": content})
                 reminded = True
                 messages.append({"role": "user", "content": NOTHING_CHANGED_YET})
                 continue
-            if not nudged and offered and announces_a_next_step(content):
-                nudged = True
-                messages.append({"role": "user", "content": DO_IT_NOW})
+            reason, answer = nudge_for(content, workspace, gate, can_explore, nudges) if offered else ("", "")
+            messages.append({"role": "assistant", "content": kept_reply(content, reason)})
+            if reason:
+                nudges.append(reason)
+                messages.append({"role": "user", "content": answer})
                 continue
             if stop_hooks and asked_to_carry_on(messages, extras, screen, continued):
                 continued += 1
                 continue
             return content
+        nudges = []
         messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
         for call in calls:
             tell(screen, "show_tool_call", call)
-        for call, result in zip(calls, results_of(calls, helpers, can_explore, done, extras)):
+        results = results_of(calls, helpers, can_explore, done, extras)
+        for call, result in zip(calls, results):
             messages.append({"role": "tool", "tool_call_id": call.get("id") or "", "content": result})
             tell(screen, "show_tool_result", call, result)
             if is_approval(call, result):
                 approved_with = len(done)
         if squeeze:
             squeeze(messages)
-        signature = signature_of(calls)
+        if waits_on_running_jobs(calls, results):
+            continue
+        signature = signature_of(calls, results)
         if signature == steered_from:
             messages.append({"role": "assistant", "content": STUCK_STOPPED})
             return STUCK_STOPPED
@@ -505,5 +586,3 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         if len(recent) == STUCK_REPEATS and len(set(recent)) == 1:
             messages.append({"role": "user", "content": STUCK_NOTE})
             steered_from, recent = signature, []
-    messages.append({"role": "assistant", "content": STEP_LIMIT_REACHED})
-    return STEP_LIMIT_REACHED

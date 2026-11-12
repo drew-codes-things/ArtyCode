@@ -21,3 +21,19 @@ def test_the_model_is_told_to_search_for_a_name_instead_of_guessing_a_path(tmp_p
 def test_the_model_is_told_write_file_needs_overwrite_for_an_existing_file(tmp_path):
     prompt = prompts.system_prompt(tools.Workspace(tmp_path))
     assert "write_file only for new files" in prompt and "overwrite: true" in prompt
+
+
+def test_the_model_is_told_to_finish_the_whole_job_without_asking_to_carry_on(tmp_path):
+    prompt = prompts.system_prompt(tools.Workspace(tmp_path))
+    assert "until it is done and checked" in prompt and "don't stop part way" in prompt
+    assert "todo_write" in prompt and "background: true" in prompt
+
+
+def test_the_model_is_told_ordinary_builds_like_a_yt_dlp_front_end_are_fine(tmp_path):
+    prompt = prompts.system_prompt(tools.Workspace(tmp_path))
+    assert "yt-dlp" in prompt and "just build them" in prompt
+
+
+def test_the_model_is_told_to_end_with_what_it_built_and_how_to_run_it(tmp_path):
+    prompt = prompts.system_prompt(tools.Workspace(tmp_path))
+    assert "exact command to run or open it" in prompt

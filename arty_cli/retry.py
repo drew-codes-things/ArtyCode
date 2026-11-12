@@ -5,18 +5,22 @@ import time
 
 from arty_cli import waiting
 
-MAX_TRIES = 4
+PATIENCE_SECONDS = 15 * 60
 FIRST_WAIT_SECONDS = 1.0
 MAX_WAIT_SECONDS = 30.0
 MAX_RETRY_AFTER_SECONDS = 60.0
 JITTER = 0.25
+BUSY_REASON = "busy"
 DIM, RESET = "\033[2m", "\033[0m"
 sleep = time.sleep
+clock = time.monotonic
 
 
 class Busy:
-    def __init__(self, retry_after: float | None = None):
+    def __init__(self, retry_after: float | None = None, reason: str = BUSY_REASON, tries: int | None = None):
         self.retry_after = retry_after
+        self.reason = reason
+        self.tries = tries
 
 
 def wait_before(attempt: int, retry_after: float | None) -> float:
@@ -44,25 +48,35 @@ def retry_after_of(headers) -> float | None:
 
 def show_dim(text: str) -> None:
     on_terminal = sys.stderr.isatty()
-    shown = text.ljust(waiting.LINE_ROOM) if on_terminal else text
+    shown = text.ljust(waiting.line_room()) if on_terminal else text
     painted = on_terminal and not os.environ.get("NO_COLOR")
     sys.stderr.write(("\r" if on_terminal else "") + (f"{DIM}{shown}{RESET}" if painted else shown) + "\n")
     sys.stderr.flush()
 
 
-def show_wait(seconds: float) -> None:
-    show_dim(f"  · busy, retrying in {max(round(seconds), 1)} s")
+def show_wait(seconds: float, reason: str = BUSY_REASON) -> None:
+    show_dim(f"  · {reason}, retrying in {max(round(seconds), 1)} s")
 
 
-def with_retries(attempt_once, busy_of):
-    for attempt in range(MAX_TRIES):
+def out_of_tries(busy: Busy, attempt: int) -> bool:
+    return busy.tries is not None and attempt + 1 >= busy.tries
+
+
+def with_retries(attempt_once, busy_of, patience_seconds: float | None = None):
+    patience_seconds = PATIENCE_SECONDS if patience_seconds is None else patience_seconds
+    first_failure, attempt = None, 0
+    while True:
         try:
             return attempt_once()
         except Exception as error:
             busy = busy_of(error)
-            if busy is None or attempt == MAX_TRIES - 1:
+            if busy is None or out_of_tries(busy, attempt):
                 raise
+            now = clock()
+            first_failure = now if first_failure is None else first_failure
             seconds = wait_before(attempt, busy.retry_after)
-            show_wait(seconds)
+            if now + seconds - first_failure > patience_seconds:
+                raise
+            show_wait(seconds, busy.reason)
             sleep(seconds)
-    raise RuntimeError("with_retries ran out of tries without an answer")
+            attempt += 1

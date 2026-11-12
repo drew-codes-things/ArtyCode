@@ -408,7 +408,7 @@ def test_a_model_the_brain_does_not_have_says_how_to_pick_another(status, messag
 
 
 def test_any_other_brain_error_is_not_a_setup_problem():
-    with serving([(500, error_body("boom"))], "text/event-stream") as (url, _recorder):
+    with serving([(500, error_body("boom"))] * brain.FAULT_TRIES, "text/event-stream") as (url, _recorder):
         with pytest.raises(brain.BrainError) as raised:
             asked(brain_at(url))
     assert not isinstance(raised.value, brain.SetupProblem)
@@ -422,3 +422,128 @@ def test_a_dropped_connection_is_described_without_python_internals():
     said = str(raised.value)
     assert said.startswith("Lost the connection to Arty's brain at http://127.0.0.1:9/v1")
     assert "<urlopen error" not in said and "[Errno" not in said
+
+
+def finished(content):
+    return f"data: {json.dumps({'choices': [{'delta': {'content': content}, 'finish_reason': 'stop'}]})}\n\ndata: [DONE]\n\n"
+
+
+class FlakyBrain(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    plan = []
+    served = 0
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        step = FlakyBrain.plan[min(FlakyBrain.served, len(FlakyBrain.plan) - 1)]
+        FlakyBrain.served += 1
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        step(self.wfile)
+        self.close_connection = True
+
+    def log_message(self, *args):
+        pass
+
+
+def cut_off(out):
+    out.write(HALF_AN_ANSWER)
+    out.flush()
+
+
+def answered(out):
+    out.write(finished("all done").encode())
+    out.flush()
+
+
+def keeps_working_then_answers(out):
+    for _beat in range(5):
+        out.write(b": working\n\n")
+        out.flush()
+        __import__("time").sleep(0.2)
+    answered(out)
+
+
+def goes_silent(out):
+    out.write(b": working\n\n")
+    out.flush()
+    __import__("time").sleep(1.5)
+
+
+@pytest.fixture
+def flaky():
+    FlakyBrain.plan, FlakyBrain.served = [], 0
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FlakyBrain)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield brain.Brain(settings.Settings(remote_url=f"http://127.0.0.1:{server.server_address[1]}/v1", api_key="k"))
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_reply_dropped_part_way_is_asked_for_again_and_the_job_carries_on(flaky):
+    FlakyBrain.plan = [cut_off, cut_off, answered]
+    assert asked(flaky)["content"] == "all done"
+    assert FlakyBrain.served == 3
+
+
+def test_a_slow_brain_that_keeps_saying_it_is_working_is_waited_for(flaky, monkeypatch):
+    monkeypatch.setattr(brain, "SILENCE_SECONDS", 0.5)
+    FlakyBrain.plan = [keeps_working_then_answers]
+    assert asked(flaky)["content"] == "all done"
+    assert FlakyBrain.served == 1
+
+
+def test_a_brain_gone_silent_past_the_limit_is_a_drop_that_is_tried_again(flaky, monkeypatch):
+    monkeypatch.setattr(brain, "SILENCE_SECONDS", 0.5)
+    FlakyBrain.plan = [goes_silent, answered]
+    assert asked(flaky)["content"] == "all done"
+    assert FlakyBrain.served == 2
+
+
+def test_a_brain_that_vanishes_mid_job_is_waited_for_until_the_patience_runs_out(retries_wait_in_pretend_time):
+    client = brain_at("http://127.0.0.1:9")
+    with pytest.raises(brain.Dropped):
+        asked(client)
+    assert sum(retries_wait_in_pretend_time.slept) <= brain.retry.PATIENCE_SECONDS
+    assert sum(retries_wait_in_pretend_time.slept) > brain.retry.PATIENCE_SECONDS - brain.retry.MAX_WAIT_SECONDS * 2
+
+
+def test_a_brain_never_reached_fails_at_once_without_waiting(retries_wait_in_pretend_time):
+    client = brain.Brain(settings.Settings(remote_url="http://127.0.0.1:9/v1", api_key="k"))
+    with pytest.raises(brain.BrainError, match="Can't reach"):
+        asked(client)
+    assert retries_wait_in_pretend_time.slept == []
+
+
+def test_the_brain_fault_note_is_tried_again_not_taken_as_the_answer():
+    fault = finished(f"\n\n{brain.BRAIN_FAULT_NOTE}")
+    with serving([(200, fault), (200, finished("fixed"))], "text/event-stream") as (url, recorder):
+        assert asked(brain_at(url))["content"] == "fixed"
+    assert len(recorder.requests) == 2
+
+
+def test_a_brain_fault_that_keeps_happening_is_reported_after_a_few_tries():
+    fault = finished(brain.BRAIN_FAULT_NOTE)
+    with serving([(200, fault)] * brain.FAULT_TRIES, "text/event-stream") as (url, recorder):
+        with pytest.raises(brain.BrainFault):
+            asked(brain_at(url))
+    assert len(recorder.requests) == brain.FAULT_TRIES
+
+
+@pytest.mark.parametrize("status", [502, 504])
+def test_a_gateway_that_gives_up_is_tried_again(status):
+    with serving([(status, error_body("gateway")), (200, finished("ok"))], "text/event-stream") as (url, recorder):
+        assert asked(brain_at(url))["content"] == "ok"
+
+
+def test_the_tokens_the_brain_counted_come_back_with_the_reply():
+    usage = {"prompt_tokens": 900, "completion_tokens": 120, "total_tokens": 1020}
+    lines = [f"data: {json.dumps({'choices': [{'delta': {'content': 'hi'}, 'finish_reason': 'stop'}], 'usage': usage})}"]
+    assert brain.read_reply(lines, lambda text: None)["usage"] == usage
+
+
+def test_a_context_size_can_be_set_for_the_brain():
+    assert brain.Brain(settings.Settings(context_tokens="32768")).context_tokens() == 32768
+    assert brain.Brain(settings.Settings()).context_tokens() is None

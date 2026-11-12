@@ -13,7 +13,7 @@ BUSY = json.dumps({"error": {"message": "Arty is busy with 4 jobs"}})
 def waits(monkeypatch):
     slept, shown = [], []
     monkeypatch.setattr(retry, "sleep", slept.append)
-    monkeypatch.setattr(retry, "show_wait", shown.append)
+    monkeypatch.setattr(retry, "show_wait", lambda seconds, reason=retry.BUSY_REASON: shown.append(seconds))
     return slept, shown
 
 
@@ -72,9 +72,39 @@ def test_a_busy_note_on_a_terminal_first_covers_a_thinking_line_on_the_same_row(
     retry.show_wait(2)
     shown = "".join(err.written)
     assert shown.startswith("\r")
-    assert len(shown.split("\n")[0].replace(retry.DIM, "").replace(retry.RESET, "")) - 1 >= waiting.LINE_ROOM
+    assert len(shown.split("\n")[0].replace(retry.DIM, "").replace(retry.RESET, "")) - 1 >= waiting.line_room()
 
 
 def test_a_busy_note_into_a_pipe_stays_one_plain_line(monkeypatch, capsys):
     retry.show_wait(2)
     assert capsys.readouterr().err == "  · busy, retrying in 2 s\n"
+
+
+def always(error):
+    def attempt():
+        raise error
+    return attempt
+
+
+def test_retrying_stops_once_the_patience_runs_out(retries_wait_in_pretend_time):
+    with pytest.raises(ValueError):
+        retry.with_retries(always(ValueError("down")), lambda error: retry.Busy(), patience_seconds=100)
+    slept = retries_wait_in_pretend_time.slept
+    assert 0 < sum(slept) <= 100 and len(slept) > 3
+
+
+def test_a_kind_of_failure_with_a_set_number_of_tries_gets_only_those(retries_wait_in_pretend_time):
+    tried = []
+
+    def attempt():
+        tried.append(1)
+        raise ValueError("fault")
+
+    with pytest.raises(ValueError):
+        retry.with_retries(attempt, lambda error: retry.Busy(tries=3))
+    assert len(tried) == 3
+
+
+def test_the_wait_note_says_why(monkeypatch, capsys):
+    retry.show_wait(4, "lost the connection to Arty's brain (Connection reset)")
+    assert capsys.readouterr().err == "  · lost the connection to Arty's brain (Connection reset), retrying in 4 s\n"

@@ -11,10 +11,19 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from arty_cli import __version__, retry
+from arty_cli import settings as settings_module
 
 CONNECT_SECONDS = 3
-ANSWER_SECONDS = 600
+CHAT_CONNECT_SECONDS = 30
+SILENCE_SECONDS = 300
 BUSY_CODES = (429, 503)
+GATEWAY_CODES = (502, 504)
+FAULT_CODES = (500,)
+FAULT_TRIES = 3
+BRAIN_FAULT_NOTE = "(Arty's brain hit an error; the details are in its log.)"
+LOST_REASON = "lost the connection to Arty's brain"
+FAULT_REASON = "Arty's brain hit an error"
+UNREACHABLE_REASON = "can't reach it"
 DEVICE_KEY_PREFIX = "arty_dev_"
 LIST_SECONDS = 30
 MODEL_PREFIX = "arty/"
@@ -49,6 +58,42 @@ class BrainError(Exception):
 
 class SetupProblem(BrainError):
     pass
+
+
+class Dropped(BrainError):
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+class BrainFault(BrainError):
+    pass
+
+
+class PatientConnection(http.client.HTTPConnection):
+    def connect(self):
+        super().connect()
+        self.sock.settimeout(SILENCE_SECONDS)
+
+
+class PatientSecureConnection(http.client.HTTPSConnection):
+    def connect(self):
+        super().connect()
+        self.sock.settimeout(SILENCE_SECONDS)
+
+
+class PatientHttp(urllib.request.HTTPHandler):
+    def http_open(self, request):
+        return self.do_open(PatientConnection, request)
+
+
+class PatientHttps(urllib.request.HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(PatientSecureConnection, request, context=self._context)
+
+
+def patient_opener():
+    return urllib.request.build_opener(PatientHttp, PatientHttps)
 
 
 def missing_model_message(model: str) -> str:
@@ -203,8 +248,12 @@ def with_written_calls(reply: dict, tools: list[dict]) -> dict:
     return {**reply, "content": "", "tool_calls": calls} if calls else reply
 
 
+def is_brain_fault(content: str) -> bool:
+    return content.rstrip().endswith(BRAIN_FAULT_NOTE)
+
+
 def read_reply(lines, on_text) -> dict:
-    content, calls, finished = [], {}, False
+    content, calls, finished, usage = [], {}, False, None
     for line in lines:
         if not line.startswith(DATA_PREFIX):
             continue
@@ -212,9 +261,11 @@ def read_reply(lines, on_text) -> dict:
             finished = True
             break
         try:
-            choice = (json.loads(line[len(DATA_PREFIX):]).get("choices") or [{}])[0]
-        except ValueError as error:
+            chunk = json.loads(line[len(DATA_PREFIX):])
+            choice = (chunk.get("choices") or [{}])[0]
+        except (ValueError, AttributeError) as error:
             raise BrainError(f"Arty's brain sent something unreadable: {error}") from None
+        usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else usage
         finished = finished or bool(choice.get("finish_reason"))
         delta = choice.get("delta") or {}
         if delta.get("content"):
@@ -225,7 +276,10 @@ def read_reply(lines, on_text) -> dict:
             calls[index] = call
     if not finished:
         raise ConnectionError(CUT_OFF)
-    return {"role": "assistant", "content": "".join(content), "tool_calls": [calls[i] for i in sorted(calls)]}
+    if is_brain_fault("".join(content)):
+        raise BrainFault(f"{FAULT_REASON}; the details are in its log")
+    reply = {"role": "assistant", "content": "".join(content), "tool_calls": [calls[i] for i in sorted(calls)]}
+    return {**reply, "usage": usage} if usage else reply
 
 
 def error_detail(error: urllib.error.HTTPError) -> str:
@@ -244,8 +298,16 @@ def error_message(error: urllib.error.HTTPError) -> str:
 
 
 def busy_of(error):
-    if isinstance(error, urllib.error.HTTPError) and error.code in BUSY_CODES:
-        return retry.Busy(retry.retry_after_of(error.headers))
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code in BUSY_CODES + GATEWAY_CODES:
+            return retry.Busy(retry.retry_after_of(error.headers))
+        if error.code in FAULT_CODES:
+            return retry.Busy(reason=FAULT_REASON, tries=FAULT_TRIES)
+        return None
+    if isinstance(error, Dropped):
+        return retry.Busy(reason=f"{LOST_REASON} ({error.reason})")
+    if isinstance(error, BrainFault):
+        return retry.Busy(reason=FAULT_REASON, tries=FAULT_TRIES)
     return None
 
 
@@ -261,12 +323,14 @@ class Brain:
         self.settings = settings
         self.model = settings.model
         self.route = None
+        self.reached = ""
 
     def address(self) -> str:
         return self.route.url if self.route else ""
 
     def pick_route(self) -> Route:
         if self.route:
+            self.reached = self.route.url
             return self.route
         candidates = routes(self.settings)
         if not candidates:
@@ -279,6 +343,7 @@ class Brain:
                 unproven.append(candidate.url)
                 continue
             self.route = candidate
+            self.reached = candidate.url
             return candidate
         if unproven:
             raise BrainError(f"Something answered at {', '.join(unproven)} but couldn't prove it is your Arty brain, "
@@ -329,20 +394,39 @@ class Brain:
             raise BrainError("Arty's brain didn't send search results.")
         return result
 
+    def context_tokens(self) -> int | None:
+        return settings_module.positive_number(self.settings, "context_tokens")
+
     def streamed_reply(self, route: Route, body: dict, on_text) -> dict:
-        with urllib.request.urlopen(self.request(route, body), timeout=ANSWER_SECONDS) as response:
+        with patient_opener().open(self.request(route, body), timeout=CHAT_CONNECT_SECONDS) as response:
             if "html" in (response.headers.get("Content-Type") or ""):
                 raise BrainError("The remote address answered with a web page: Cloudflare Access turned the "
                                  "request away. Check access_client_id and access_client_secret.")
             return read_reply(decoded_lines(response), on_text)
 
+    def answered_once(self, body: dict, on_text) -> dict:
+        try:
+            route = self.pick_route()
+        except BrainError:
+            if self.reached:
+                raise Dropped(f"Lost the connection to Arty's brain at {self.reached} and couldn't reach it "
+                              "again. Is the server still on?", UNREACHABLE_REASON) from None
+            raise
+        try:
+            return self.streamed_reply(route, body, on_text)
+        except urllib.error.HTTPError:
+            raise
+        except (OSError, http.client.HTTPException) as error:
+            self.route = None
+            raise Dropped(f"Lost the connection to Arty's brain at {route.url} ({plain_reason(error)}). "
+                          "Is the server still on?", plain_reason(error)) from None
+
     def reply(self, messages, tools, on_text) -> dict:
-        route = self.pick_route()
         body = {"model": self.model, "messages": shared_messages(messages), "stream": True}
         if tools:
             body["tools"] = tools
         try:
-            reply = retry.with_retries(lambda: self.streamed_reply(route, body, on_text), busy_of)
+            reply = retry.with_retries(lambda: self.answered_once(body, on_text), busy_of)
         except urllib.error.HTTPError as error:
             if error.code == REFUSED_KEY:
                 raise SetupProblem("Arty's brain refused the API key. Run `arty-cli login` to log in again.") from None
@@ -353,8 +437,4 @@ class Brain:
                 raise BrainError(f"Arty's brain is busy right now ({detail or error.code}). "
                                  "Try again in a minute.") from None
             raise BrainError(f"Arty's brain hit an error: {detail or error.code}") from None
-        except (OSError, http.client.HTTPException) as error:
-            self.route = None
-            raise BrainError(f"Lost the connection to Arty's brain at {route.url} ({plain_reason(error)}). "
-                             "Is the server still on?") from None
         return with_written_calls(reply, tools)
