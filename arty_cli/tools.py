@@ -42,6 +42,9 @@ CELL_IDS_FROM_MINOR = 5
 CELL_ID_CHARS = 8
 TEXT_OUTPUT = "text/plain"
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
+EXISTING_FILE_REFUSAL = ("{path} already exists, so write_file left it alone. Change it with edit_file: read it, "
+                         "copy the exact lines to change with 2 or 3 lines around them as old_text. Set "
+                         "overwrite to true only to replace the whole file.")
 NOTHING_TO_UNDO = "There is nothing to undo."
 MAX_CHECKPOINTS = 100
 NEW_FILE_MODE = 0o666
@@ -514,6 +517,8 @@ def notebook_json(notebook: dict) -> str:
 def planned_change(name: str, arguments: dict, workspace) -> tuple[Path, str, str]:
     target = workspace.resolve(arguments.get("path", ""))
     if name == "write_file":
+        if target.exists() and not arguments.get("overwrite"):
+            raise ToolError(EXISTING_FILE_REFUSAL.format(path=workspace.shown(target)))
         before = read_text(target) if target.exists() else ""
         return target, before, in_line_style_of(str(arguments.get("content", "")), before)
     if name == "edit_file":
@@ -556,8 +561,9 @@ def change_problem(workspace, name: str, arguments: dict) -> str:
     return ""
 
 
-def write_file(workspace, path, content):
-    target, before, after = changed_file(workspace, "write_file", {"path": path, "content": content})
+def write_file(workspace, path, content, overwrite=False):
+    arguments = {"path": path, "content": content, "overwrite": overwrite}
+    target, before, after = changed_file(workspace, "write_file", arguments)
     verb = "Updated" if before else "Created"
     return f"{verb} {workspace.shown(target)} ({len(after.splitlines())} lines)" + workspace.lint_note(target, after)
 
@@ -831,8 +837,11 @@ DEFINITIONS = [
                           "comes back as numbered cells with their text output.",
              {"path": TEXT, "offset": {**NUMBER, "description": "first line, from 1"},
               "limit": {**NUMBER, "description": "how many lines"}}, ["path"]),
-    function("write_file", "Create a file or replace all of it. Prefer edit_file for changes to an existing file.",
-             {"path": TEXT, "content": TEXT}, ["path", "content"]),
+    function("write_file", "Create a new file. An existing file is refused: change it with edit_file, or set "
+                           "overwrite to true only when the whole file really has to be replaced.",
+             {"path": TEXT, "content": TEXT,
+              "overwrite": {"type": "boolean", "description": "replace an existing file completely"}},
+             ["path", "content"]),
     function("edit_file", "Replace old_text with new_text in a file. old_text must match exactly once "
                           "(copy it from read_file without the line numbers) unless replace_all is true.",
              {"path": TEXT, "old_text": TEXT, "new_text": TEXT, "replace_all": {"type": "boolean"}},

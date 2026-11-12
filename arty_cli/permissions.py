@@ -342,6 +342,12 @@ class RuleFile:
         return True
 
 
+def change_verb(name: str, arguments: dict) -> str:
+    if name != "write_file":
+        return "Edit"
+    return "Overwrite" if arguments.get("overwrite") else "Write"
+
+
 def is_protected_place(path: Path, root: Path) -> bool:
     return path.is_relative_to(root) and any(part.lower() in PROTECTED_FOLDERS for part in path.relative_to(root).parts)
 
@@ -401,7 +407,7 @@ class Gate:
         return any(is_protected_place(candidate, root) for candidate in (as_written, self.workspace.resolve(path)))
 
     def confirm_protected_change(self, name: str, arguments: dict) -> str | None:
-        verb = "Write" if name == "write_file" else "Edit"
+        verb = change_verb(name, arguments)
         question = f"{verb} {arguments.get('path')}? ({PROTECTED_NOTE})"
         return None if self.ask(question, diff_preview(self.workspace, name, arguments)) in AGREEING else REFUSED
 
@@ -545,7 +551,7 @@ class Gate:
             return self.confirm(f"Change a file outside the project: {arguments.get('path')}?", preview)
         if self.mode == AUTO_EDIT or EDITS in self.always:
             return None
-        verb = "Write" if name == "write_file" else "Edit"
+        verb = change_verb(name, arguments)
         return self.confirm(f"{verb} {arguments.get('path')}?", preview, remember=EDITS,
                             rule=self.rule_for(name, arguments))
 

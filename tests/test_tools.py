@@ -179,7 +179,7 @@ def test_rewriting_a_windows_file_keeps_its_line_endings(workspace):
     target = workspace.root / "run.bat"
     target.write_bytes(b"a\r\nb\r\n")
     tools.run("read_file", {"path": "run.bat"}, workspace)
-    tools.run("write_file", {"path": "run.bat", "content": "a\nc\n"}, workspace)
+    tools.run("write_file", {"path": "run.bat", "content": "a\nc\n", "overwrite": True}, workspace)
     assert target.read_bytes() == b"a\r\nc\r\n"
 
 
@@ -428,7 +428,7 @@ def test_writes_are_atomic_and_keep_the_file_mode(tmp_path, monkeypatch):
     real_replace = tools.os.replace
     monkeypatch.setattr(tools.os, "replace", lambda source, destination: (replaced.append(destination),
                                                                            real_replace(source, destination)))
-    tools.run("write_file", {"path": "run.sh", "content": "echo two\n"}, workspace)
+    tools.run("write_file", {"path": "run.sh", "content": "echo two\n", "overwrite": True}, workspace)
     assert replaced == [target] and target.read_text() == "echo two\n"
     assert target.stat().st_mode & 0o777 == 0o755
     assert sorted(path.name for path in tmp_path.iterdir()) == ["run.sh"]
@@ -591,3 +591,24 @@ def test_the_tool_result_says_how_old_text_matched(workspace):
         {"old_text": "    if x:\n        return 3", "new_text": "    if x:\n        return 4"}]}, workspace)
     assert made.startswith("Made 2 edits to f.py") and "edit 2" in made and "spaces at line ends" in made
     assert (workspace.root / "f.py").read_text() == "def g(x):\n    if x:\n        return 4\n    return -1\n"
+
+
+def test_writing_over_an_existing_file_is_refused_and_points_to_edit_file(workspace):
+    tools.run("read_file", {"path": "src/app.py"}, workspace)
+    refused = tools.run("write_file", {"path": "src/app.py", "content": "x = 1\n"}, workspace)
+    assert refused.startswith("Error") and "edit_file" in refused and "overwrite" in refused
+    assert (workspace.root / "src" / "app.py").read_text() == "def add(a, b):\n    return a - b\n"
+
+
+def test_overwrite_true_replaces_an_existing_file_and_new_files_need_nothing(workspace):
+    tools.run("read_file", {"path": "src/app.py"}, workspace)
+    assert tools.run("write_file", {"path": "src/app.py", "content": "x = 1\n", "overwrite": True},
+                     workspace).startswith("Updated src/app.py")
+    assert (workspace.root / "src" / "app.py").read_text() == "x = 1\n"
+    assert tools.run("write_file", {"path": "new.py", "content": "y = 2\n"}, workspace).startswith("Created new.py")
+
+
+def test_the_write_file_definition_offers_overwrite():
+    write = next(item["function"] for item in tools.DEFINITIONS if item["function"]["name"] == "write_file")
+    assert write["parameters"]["properties"]["overwrite"]["type"] == "boolean"
+    assert "edit_file" in write["description"]

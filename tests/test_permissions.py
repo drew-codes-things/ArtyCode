@@ -549,3 +549,12 @@ def test_ordinary_looking_needs_no_ok_after_the_flag_checks(workspace, monkeypat
 
 def test_a_git_revision_and_path_is_not_a_drive_off_windows(workspace):
     assert asked_about(workspace, "git show HEAD:a.py") == []
+
+
+def test_an_overwrite_is_asked_about_as_an_overwrite(workspace):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.check("write_file", {"path": "a.py", "content": "y = 2\n", "overwrite": True})
+    gate.check("write_file", {"path": "b.py", "content": "y = 2\n"})
+    gate.check("write_file", {"path": ".arty/notes.md", "content": "x\n", "overwrite": True})
+    assert [question.split()[0] for question, _preview in ask.questions] == ["Overwrite", "Write", "Overwrite"]
