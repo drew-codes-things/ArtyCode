@@ -15,8 +15,8 @@ from urllib.parse import urlparse
 from arty_cli import extras as extras_module
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
-                       mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
-                       settings, skills, tools, waiting, webfetch)
+                       mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, rules, sandbox,
+                       sessions, settings, skills, tools, waiting, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
@@ -77,6 +77,7 @@ HELP_GROUPS = (
         "/plan": "plan mode on or off (look and plan, change nothing)",
         "/status": "model, mode, project and conversation size",
         "/remote [off]": "share this chat with your phone or starfire.ai (off to stop)",
+        "/rules [on|tell-only|off]": "built-in working rules: told and checked, told only, or off",
     }),
     ("Looking at the setup", {
         "/todos": "the current checklist",
@@ -323,6 +324,8 @@ def parse_arguments(argv):
     parser.add_argument("--auto-edit", action="store_true", help="same as --permission-mode auto-edit")
     parser.add_argument("--remote", action="store_true",
                         help="share the chat with Arty on your phone or starfire.ai from the start (same as /remote)")
+    parser.add_argument("--rules", choices=rules.LEVELS, default=None,
+                        help="built-in working rules for this run: on (told and checked), tell-only or off")
     parser.add_argument("--sandbox", action="store_true",
                         help="run commands in a sandbox: only the project folder is writable, no network")
     parser.add_argument("--version", action="version", version=f"arty-cli {__version__}")
@@ -499,7 +502,8 @@ class Session:
         notes = memory.instructions(self.workspace, self.personal, self.project_trusted)
         listed = skills.listing(self.extras.skills)
         mapped = self.workspace.repo_map.render() if self.workspace.repo_map else ""
-        notes = "\n\n".join(part for part in (notes, listed, mapped) if part)
+        built_in = rules.instructions(self.workspace)
+        notes = "\n\n".join(part for part in (built_in, notes, listed, mapped) if part)
         return [{"role": "system", "content": prompts.system_prompt(self.workspace, notes)}]
 
     def prompt_hook(self, text: str) -> str | None:
@@ -860,6 +864,7 @@ class Session:
             "/rewind": lambda: self.rewind(rest.strip()),
             "/resume": self.show_resumable,
             "/remote": lambda: self.switch_remote(rest.strip()),
+            "/rules": lambda: self.set_rules(rest.strip()),
             "/mcp": self.show_mcp,
             "/skills": self.show_skills,
             "/helpers": self.show_helpers,
@@ -878,6 +883,18 @@ class Session:
         else:
             self.terminal.note(f"Unknown command {name}. Type /help for the list.", "error")
         return True
+
+    def set_rules(self, wanted: str) -> None:
+        if wanted and wanted not in rules.LEVELS:
+            self.terminal.note(f"Unknown rules setting {wanted}: use {', '.join(rules.LEVELS[:-1])} or "
+                               f"{rules.LEVELS[-1]}.", "error")
+            return
+        if wanted:
+            self.workspace.rules = rules.Rules(wanted)
+            if self.messages and self.messages[0].get("role") == "system":
+                self.messages[0] = self.fresh()[0]
+        level = rules_level(self.workspace)
+        self.terminal.note(f"Rules: {level}: {rules.MEANINGS[level]}")
 
     def listed_models(self) -> models.Choices:
         self.choices = models.Choices(models.listed_for(self.client, self.client.model))
@@ -963,6 +980,11 @@ def welcome_row(terminal: Terminal, label: str, value: str, colour: str = "reset
     terminal.note(f"  {terminal.paint(f'{label:{WELCOME_LABEL_WIDTH}}', 'dim')}{terminal.paint(value, colour)}", "reset")
 
 
+def rules_level(workspace) -> str:
+    found = rules.rules_of(workspace)
+    return found.level if found is not None else rules.OFF
+
+
 def welcome(session: Session) -> None:
     terminal = session.terminal
     mode = session.gate.mode
@@ -970,6 +992,8 @@ def welcome(session: Session) -> None:
     welcome_row(terminal, "Folder", shown_folder(session.workspace.root, Path.home()))
     welcome_row(terminal, "Model", session.client.model, "accent")
     welcome_row(terminal, "Mode", f"{mode}: {MODE_MEANINGS.get(mode, '')} (Shift+Tab to change)")
+    level = rules_level(session.workspace)
+    welcome_row(terminal, "Rules", f"{level}: {rules.MEANINGS[level]} (/rules to change)")
     if mode == permissions.ALLOW_ALL:
         terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
     terminal.note("")
@@ -1070,6 +1094,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         workspace.lint = lint.Checker(workspace.root)
     if repomap.wanted(settings.config_dir(), workspace.root, trusted):
         workspace.repo_map = repomap.RepoMap(workspace.root, settings.config_dir() / REPO_MAP_FOLDER)
+    workspace.rules = rules.Rules(rules.chosen(settings.config_dir(), workspace.root, trusted, arguments.rules))
     choice = sandbox.chosen(settings.config_dir(), workspace.root, trusted, arguments.sandbox)
     workspace.sandbox = sandbox.Sandbox(workspace.root, choice, secret_paths=(settings.config_dir(),))
     loaded = session_extras(workspace, trusted, terminal, client.search_web)

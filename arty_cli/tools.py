@@ -117,6 +117,7 @@ class Workspace:
         self.lint = None
         self.repo_map = None
         self.sandbox = None
+        self.rules = None
 
     def lint_note(self, path: Path, text: str) -> str:
         if self.lint is None:

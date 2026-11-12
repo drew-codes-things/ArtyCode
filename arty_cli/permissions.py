@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from arty_cli import tools
+from arty_cli import rules, tools
 
 YES, NO, ALWAYS, SAVE = "y", "n", "a", "s"
 AGREEING = (YES, ALWAYS, SAVE)
@@ -472,6 +472,8 @@ class Gate:
         denied = self.rule_refusal(name, arguments)
         if denied:
             return denied
+        if self.mode != PLAN and rules.is_record_change(self.workspace, name, arguments):
+            return rules.append_only_refusal(self.workspace, name, arguments)
         if self.mode == ALLOW_ALL or name in FREE_TOOLS:
             return None
         if name in tools.CHANGING_TOOLS and self.mode != PLAN and self.protects(arguments):

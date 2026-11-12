@@ -5,7 +5,7 @@ import re
 import threading
 
 from arty_cli import extras as extra_tools
-from arty_cli import hooks, permissions, tools
+from arty_cli import checks, hooks, permissions, tools
 
 MAX_ROUNDS = 40
 STUCK_REPEATS = 3
@@ -359,6 +359,7 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
         blocked = f"{HOOK_BLOCKED} {before.feedback}".strip()
         tell(helpers.screen, "show_outcome", one_line(blocked), True)
         return blocked
+    watched = checks.watch(helpers.workspace, name, arguments)
     if name == "explore":
         if not can_explore:
             return "Error: a helper can't start another helper; look for it yourself"
@@ -371,6 +372,7 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
         result = performed(name, arguments, helpers.workspace, helpers.gate, extras, done, before.decision,
                            before.feedback)
     tell(helpers.screen, "show_outcome", *outcome_line(name, result))
+    result = checks.checked_result(helpers.workspace, watched, result)
     result = tools.clipped(result, MAX_RESULT_CHARS)
     if before.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {before.context}"
@@ -464,6 +466,8 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
     helpers = Helpers(brain, workspace, gate, screen, extras)
     recent, continued, steered_from, nudged = [], 0, None, False
     approved_with, reminded = None, False
+    if stop_hooks:
+        checks.start_turn(workspace)
     for _round in range(MAX_ROUNDS + 1):
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED
@@ -482,6 +486,8 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
             if not nudged and offered and announces_a_next_step(content):
                 nudged = True
                 messages.append({"role": "user", "content": DO_IT_NOW})
+                continue
+            if stop_hooks and checks.sent_back(workspace, messages, content, screen):
                 continue
             if stop_hooks and asked_to_carry_on(messages, extras, screen, continued):
                 continued += 1
