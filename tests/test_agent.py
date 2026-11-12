@@ -98,6 +98,29 @@ def test_bad_arguments_from_the_model_are_reported_back(tmp_path):
     assert result.startswith("Error") and "JSON" in result
 
 
+def tool_results_sent(scripted, round_index):
+    return [m["content"] for m in scripted.sent[round_index]["messages"] if m["role"] == "tool"]
+
+
+def test_booleans_written_as_words_are_read_strictly(tmp_path):
+    (tmp_path / "twice.txt").write_text("alpha\nalpha\n")
+    workspace = tools.Workspace(tmp_path)
+    scripted = ScriptedBrain(
+        ("", [call("read_file", path="twice.txt")]),
+        ("", [call("edit_file", "c2", path="twice.txt", old_text="alpha", new_text="gamma", replace_all="false"),
+              call("run_command", "c3", command="cat twice.txt", background="false"),
+              call("edit_file", "c4", path="twice.txt", old_text="alpha", new_text="gamma", replace_all="maybe")]),
+        ("Done.", []),
+    )
+    agent.run_turn([{"role": "user", "content": "edit"}], scripted, workspace,
+                   permissions.Gate(workspace, permissions.refuse, mode=permissions.AUTO_EDIT), Screen())
+    edited, ran, unclear = tool_results_sent(scripted, 2)[1:]
+    assert edited.startswith("Error") and "2 places" in edited
+    assert (tmp_path / "twice.txt").read_text() == "alpha\nalpha\n"
+    assert "alpha" in ran and "Job" not in ran
+    assert unclear.startswith("Error") and "replace_all" in unclear
+
+
 def test_a_long_job_stops_after_the_step_limit(tmp_path):
     (tmp_path / "a.txt").write_text("a\n")
     workspace = tools.Workspace(tmp_path)

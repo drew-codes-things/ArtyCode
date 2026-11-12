@@ -42,6 +42,8 @@ TEXT_OUTPUT = "text/plain"
 TODO_MARKS = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 NOTHING_TO_UNDO = "There is nothing to undo."
 MAX_CHECKPOINTS = 100
+TRUE_WORDS = ("true", "yes", "1")
+FALSE_WORDS = ("false", "no", "0")
 
 
 class ToolError(Exception):
@@ -699,6 +701,37 @@ DEFINITIONS = [
     function("web_fetch", "Fetch a web page (documentation, an issue, an API reference) as text.",
              {"url": TEXT}, ["url"]),
 ]
+
+PROPERTIES = {definition["function"]["name"]: definition["function"]["parameters"]["properties"]
+              for definition in DEFINITIONS}
+
+
+def strict_boolean(key: str, value) -> bool:
+    if value is None or isinstance(value, bool):
+        return bool(value)
+    word = str(value).strip().lower()
+    if word in TRUE_WORDS:
+        return True
+    if word in FALSE_WORDS:
+        return False
+    raise ToolError(f"{key} should be true or false, not {value!r}")
+
+
+def typed_value(key: str, schema: dict, value):
+    if schema.get("type") == "boolean":
+        return strict_boolean(key, value)
+    item_properties = (schema.get("items") or {}).get("properties")
+    if schema.get("type") == "array" and item_properties and isinstance(value, list):
+        return [typed_values(item_properties, item) if isinstance(item, dict) else item for item in value]
+    return value
+
+
+def typed_values(properties: dict, values: dict) -> dict:
+    return {key: typed_value(key, properties.get(key, {}), value) for key, value in values.items()}
+
+
+def typed_arguments(name: str, arguments: dict) -> dict:
+    return typed_values(PROPERTIES.get(name, {}), arguments)
 
 
 def run(name: str, arguments: dict, workspace: Workspace) -> str:

@@ -209,9 +209,13 @@ def call_parts(call: dict) -> tuple[str, dict | None, str]:
     function = call.get("function") or {}
     name = function.get("name", "")
     try:
-        return name, parsed_arguments(function.get("arguments")), ""
+        arguments = parsed_arguments(function.get("arguments"))
     except ValueError as error:
         return name, None, f"Error: the arguments for {name} weren't valid JSON ({error}); send them again"
+    try:
+        return name, tools.typed_arguments(name, arguments), ""
+    except tools.ToolError as error:
+        return name, None, f"Error: {error}; send the call again"
 
 
 def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extras) -> str:
