@@ -1,6 +1,9 @@
 import contextlib
+import json
 
-from arty_cli import agent, cli, context, prune, tools
+import pytest
+
+from arty_cli import agent, cli, context, prune, sessions, tools
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
 
@@ -255,3 +258,70 @@ def test_a_prompt_the_brain_refuses_as_too_long_is_pruned_harder_and_sent_again_
     assert session.ask("read big.py")
     assert brain.window_refused == 1 and session.messages[-1]["content"] == "Done."
     assert any(result.startswith(prune.STUB_LEAD) for result in brain.tool_results())
+
+
+class CrashOnThird(ScriptedBrain):
+    def reply(self, messages, tools, on_text):
+        if len(self.prompts) == 2:
+            raise RuntimeError("the laptop lost power")
+        return super().reply(messages, tools, on_text)
+
+
+def test_every_finished_round_is_on_disk_before_the_next_model_call(project):
+    (project / "a.txt").write_text("alpha\n")
+    brain = CrashOnThird([[("read_file", {"path": "a.txt"})],
+                          [("todo_write", {"items": [{"text": "Read a.txt", "status": "done"}]})]])
+    session = session_for(project, brain)
+    with pytest.raises(RuntimeError):
+        session.ask("read a.txt")
+    stored = json.loads(session.saved.path.read_text())
+    assert [message["role"] for message in stored["messages"][1:]] == ["user", "assistant", "tool", "assistant", "tool"]
+    assert stored["todos"] == [{"text": "Read a.txt", "status": "done"}]
+
+
+def saved_with_old_prompt(project) -> sessions.Saved:
+    saved = sessions.Store(project.parent / "sessions").start(project)
+    saved.save([{"role": "system", "content": "an old system prompt"}, {"role": "user", "content": "make calc.py"},
+                {"role": "assistant", "content": "Made it."}], "arty/scripted",
+               todos=[{"text": "Write calc.py", "status": "done"}],
+               checkpoints=[tools.Checkpoint((project / "calc.py").resolve(), None, "x = 1\n")])
+    return saved
+
+
+def test_a_resumed_conversation_gets_todays_system_prompt_checklist_and_undo(project):
+    (project / "calc.py").write_text("x = 1\n")
+    saved = saved_with_old_prompt(project)
+    loaded = sessions.Store(project.parent / "sessions").load(project, saved.id)
+    session = session_for(project, ScriptedBrain([]), saved=loaded)
+    assert session.messages[0]["content"] == session.fresh()[0]["content"]
+    assert session.workspace.todos == [{"text": "Write calc.py", "status": "done"}]
+    session.undo()
+    assert not (project / "calc.py").exists()
+
+
+def test_resume_offers_a_pick_list_in_the_interface_and_switches_in_place(project):
+    (project / "calc.py").write_text("x = 1\n")
+    saved = saved_with_old_prompt(project)
+    session = session_for(project, ScriptedBrain([]))
+    picked = []
+
+    class Console:
+        def choose(self, question, choices):
+            picked.append(choices)
+            return choices[0][0]
+
+    session.personal = project.parent
+    session.terminal.console = Console()
+    session.command("/resume")
+    assert picked[0][0][0] == saved.id and "make calc.py" in picked[0][0][1]
+    assert session.saved.id == saved.id
+    assert [message["content"] for message in session.messages[1:]] == ["make calc.py", "Made it."]
+    assert session.workspace.todos == [{"text": "Write calc.py", "status": "done"}]
+
+
+def test_resume_with_an_id_switches_in_place_at_the_plain_prompt(project):
+    saved = saved_with_old_prompt(project)
+    session = session_for(project, ScriptedBrain([]))
+    session.personal = project.parent
+    session.command(f"/resume {saved.id}")
+    assert session.saved.id == saved.id and session.messages[1]["content"] == "make calc.py"

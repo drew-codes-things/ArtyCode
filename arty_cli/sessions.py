@@ -4,12 +4,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from arty_cli import settings
+from arty_cli import settings, tools
 
 PROJECT_KEY_CHARS = 16
 FIRST_REQUEST_CHARS = 70
 STAMP_FORMAT = "%Y%m%d-%H%M%S-%f"
 ONE_TICK = timedelta(microseconds=1)
+MAX_SAVED_CHECKPOINTS = 20
 
 
 def first_request_of(messages: list[dict]) -> str:
@@ -22,21 +23,42 @@ def first_request_of(messages: list[dict]) -> str:
     return ""
 
 
+def stored_checkpoint(checkpoint: tools.Checkpoint) -> dict:
+    return {"path": str(checkpoint.path), "before": checkpoint.before, "after": checkpoint.after}
+
+
+def checkpoint_from(stored) -> tools.Checkpoint | None:
+    if not isinstance(stored, dict) or not isinstance(stored.get("path"), str) or not isinstance(stored.get("after"), str):
+        return None
+    before = stored.get("before")
+    return tools.Checkpoint(Path(stored["path"]), before if isinstance(before, str) else None, stored["after"])
+
+
+def todos_from(stored) -> list[dict]:
+    if not isinstance(stored, list):
+        return []
+    return [item for item in stored if isinstance(item, dict) and item.get("status") in tools.TODO_MARKS]
+
+
 @dataclass
 class Saved:
     id: str
     path: Path
     messages: list = field(default_factory=list)
     model: str = ""
+    todos: list = field(default_factory=list)
+    checkpoints: list = field(default_factory=list)
 
     @property
     def first_request(self) -> str:
         return first_request_of(self.messages)
 
-    def save(self, messages: list[dict], model: str) -> None:
+    def save(self, messages: list[dict], model: str, todos=None, checkpoints=None) -> None:
         self.messages, self.model = messages, model
+        self.todos, self.checkpoints = list(todos or []), list(checkpoints or [])[-MAX_SAVED_CHECKPOINTS:]
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        settings.write_private_json(self.path, {"model": model, "messages": messages})
+        settings.write_private_json(self.path, {"model": model, "messages": messages, "todos": self.todos,
+                                                "checkpoints": [stored_checkpoint(kept) for kept in self.checkpoints]})
 
 
 class Store:
@@ -66,7 +88,9 @@ class Store:
             return None
         if not isinstance(stored, dict) or not isinstance(stored.get("messages"), list):
             return None
-        return Saved(path.stem, path, stored["messages"], str(stored.get("model") or ""))
+        found = [checkpoint_from(kept) for kept in stored.get("checkpoints") or []]
+        return Saved(path.stem, path, stored["messages"], str(stored.get("model") or ""), todos_from(stored.get("todos")),
+                     [kept for kept in found if kept is not None])
 
     def listed(self, project: Path) -> list[Saved]:
         folder = self.folder(project)

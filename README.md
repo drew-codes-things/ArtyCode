@@ -261,7 +261,7 @@ arty -p "what does main.py do?"              # ask once and exit
 arty -p "list the TODOs" --output-format json  # ask once, one JSON object back
 arty -p "fix the build" --output-format stream-json  # one JSON line per step as it works
 arty --continue                              # carry on with the last conversation here
-arty --resume <id>                           # an earlier one (/resume lists them)
+arty --resume <id>                           # an earlier one (/resume picks one in the chat)
 arty --remote                                # chat, shared with your phone and starfire.ai (see Remote control)
 ```
 
@@ -308,7 +308,7 @@ first time you start ArtyCode in a folder that has its own `ARTY.md` or `AGENTS.
 repo could put instructions or programs there); until you say yes, they are left out. If `.arty/settings.json` or
 `.arty/mcp.json` change later (a pull, a branch switch), it asks again. Adding a `# note` never trusts a folder.
 Your own prompts go in `.arty/commands/<name>.md` (or `commands/` in the config folder) and run as `/<name> words`,
-with `$ARGUMENTS` replaced by the words. Conversations are saved per project in the config folder's `sessions/`.
+with `$ARGUMENTS` replaced by the words. Conversations are saved per project in the config folder's `sessions/`, after every step (so a crash or a closed terminal loses at most the step in progress), with the checklist and the last 20 `/undo` steps. `/resume` picks one from a list in the interface (or `/resume <id>` at the plain prompt) and carries on with it in place; a resumed conversation gets today's system prompt, notes and rules.
 While it works, a dim status line says what it is doing, for how long the request has been going, how many tokens the
 model has written so far and how to stop it: `• Thinking… (1m 05s · ↓ 1.2k tokens · esc to interrupt)` while it waits
 for the model, `• Run npm install (2m 10s · ...)` while a step runs. It is wiped as soon as the answer or a step

@@ -198,4 +198,4 @@ def test_resume_lists_this_projects_conversations_and_how_to_carry_one_on(connec
     shown = capsys.readouterr().err
     listed = [line for line in shown.splitlines() if "hello there" in line and not line.startswith("›")]
     assert listed
-    assert "Carry on with: arty-cli --resume <id>" in shown
+    assert cli.RESUME_HINT in shown and cli.THIS_SESSION in shown

@@ -86,7 +86,7 @@ def session_for(tmp_path, out=None, err=None):
     class Saved:
         messages, id, model = [], "s1", ""
 
-        def save(self, messages, model):
+        def save(self, messages, model, **kept):
             pass
 
     return cli.Session(FakeBrain(settings.Settings(base_url="http://b/v1", api_key="k")), workspace, gate, terminal,

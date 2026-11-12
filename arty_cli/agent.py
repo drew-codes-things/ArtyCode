@@ -621,7 +621,7 @@ def replied(brain, messages: list[dict], offered: list[dict], screen, squeeze) -
 
 
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
-             squeeze=None, extras=None, stop_hooks=True, stopped=None, steer=None) -> str:
+             squeeze=None, extras=None, stop_hooks=True, stopped=None, steer=None, on_round=None) -> str:
     extras = extras or extra_tools.NONE
     offered = offered_definitions(extras) + planning_definitions(gate) if offered is None else offered
     if stop_hooks:
@@ -672,6 +672,8 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
                 approved_with = len(done)
         if squeeze:
             squeeze(messages)
+        if on_round:
+            on_round()
         steered = steer() if steer else []
         if steered:
             messages.extend(steered)

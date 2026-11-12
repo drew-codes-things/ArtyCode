@@ -65,6 +65,9 @@ START_CONTEXT_LEAD = "(Added by a SessionStart hook:)"
 MANUAL, AUTOMATIC = "manual", "auto"
 STARTUP, RESUME, CLEAR = "startup", "resume", "clear"
 MAX_TURN_CHARS = 80
+MAX_LISTED_SESSIONS = 20
+THIS_SESSION = "  (this one)"
+RESUME_HINT = "Carry on with one here with /resume <id>, or start with arty-cli --resume <id>."
 PERMISSION_PROMPT, PLAN_APPROVAL = "permission_prompt", "plan_approval"
 NOTIFICATION_LEADS = {PERMISSION_PROMPT: "ArtyCode needs your permission",
                       PLAN_APPROVAL: "ArtyCode has a plan for you to approve"}
@@ -88,7 +91,7 @@ HELP_GROUPS = (
         "/undo": "put back the last file change Arty made (again for the one before)",
         "/rewind [number]": "list your requests, or go back to before one and its file changes",
         "/clear": "start a fresh conversation",
-        "/resume": "list this project's earlier conversations",
+        "/resume [id]": "pick an earlier conversation in this project and carry on with it",
         "/compact": "swap the conversation for a summary to free up room",
     }),
     ("Settings", {
@@ -711,7 +714,15 @@ class Session:
         client.on_thinking = terminal.count_thinking
         self.remote = None
         self.remote_name = ""
-        self.messages = saved.messages or self.fresh()
+        self.messages = self.restored(saved)
+
+    def restored(self, saved) -> list[dict]:
+        self.workspace.todos = list(getattr(saved, "todos", None) or [])
+        self.workspace.checkpoints = list(getattr(saved, "checkpoints", None) or [])
+        kept = list(saved.messages or [])
+        if not kept:
+            return self.fresh()
+        return self.fresh() + kept[1:] if kept[0].get("role") == "system" else self.fresh() + kept
 
     def fresh(self) -> list[dict]:
         notes = memory.instructions(self.workspace, self.personal, self.project_trusted)
@@ -731,7 +742,8 @@ class Session:
         return f"{text}\n\n{HOOK_CONTEXT_LEAD}\n{outcome.context}" if outcome.context else text
 
     def remember(self) -> None:
-        self.saved.save(self.messages, self.client.model)
+        self.saved.save(self.messages, self.client.model, todos=self.workspace.todos,
+                        checkpoints=self.workspace.checkpoints)
 
     def offered(self) -> list[dict]:
         return agent.offered_definitions(self.extras)
@@ -782,7 +794,8 @@ class Session:
         try:
             with self.running(remote.IN_TURN), self.terminal.interruptible():
                 agent.run_turn(self.messages, self.client, self.workspace, self.gate, self.terminal, done=self.done,
-                               squeeze=self.squeeze, extras=self.extras, steer=self.steering_messages)
+                               squeeze=self.squeeze, extras=self.extras, steer=self.steering_messages,
+                               on_round=self.remember)
         except KeyboardInterrupt:
             self.abandon_turn(self.done, (self.remote.stop_reason() if self.remote else "") or "Stopped.")
             return False
@@ -1038,14 +1051,44 @@ class Session:
             self.terminal.note(f"No notes yet. /init writes {self.workspace.root / memory.MEMORY_FILE}; "
                                f"'# note' adds one line; {self.personal / memory.MEMORY_FILE} holds notes for every project.")
 
-    def show_resumable(self) -> None:
+    def resumable(self) -> list:
         listed = sessions.Store(self.personal / SESSIONS_FOLDER).listed(self.workspace.root)
+        return [entry for entry in listed if entry.messages][:MAX_LISTED_SESSIONS]
+
+    def session_line(self, entry) -> str:
+        return f"{entry.id}  {entry.first_request}{THIS_SESSION if entry.id == self.saved.id else ''}"
+
+    def resume(self, wanted: str) -> None:
+        if not wanted:
+            self.show_resumable()
+            return
+        if wanted == self.saved.id:
+            self.terminal.note("That is this conversation already.")
+            return
+        found = sessions.Store(self.personal / SESSIONS_FOLDER).load(self.workspace.root, wanted)
+        if found is None:
+            self.terminal.note(f"No conversation {wanted} in this project; /resume lists them.", "error")
+            return
+        self.saved = found
+        self.messages = self.restored(found)
+        self.turns = []
+        self.start_hook(RESUME)
+        self.terminal.note(f"Carrying on with {found.id}: {found.first_request}", "green")
+
+    def show_resumable(self) -> None:
+        listed = self.resumable()
         if not listed:
             self.terminal.note("No earlier conversations in this project.")
-        for entry in listed[:20]:
-            self.terminal.note(f"{entry.id}  {entry.first_request}")
-        if listed:
-            self.terminal.note("Carry on with: arty-cli --resume <id>")
+            return
+        if self.terminal.console:
+            picked = self.terminal.console.choose("Carry on with which conversation?",
+                                                  [(entry.id, self.session_line(entry)) for entry in listed])
+            if picked:
+                self.resume(picked)
+            return
+        for entry in listed:
+            self.terminal.note(self.session_line(entry))
+        self.terminal.note(RESUME_HINT)
 
     def show_mcp(self) -> None:
         hub = self.extras.hub
@@ -1212,7 +1255,7 @@ class Session:
             "/compact": lambda: self.compact() and self.terminal.note("Summarised."),
             "/undo": self.undo,
             "/rewind": lambda: self.rewind(rest.strip()),
-            "/resume": self.show_resumable,
+            "/resume": lambda: self.resume(rest.strip()),
             "/remote": lambda: self.switch_remote(rest.strip()),
             "/rules": lambda: self.set_rules(rest.strip()),
             "/mcp": self.show_mcp,

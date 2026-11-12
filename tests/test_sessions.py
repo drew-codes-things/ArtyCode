@@ -89,3 +89,31 @@ def test_saving_over_an_open_conversation_makes_it_private(tmp_path):
     saved.path.chmod(0o644)
     saved.save([{"role": "user", "content": "x"}], "arty/a")
     assert stat.S_IMODE(os.stat(saved.path).st_mode) == 0o600
+
+
+def test_the_checklist_and_undo_steps_are_saved_and_come_back(tmp_path):
+    store = sessions.Store(tmp_path / "sessions")
+    saved = store.start(tmp_path / "p")
+    file = tmp_path / "p" / "a.py"
+    saved.save([{"role": "user", "content": "go"}], "m", todos=[{"text": "Write a.py", "status": "done"}],
+               checkpoints=[sessions.tools.Checkpoint(file, None, "x = 1\n")])
+    found = store.load(tmp_path / "p", saved.id)
+    assert found.todos == [{"text": "Write a.py", "status": "done"}]
+    assert found.checkpoints == [sessions.tools.Checkpoint(file, None, "x = 1\n")]
+
+
+def test_only_the_newest_undo_steps_are_saved(tmp_path):
+    saved = sessions.Store(tmp_path / "sessions").start(tmp_path / "p")
+    many = [sessions.tools.Checkpoint(tmp_path / f"{number}.py", None, "x") for number in range(50)]
+    saved.save([], "m", checkpoints=many)
+    stored = json.loads(saved.path.read_text())["checkpoints"]
+    assert len(stored) == sessions.MAX_SAVED_CHECKPOINTS and stored[-1]["path"].endswith("49.py")
+
+
+def test_a_session_saved_before_checklists_were_kept_still_loads(tmp_path):
+    store = sessions.Store(tmp_path / "sessions")
+    saved = store.start(tmp_path / "p")
+    saved.path.parent.mkdir(parents=True)
+    saved.path.write_text(json.dumps({"model": "m", "messages": [{"role": "user", "content": "hi"}]}))
+    found = store.load(tmp_path / "p", saved.id)
+    assert found.todos == [] and found.checkpoints == []
