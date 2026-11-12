@@ -5,14 +5,14 @@
 **A coding assistant in your terminal: it reads, edits and runs code in the folder you start it in, and asks before it changes anything. It runs on your own Arty.**
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)
-![Dependencies](https://img.shields.io/badge/dependencies-prompt__toolkit-success?style=flat-square)
+![Dependencies](https://img.shields.io/badge/dependencies-prompt__toolkit%20%7C%20pygments-success?style=flat-square)
 [![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](LICENSE)
 
 [Project home](https://github.com/drew-codes-things/ArtyCode) · [Arty, the assistant it belongs to](https://github.com/drew-codes-things/Arty)
 
 </div>
 
-![ArtyCode finding why a test fails, showing the fix as a diff and asking before it edits the file and runs the test](screenshot.png)
+![ArtyCode in its own terminal interface: the welcome card, a request, steps with their results, a numbered diff and a permission panel above the input box](screenshot.png)
 
 ---
 
@@ -48,9 +48,14 @@ Each question lists its answers under it, one per line with its key, then asks `
 (yes), **a** (yes, and don't ask again for this until you quit) or **n** (no). After **n** typed here, ArtyCode asks
 `What should Arty do instead?`: what you write goes to the model with the refusal, so it changes course instead of
 stopping, and Enter on its own just says no. "Always" lasts until you quit: for edits it covers every edit, for a
-command only that exact command. In a trusted project there is also **s** (save as a project rule): the answer is
-written to `.arty/settings.json` as an allow rule (below) for that exact command, that file, that site or that tool, so
-later sessions don't ask either. When no rule fits (a chained command, say), **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
+command the program and its subcommand words, which the question names (`Yes, and don't ask again for
+\`python3 -m pytest\` commands until you quit`), so `python3 -m pytest -q`, `python3 -m pytest 2>&1 | tail -40` and
+`python3 -m pytest | grep -E "FAILED|ERROR"` are covered too. A command whose words decide what it touches or runs
+(`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like) or one with `$`, backticks,
+`(`, `<` or output written to a file is only ever remembered exactly, as before. In a trusted project there is also
+**s** (save as a project rule): the answer is written to `.arty/settings.json` as an allow rule (below), for a command
+as `run_command(python3 -m pytest:*)`, for that file, that site or that tool, so later sessions don't ask either. When
+no rule fits, **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
 Every tool result the model sees is cut to about a quarter of the room the conversation has before it is summarised (about 16,000 characters on a 24,576-token window); `read_file` says where to read on, so a long file is read in windows. An `@file` attachment is read the same way.
 
 `--permission-mode` (or `/mode` in the chat) sets how much is asked: `default`; `auto-edit` (edits inside the project
@@ -63,20 +68,85 @@ auto-edit, plan, then default again. allow-all is never reached with Shift+Tab, 
 ### The terminal interface
 
 On a terminal ArtyCode runs as its own interface inside it (built on [prompt_toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit),
-its one dependency). It doesn't take over the screen: everything it prints stays in the terminal's normal scrollback,
-and an input box stays pinned underneath.
+with [Pygments](https://pygments.org) colouring code). It doesn't take over the screen: everything it prints stays in
+the terminal's normal scrollback, and only the live part at the bottom (status, questions, the input box and the
+footer) is redrawn.
 
 ```
-● Run python3 -m pytest test_greet.py
-  └ 1 passed in 0.01s (exit code 0)
-  queued: also update the README
-• Thinking… (12s · ↓ 340 tokens · esc to interrupt)
-──────────────────────────────────────────────────────────────
-› and then
-──────────────────────────────────────────────────────────────
-  default mode (shift+tab to cycle) · esc to interrupt
+╭─ ◆ ArtyCode 0.1.0 ───────────────────────────────╮
+│ model   arty/qwen3:14b                           │
+│ folder  ~/calc-demo                              │
+│ mode    default: asks before it changes anything │
+│ rules   off                                      │
+╰──────────────────────────────────────────────────╯
+
+› fix the add function in calc.py
+
+● Read calc.py
+  └ 2 lines
+
+✻ Thought for 2s
+● Run python3 -c "for n in range(1, 41): print(f'line {n} of the long output')"
+Run: python3 -c "for n in range(1, 41): print(f'line {n} of the long output')" → Yes
+  └ line 40 of the long output (exit code 0)
+    line 1 of the long output
+    line 2 of the long output
+    line 3 of the long output
+    … +37 lines (ctrl+o or /last to see all)
+
+✻ Thought for 2s
+● Edit calc.py
+    1  def add(a, b):
+    2 -    return a - b
+    2 +    return a + b
+Edit calc.py? → Yes
+  └ Edited calc.py +1 -1
+
+✻ Thought for 2s
+● Run python3 -c "import calc; assert calc.add(2, 3) == 6, 'add(2, 3) gave 5'"
+Run: python3 -c "import calc; assert calc.add(2, 3) == 6, 'add(2, 3) gave 5'" → Yes
+  └ AssertionError: add(2, 3) gave 5 (exit code 1)
+    … 2 lines above (ctrl+o or /last to see all)
+        import calc; assert calc.add(2, 3) == 6, 'add(2, 3) gave 5'
+                            ^^^^^^^^^^^^^^^^^^^
+    AssertionError: add(2, 3) gave 5
+
+● What I changed
+
+  The bug was in calc.py: add subtracted instead of adding.
+
+  • Fixed add so it returns a + b
+  • Ran a quick check, which failed on purpose to show an error
+
+  │ def add(a, b):
+  │     return a + b
+
+  Run the check again with python3 -m pytest.
+
+Worked for 20s · 6 steps · ↓ 2.1k tokens
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ › Ask Arty to fix, explain or build something                                                              │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  default mode (shift+tab to cycle) · ? for shortcuts                       arty/qwen3:14b · 90% context left
 ```
 
+- **Welcome card.** A bordered card with the model, folder, mode and rules, then two short tips.
+- **Your messages** are drawn as a shaded block starting with `›`, so they stand out from what Arty writes.
+- **Answers** are rendered as they stream: headings and `**bold**` turn bold, `` `code` `` and lists are drawn
+  without their marks, and fenced code keeps its spacing behind a `│` with its syntax coloured.
+- **Steps.** Each step is a `●` line in plain words (`Read greet.py`, `Run pytest -q`) with its result hung under it
+  after `└`. The bullet turns green when the step went well and red when it failed. Command, search and listing
+  output shows its first three lines and how many more there are (the last three for a failed command, where the error
+  is); **Ctrl-O** or `/last` prints the whole result of the last step with output.
+- **Edits** are shown as a diff with line numbers, removed lines red and added lines green, and the result line counts
+  them (`└ Edited greet.py +1 -1`). In auto-edit mode, where nothing is asked first, the diff is drawn after the edit.
+- **Status.** One line above the box shows a spinner, what is happening (`Thinking…` or the step), for how long, the
+  tokens so far and that Esc interrupts. On a narrow window the details shorten before the label does.
+- **The box** has a border and a placeholder, and grows as you type several lines. Under it the footer shows the mode,
+  `? for shortcuts`, and on the right the model, the git branch and how much of the context is left before the
+  conversation gets summarised; on a narrow window the extras drop away first.
+- **Shortcuts.** `?` in an empty box opens a panel of keys under it; Enter there shows `/help`, Esc or `?` closes it,
+  and typing anything else closes it and keeps what you typed.
 - **Typing while Arty works.** The box is always live. Enter while a request runs queues your message (shown as
   `queued: ...` above the box). A plain message reaches Arty at its next step, so it can change course mid-request;
   a `/command`, `!command` or `# note` waits until the turn ends. **Esc** stops the running request, keeping every step
@@ -89,13 +159,16 @@ and an input box stays pinned underneath.
   `history/`, readable only by you). **Ctrl-R** searches them.
 - **Several lines.** Alt+Enter (or Ctrl-J, or a line ending in `\`) starts another line; pasted text of several lines
   stays one message.
-- **Status.** One line just above the box says what is happening, for how long and how many tokens so far, and
-  updates in place. The line being written by the model shows above it until it is complete.
-- **Questions.** Permission questions, plan approval and the model list from `/model` are asked in the interface:
-  move with Up and Down or press the answer's letter or number, Enter confirms, Esc refuses. The answer is then
-  noted in the scrollback (`Edit greet.py? → Yes`). "What should Arty do instead?" and plan feedback are typed in the
-  box (what you were writing is put back afterwards). With remote control on, an answer from another device still
-  wins or loses the same way as before.
+- **Questions.** Permission questions, plan approval and the model list from `/model` are asked in a bordered panel
+  that takes the box's place: move with Up and Down or press the answer's letter or number, Enter confirms, Esc
+  refuses. The answer is then noted in the scrollback (`Edit greet.py? → Yes`). "What should Arty do instead?" and
+  plan feedback are typed in the box (what you were writing is put back afterwards). With remote control on, an answer
+  from another device still wins or loses the same way as before.
+- **Notices.** When a permission question is waiting, or a request finishes after more than 30 seconds, the terminal
+  bell rings and, on Linux with `notify-send`, a desktop notice appears. Set `notify` to `off` in the config file (or
+  `ARTY_CLI_NOTIFY=off`) to turn both off.
+- **Resizing.** Making the window narrower or wider redraws the live part in place, also on terminals that rewrap
+  their lines (tmux, a phone's web terminal), so a question is never left behind twice.
 
 `--plain` keeps the line-at-a-time prompt instead: a `›` between two rules with the mode bar under it, read with
 readline on Linux (arrow keys and history work) and key by key on Windows. The plain prompt is also what you get
@@ -103,7 +176,8 @@ when output isn't a terminal, with `-p`, and when the interface can't start (it 
 
 ### Look-only commands
 
-`ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project.
+`ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project,
+also when joined by pipes or `&&` (`cat a.py | grep -n x`), as long as there is no `$`, backtick or file redirection.
 Every path is read the way the shell would: `~`, `~+` and `~-`, wildcards (each match is followed through links), and
 Windows backslash, drive and network paths. Anything that reaches outside the project, or can't be read, asks first,
 in plan mode and in helpers too. A command also asks when it uses an option that writes, runs a program or follows
@@ -126,9 +200,14 @@ Saved rules skip or forbid questions. Put them in `settings.json` in the config 
 ```
 
 A rule is a tool name, or a tool name with a wildcard pattern in brackets that is matched against the path (relative
-to the project), the command, the address or the list pattern. Deny wins over everything, including `allow-all` and
-hooks, and is checked against each part of a chained command. An allow rule never matches a command with `;`, `&&`,
-`|`, `$` or redirection in it, and never lets plan mode change anything.
+to the project), the command, the address or the list pattern. A command pattern ending in `:*`, such as
+`run_command(npm test:*)`, is a prefix: it matches any command whose first words are those words. Deny wins over
+everything, including `allow-all` and hooks, and is checked against each part of a chained command. A chained command
+or pipeline (`|`, `&&`, `||`, `;`, a new line) is allowed only when every part is: a part matches an allow rule or a
+prefix allowed with **a**, or, after a `|`, is only a look-only filter (`tail`, `head`, `grep`, `wc`, `sort`, `uniq`,
+or `cat` with nothing after it) that reads nothing outside the project. Nothing is allowed this way with `$`,
+backticks, `(`, `<`, or output sent to a file (`2>&1` and `>/dev/null` are fine). An allow rule never lets plan mode
+change anything.
 
 ## Arty, ArtyCode and starfire.ai
 
@@ -242,11 +321,13 @@ key being sent; a per-device key is proved through its SHA-256), so on another n
 address never sees it.
 
 These environment variables override the file: `ARTY_URL`, `ARTY_REMOTE_URL`, `ARTY_API_KEY`,
-`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET` and `ARTY_CLI_MODEL`. Two optional limits can be set the same way,
+`ARTY_ACCESS_CLIENT_ID`, `ARTY_ACCESS_CLIENT_SECRET`, `ARTY_CLI_MODEL` and `ARTY_CLI_FINISH_CHECK` (`on` or `off`, the
+finish check above). Two optional limits can be set the same way,
 as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_TOKENS` and
 `ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (unless set, the size the brain reports in its model list, or 12288 tokens for a brain that doesn't say) and the
 longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops ArtyCode at the start
-with a message saying where to fix it.
+with a message saying where to fix it. `notify` (or `ARTY_CLI_NOTIFY`) set to `off` stops the bell and desktop notice
+of the terminal interface; they are on unless set.
 
 When something goes wrong the message says what to do next. A refused key says to run `arty-cli login` again; a
 model the brain doesn't have says so and points at `/model` (or `--model` for one run); neither suggests waiting.
@@ -300,6 +381,7 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/remote`, `/remote name <new name>`, `/remote off` | Share this chat with the Arty apps and starfire.ai, rename it there, or stop sharing (below) |
 | `/rules`, `/rules on`, `/rules tell-only`, `/rules off` | Show or change the built-in working rules for this session (below) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |
+| `/last` (or Ctrl-O in the interface) | Everything the last step with output gave back, where only a few lines were shown |
 | `/mode`, `/plan`, `/status`, `/todos`, `/memory`, `/resume`, `/clear`, `/exit` | The rest |
 
 `ARTY.md` in the project and in the config folder (notes for every project) are added to what the model is told, and so
@@ -339,9 +421,19 @@ deep into a long request.
 The model's instructions come in short labelled sections (looking, changing files, tests, commands, working through a
 job, finishing); guidance for tools that are only offered sometimes lives in those tools' own descriptions.
 
+The finish check: when the model ends a request while the last test run it made in that request still fails (a
+non-zero exit, or output such as `13 failed, 17 passed`, `FAILED (failures=2)` or `Tests: 2 failed`, so a pytest piped
+through `tail` counts too), ArtyCode sends it back with that summary line and the end of the test output, asking it to
+keep fixing or to explain clearly why the tests can't pass. A dim `Finish check:` line shows when that happens. It is
+sent at most twice per request, the second time only if fewer tests fail than the first time, never in plan mode, and
+not for a request you stopped. Set `finish_check` to `off` in the config file (or `ARTY_CLI_FINISH_CHECK=off`) to
+turn it off.
+
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
 long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
-writes), and only five minutes of total silence counts as a lost connection.
+writes), so a long task that keeps sending that line is never cut off. If nothing at all arrives for 120 seconds,
+not even that line (the brain was restarted part way, say), the request ends with "Arty's brain stopped answering"
+instead of waiting forever; send it again once the brain is back.
 
 ### Checks after edits, project map and sandbox
 
@@ -403,7 +495,8 @@ They are also checked, not only told:
 - When the model says it has finished a request that changed files, it is sent back if comments or em dashes it added
   are still there (up to three times), once if nothing was run to check the work after the last change (a test,
   build, lint or the program; looking around with `ls`, `cat` or `git` doesn't count) and the report doesn't say
-  `UNVERIFIED` (a command that wasn't found doesn't count). Every send-back ends with the report shape.
+  `UNVERIFIED` (a command that wasn't found, or a test run that failed, doesn't count; with the finish check off, a
+  failing last test run is named in that send-back). Every send-back ends with the report shape.
 
 If the model writes `.arty/scratchpad.md` or `.arty/history.md` anyway, that is allowed without asking, and
 `.arty/history.md` only at its end: a change that alters an earlier entry is refused. Everything else under `.arty` is
@@ -650,6 +743,13 @@ and red. Each step the model takes is one line after a red `●` in plain words 
 `Search for def greet in src`), with a short dim result under it (`└ 40 lines`, `└ 1 passed in 0.02s (exit code 0)`,
 `└ Edited greet.py`, `└ Not done: you said no`); an error or a command that exits with a failure code is shown in the
 error colour. The model still gets the whole result. `NO_COLOR`, or output that isn't a terminal, gives plain text.
+
+The terminal interface keeps to the terminal's own foreground and background and a few colours that read on dark and
+light themes alike: Arty red for the brand, the prompt and waiting steps, green and red for good and failed steps and
+for diffs, cyan for code, dim for details. The only shading is your own messages, a grey block with its own text
+colour so it reads on any background (a light one when `COLORFGBG` says the terminal is light). Windows Terminal
+(`WT_SESSION`) gets 24-bit colour; `TERM=linux` gets the basic eight. With `NO_COLOR` the borders, bullets and layout
+stay and every colour goes.
 
 ## Limits
 

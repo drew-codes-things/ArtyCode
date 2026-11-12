@@ -6,7 +6,9 @@ from contextlib import contextmanager
 
 import pytest
 from prompt_toolkit.application import create_app_session
+from prompt_toolkit.data_structures import Point, Size
 from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.layout.screen import Char, Screen
 from prompt_toolkit.output import DummyOutput
 
 from arty_cli import permissions, prompt_line, tui
@@ -23,6 +25,10 @@ class Host:
         self.root = root
         self.current = permissions.DEFAULT
         self.is_shared = False
+        self.details = ("", "", None)
+
+    def footer_details(self):
+        return self.details
 
     def mode(self):
         return self.current
@@ -244,12 +250,13 @@ def test_pasted_text_of_several_lines_stays_one_message(started):
 
 def test_shift_tab_cycles_the_mode_in_place_and_the_bar_follows(started):
     interface, typed = started
-    assert plain(interface.bar_text()) == "  default mode (shift+tab to cycle) · esc to interrupt"
+    assert plain(interface.bar_text()).startswith("  default mode (shift+tab to cycle) · ? for shortcuts")
+    assert "esc to interrupt" not in plain(interface.bar_text())
     typed.send_text("keep this" + SHIFT_TAB)
     assert until(lambda: interface.host.current == permissions.AUTO_EDIT)
     assert plain(interface.bar_text()).startswith("  auto-edit mode") and typed_text(interface) == "keep this"
     interface.host.is_shared = True
-    assert plain(interface.bar_text()).endswith("· remote")
+    assert "· remote" in plain(interface.bar_text())
 
 
 def test_the_status_line_names_the_step_time_and_tokens_while_it_is_shown(started):
@@ -378,3 +385,167 @@ def test_queued_lines_can_be_taken_mid_turn_leaving_commands_for_later(started):
         assert taken == ["also handle division by zero"]
         assert interface.queued == ["/status"] and interface.sent == ["› also handle division by zero"]
     assert interface.next_message() == "/status"
+
+
+def test_the_footer_names_the_model_branch_and_context_left_and_drops_extras_when_narrow():
+    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/qwen3:14b", "main", 62, 110)
+    assert plain(left) == "  default mode (shift+tab to cycle) · ? for shortcuts"
+    assert plain(right) == "arty/qwen3:14b · ⎇ main · 62% context left"
+    left, right = tui.footer_pieces(permissions.AUTO_EDIT, True, "arty/qwen3:14b", "main", 62, 46)
+    assert plain(left) + "  " + plain(right) == "  auto-edit mode · remote  62% context left"
+    assert tui.fragment_width(left) + tui.fragment_width(right) <= 46
+    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/demo-coder", "shell-look", 90, 79)
+    assert plain(left) == "  default mode · ? for shortcuts" and plain(right) == "⎇ shell-look · 90% context left"
+
+
+def test_the_footer_shows_what_the_host_reports(started, monkeypatch):
+    interface, _typed = started
+    monkeypatch.setattr(interface, "room", lambda: 110)
+    interface.host.details = ("arty/mimo-v2.6:9b", "shell-look", 87)
+    shown = plain(interface.bar_text())
+    assert shown.rstrip().endswith("arty/mimo-v2.6:9b · ⎇ shell-look · 87% context left")
+
+
+def test_a_question_mark_in_an_empty_box_opens_the_shortcuts_and_escape_closes_them(started):
+    interface, typed = started
+    typed.send_text("?")
+    assert until(lambda: interface.shortcuts_open)
+    assert typed_text(interface) == "" and "shift+tab" in plain(interface.shortcuts_text())
+    assert plain(interface.bar_text()) == tui.SHORTCUTS_HINT
+    typed.send_text(ESCAPE)
+    assert until(lambda: not interface.shortcuts_open)
+    typed.send_text("why?")
+    assert until(lambda: typed_text(interface) == "why?") and not interface.shortcuts_open
+
+
+def test_enter_on_the_shortcuts_asks_for_the_full_help(started):
+    interface, typed = started
+    typed.send_text("?")
+    assert until(lambda: interface.shortcuts_open)
+    typed.send_text("\r")
+    assert interface.next_message() == "/help" and not interface.shortcuts_open
+
+
+def test_typing_closes_the_shortcuts_and_keeps_what_was_typed(started):
+    interface, typed = started
+    typed.send_text("?")
+    assert until(lambda: interface.shortcuts_open)
+    typed.send_text("f")
+    assert until(lambda: typed_text(interface) == "f") and not interface.shortcuts_open
+
+
+def test_the_empty_box_shows_a_placeholder_that_changes_while_arty_works(started):
+    interface, _typed = started
+    assert interface.placeholder() == tui.PLACEHOLDER
+    with interface.working():
+        assert interface.placeholder() == tui.BUSY_PLACEHOLDER
+
+
+def test_the_placeholder_is_only_drawn_on_an_empty_first_line():
+    placeholder = tui.Placeholder(lambda: "Ask")
+
+    class Typed:
+        def __init__(self, text, lineno=0, width=80):
+            self.document = type("Document", (), {"text": text})()
+            self.fragments, self.lineno, self.width = [("", text)], lineno, width
+
+    assert plain(placeholder.apply_transformation(Typed("")).fragments) == "Ask"
+    assert plain(placeholder.apply_transformation(Typed("x")).fragments) == "x"
+    assert plain(placeholder.apply_transformation(Typed("", lineno=1)).fragments) == ""
+    narrow = tui.Placeholder(lambda: tui.PLACEHOLDER)
+    assert plain(narrow.apply_transformation(Typed("", width=30)).fragments) == tui.SHORT_PLACEHOLDER
+    assert plain(narrow.apply_transformation(Typed("", width=5)).fragments) == ""
+
+
+def test_a_permission_question_is_a_bordered_panel_with_its_choices(started):
+    interface, _typed = started
+    interface.open_question("Run: pytest -q?", CHOICES)
+    rows = plain(interface.question_text()).split("\n")
+    assert rows[0].startswith("╭─ Arty asks ") and rows[-1].startswith("╰") and rows[-1].endswith("╯")
+    assert rows[1].startswith("│ Run: pytest -q?") and rows[1].endswith("│")
+    assert any(f"{tui.POINTER} y  Yes" in row for row in rows)
+    assert len({len(row) for row in rows}) == 1
+
+
+def test_a_long_question_wraps_inside_the_panel_at_phone_width(started, monkeypatch):
+    interface, _typed = started
+    monkeypatch.setattr(interface, "room", lambda: 45)
+    interface.open_question("Run: python3 -c \"for n in range(1, 41): print(n)\"?", CHOICES)
+    rows = plain(interface.question_text()).split("\n")
+    assert all(len(row) == 45 for row in rows) and len(rows) > len(CHOICES) + 3
+    assert "…" not in plain(interface.question_text())
+    assert plain(interface.bar_text()) == tui.SHORT_CHOICE_HINT
+
+
+def test_the_status_line_has_a_spinner_a_label_and_dim_details(started):
+    interface, _typed = started
+    with interface.showing("Run pytest -q", time.monotonic() - 3, lambda: 0):
+        styles = [style for style, _text, *_rest in interface.status_text()]
+        assert styles[0] == "class:spinner" and "class:status-label" in styles and styles[-1] == "class:dim"
+
+
+def test_ctrl_o_asks_the_host_for_the_full_last_step(started):
+    interface, typed = started
+    asked = []
+    interface.host.expand = lambda: asked.append(True)
+    typed.send_text("\x0f")
+    assert until(lambda: asked == [True])
+
+
+def test_a_request_after_earlier_output_gets_a_blank_line_before_it(started):
+    interface, _typed = started
+    interface.scroll.write("● Read a.py\n")
+    interface.show_request("next")
+    assert interface.sent == ["● Read a.py", "", "› next"]
+
+
+def test_a_live_answer_line_is_shown_until_it_is_finished(started):
+    interface, _typed = started
+    interface.show_partial("● The fix is")
+    assert plain(interface.pending_text().__pt_formatted_text__()) == "● The fix is"
+
+
+def test_the_bell_rings_through_the_interface_output(started):
+    interface, _typed = started
+    rung = []
+    interface.app.output.bell = lambda: rung.append(True)
+    interface.ring()
+    assert until(lambda: rung == [True])
+
+
+def test_rows_that_the_terminal_rewraps_when_it_narrows_are_counted():
+    assert tui.reflowed_rows([86, 86, 10], 3, 4, 46) == 2
+    assert tui.reflowed_rows([86, 0, 30], 2, 50, 46) == 2
+    assert tui.reflowed_rows([40, 40], 2, 2, 46) == 0
+
+
+class Recording:
+    def __init__(self, columns):
+        self.columns, self.moved = columns, []
+
+    def get_size(self):
+        return Size(rows=40, columns=self.columns)
+
+    def cursor_up(self, rows):
+        self.moved.append(rows)
+
+
+def test_shrinking_the_window_climbs_over_the_rows_it_rewrapped_before_redrawing():
+    screen = Screen()
+    for row, text in enumerate(["╭" + "─" * 84 + "╮", "│ Run: pytest" + " " * 72 + "│", "short"]):
+        for column, character in enumerate(text):
+            screen.data_buffer[row][column] = Char(character)
+    renderer = type("Renderer", (), {"_last_screen": screen, "_last_size": Size(rows=40, columns=86),
+                                     "_cursor_pos": Point(x=3, y=3)})()
+    app = type("App", (), {"renderer": renderer, "output": Recording(46)})()
+    assert tui.ReflowingApplication.climb_reflowed_rows(app) == 2 and app.output.moved == [2]
+    app.output = Recording(120)
+    assert tui.ReflowingApplication.climb_reflowed_rows(app) == 0 and app.output.moved == []
+
+
+def test_a_narrow_status_line_drops_details_before_it_cuts_the_label():
+    spinner, label, details = tui.status_parts(0, 65, "Run python3 -m pytest -q tests", 1234, 45)
+    assert label == "Run python3 -m pytest -q tests" and details == " (1m 05s)"
+    spinner, label, details = tui.status_parts(0, 65, "Run pytest -q", 1234, 100)
+    assert details == " (1m 05s · ↓ 1.2k tokens · esc to interrupt)"
+    assert len(spinner) + 1 + len(label) + len(details) <= 100

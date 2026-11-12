@@ -514,18 +514,93 @@ def test_a_reply_dropped_part_way_is_asked_for_again_and_the_job_carries_on(flak
     assert FlakyBrain.served == 3
 
 
+def keeps_working_well_past_the_limit_then_answers(out):
+    for _beat in range(12):
+        out.write(b": working\n\n")
+        out.flush()
+        __import__("time").sleep(0.1)
+    answered(out)
+
+
+def test_the_idle_limit_is_generous():
+    assert brain.STREAM_IDLE_SECONDS == 120
+
+
 def test_a_slow_brain_that_keeps_saying_it_is_working_is_waited_for(flaky, monkeypatch):
-    monkeypatch.setattr(brain, "SILENCE_SECONDS", 0.5)
+    monkeypatch.setattr(brain, "STREAM_IDLE_SECONDS", 0.5)
     FlakyBrain.plan = [keeps_working_then_answers]
     assert asked(flaky)["content"] == "all done"
     assert FlakyBrain.served == 1
 
 
-def test_a_brain_gone_silent_past_the_limit_is_a_drop_that_is_tried_again(flaky, monkeypatch):
-    monkeypatch.setattr(brain, "SILENCE_SECONDS", 0.5)
-    FlakyBrain.plan = [goes_silent, answered]
+def test_keep_alives_for_much_longer_than_the_idle_limit_never_cut_a_long_task_off(flaky, monkeypatch):
+    monkeypatch.setattr(brain, "STREAM_IDLE_SECONDS", 0.3)
+    FlakyBrain.plan = [keeps_working_well_past_the_limit_then_answers]
     assert asked(flaky)["content"] == "all done"
-    assert FlakyBrain.served == 2
+    assert FlakyBrain.served == 1
+
+
+def test_a_stream_gone_silent_past_the_limit_ends_the_request_saying_the_brain_stopped_answering(flaky, monkeypatch):
+    monkeypatch.setattr(brain, "STREAM_IDLE_SECONDS", 0.5)
+    FlakyBrain.plan = [goes_silent, answered]
+    with pytest.raises(brain.BrainError, match="stopped answering") as raised:
+        asked(flaky)
+    assert not isinstance(raised.value, brain.Dropped)
+    assert "0.5 s" in str(raised.value)
+    assert FlakyBrain.served == 1
+
+
+class SilentBrain(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        __import__("time").sleep(1.5)
+
+    def log_message(self, *args):
+        pass
+
+
+class ChunkedThenSilentBrain(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        beat = b": working\n\n"
+        self.wfile.write(f"{len(beat):x}\r\n".encode() + beat + b"\r\n")
+        self.wfile.flush()
+        __import__("time").sleep(1.5)
+        self.close_connection = True
+
+    def log_message(self, *args):
+        pass
+
+
+def test_a_chunked_stream_gone_silent_ends_the_request_the_same_way(monkeypatch):
+    monkeypatch.setattr(brain, "STREAM_IDLE_SECONDS", 0.5)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ChunkedThenSilentBrain)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(brain.BrainError, match="stopped answering"):
+            asked(brain_at(f"http://127.0.0.1:{server.server_address[1]}"))
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_brain_that_never_starts_its_reply_ends_the_request_too(monkeypatch):
+    monkeypatch.setattr(brain, "STREAM_IDLE_SECONDS", 0.5)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SilentBrain)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = brain_at(f"http://127.0.0.1:{server.server_address[1]}")
+        with pytest.raises(brain.BrainError, match="stopped answering"):
+            asked(client)
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_a_brain_that_vanishes_mid_job_is_waited_for_until_the_patience_runs_out(retries_wait_in_pretend_time):

@@ -122,3 +122,19 @@ def test_a_saved_config_keeps_set_limits_and_leaves_unset_ones_out(tmp_path):
     settings.save(settings.Settings(api_key="k", context_tokens="24576"), path)
     saved = json.loads(path.read_text())
     assert saved["context_tokens"] == "24576" and "max_command_seconds" not in saved
+
+
+@pytest.mark.parametrize("given, wanted", [("", True), ("on", True), ("OFF", False), ("false", False), ("0", False),
+                                           ("yes", True)])
+def test_the_finish_check_is_on_unless_switched_off(given, wanted):
+    assert settings.is_on(settings.Settings(finish_check=given), "finish_check") is wanted
+
+
+def test_the_finish_check_can_be_switched_off_from_the_environment(tmp_path):
+    loaded = settings.load(tmp_path / "none.json", {"ARTY_CLI_FINISH_CHECK": "off"})
+    assert settings.is_on(loaded, "finish_check") is False
+
+
+def test_a_finish_check_setting_that_is_not_on_or_off_says_where_to_fix_it():
+    with pytest.raises(settings.SettingsError, match="ARTY_CLI_FINISH_CHECK"):
+        settings.is_on(settings.Settings(finish_check="sometimes"), "finish_check")

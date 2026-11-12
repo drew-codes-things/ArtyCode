@@ -82,10 +82,153 @@ PLAN_FEEDBACK = " Their feedback: {feedback}. Look again if you need to, then pr
 PLAN_NO_FEEDBACK = " They didn't say why; ask what they'd like changed."
 NOT_PLANNING = "Error: plan mode isn't on, so there is nothing to approve; carry on with the work."
 EMPTY_PLAN = "Error: the plan is empty; write it out step by step."
+PREFIX_RULE_END = ":*"
+SESSION_PREFIX_MARK = "run_command prefix:"
+MAX_SUBCOMMAND_WORDS = 2
+PROGRAM_WORD = re.compile(r"^[A-Za-z0-9_./+-]+$")
+SUBCOMMAND_WORD = re.compile(r"^[a-z][a-z0-9_:-]*$")
+SCRIPT_WORD = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
+MODULE_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+MODULE_FLAG = "-m"
+RUNNER = re.compile(r"^(python[0-9.]*|pypy[0-9.]*|py|node|nodejs|deno|bun|bunx|npx|pnpx|uvx|ruby|perl|php|lua|java|"
+                    r"sh|bash|zsh|dash|ksh|fish|pwsh|powershell|cmd)$")
+WRAPPER_PROGRAMS = {"sudo", "su", "doas", "env", "xargs", "eval", "exec", "source", ".", "nohup", "time", "timeout",
+                    "nice", "ionice", "watch", "command", "builtin"}
+EXACT_ONLY_PROGRAMS = WRAPPER_PROGRAMS | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
+                                          "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
+                                          "ssh", "curl", "wget", "kill", "pkill", "killall", "find", "sed", "awk",
+                                          "gawk", "trap", "alias", "export", "unset", "set", "crontab"}
+SUBCOMMAND_PROGRAMS = {"git", "npm", "yarn", "pnpm", "cargo", "go", "docker", "podman", "kubectl", "pip", "pip3", "uv",
+                       "poetry", "pipenv", "conda", "dotnet", "gradle", "gradlew", "mvn", "apt", "apt-get", "brew",
+                       "systemctl", "gh", "helm", "terraform", "composer", "bundle", "gem", "rustup", "flutter",
+                       "dart", "swift"}
+PIPES = ("|", "|&")
+SEPARATORS = ("||", "&&", "|&", "|", "&", ";", "\n")
+ENDING_SEPARATORS = (";", "&", "\n")
+REDIRECTION = re.compile(r"&?>>?(?:&(?:\d+|-)|[ \t]*([^\s;&|<>()]+))")
+DESCRIPTOR_AT_END = re.compile(r"(^|\s)\d+$")
+DISCARDED_OUTPUT = "/dev/null"
+SUBSTITUTIONS = ("<(", ">(")
+EXPANSIONS = "`$"
+FILTER_PROGRAMS = {"tail", "head", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "cat"}
+FLAGS_ONLY_FILTERS = {"sort", "uniq"}
+SORT_WRITING_LETTERS = set("oT")
+SORT_WRITING_OPTIONS = ("--o", "--compress", "--temporary")
 
 
-def refuse(question: str, preview: str = "") -> str:
+def refuse(question: str, preview: str = "", scope: str = "") -> str:
     return NO
+
+
+def program_name(word: str) -> str:
+    return Path(word).name.lower().removesuffix(".exe")
+
+
+def discards_output(command: str, index: int) -> int:
+    found = REDIRECTION.match(command, index)
+    if found is None or (found.group(1) is not None and found.group(1) != DISCARDED_OUTPUT):
+        return -1
+    return found.end()
+
+
+def separator_at(command: str, index: int) -> str:
+    return next((separator for separator in SEPARATORS if command.startswith(separator, index)), "")
+
+
+def command_pieces(command: str) -> list[tuple[str, str]]:
+    pieces, text, joiner, quote, index = [], "", "", "", 0
+    while index < len(command):
+        character = command[index]
+        if quote == "'":
+            quote = "" if character == "'" else quote
+            text, index = text + character, index + 1
+            continue
+        if character == "\\":
+            text, index = text + command[index:index + 2], index + 2
+            continue
+        if character in EXPANSIONS:
+            return []
+        if quote == '"' or character in QUOTES:
+            quote = "" if character == quote else quote or character
+            text, index = text + character, index + 1
+            continue
+        if character in GROUPING or character == "<" or command.startswith(SUBSTITUTIONS, index):
+            return []
+        if character == ">" or command.startswith("&>", index):
+            index = discards_output(command, index)
+            if index < 0:
+                return []
+            text = DESCRIPTOR_AT_END.sub(r"\1", text)
+            continue
+        separator = separator_at(command, index)
+        if separator:
+            pieces.append((joiner, text.strip()))
+            joiner, text, index = separator, "", index + len(separator)
+            continue
+        text, index = text + character, index + 1
+    if quote:
+        return []
+    if text.strip() or joiner not in ENDING_SEPARATORS:
+        pieces.append((joiner, text.strip()))
+    return pieces if all(text for _joiner, text in pieces) else []
+
+
+def subcommand_words(rest: list[str]) -> list[str] | None:
+    taken = []
+    for index, word in enumerate(rest[:MAX_SUBCOMMAND_WORDS]):
+        if not SUBCOMMAND_WORD.match(word):
+            return taken
+        if RUNNER.match(word) or word in WRAPPER_PROGRAMS:
+            inner = prefix_words(rest[index:])
+            return taken + inner if inner else None
+        taken.append(word)
+    return taken
+
+
+def runner_target(rest: list[str]) -> list[str]:
+    if rest[:1] == [MODULE_FLAG] and len(rest) > 1 and MODULE_WORD.match(rest[1]):
+        return rest[:2]
+    if rest and SCRIPT_WORD.match(rest[0]):
+        return rest[:1]
+    return []
+
+
+def prefix_words(words: list[str]) -> list[str]:
+    if not words or not PROGRAM_WORD.match(words[0]):
+        return []
+    program = program_name(words[0])
+    if program in EXACT_ONLY_PROGRAMS:
+        return []
+    target = runner_target(words[1:]) if RUNNER.match(program) else []
+    if RUNNER.match(program) and not target:
+        return []
+    following = subcommand_words(words[1 + len(target):])
+    if following is None or (program in SUBCOMMAND_PROGRAMS and not following):
+        return []
+    return [words[0], *target, *following]
+
+
+def starts_with_words(words: list[str], prefix: str) -> bool:
+    wanted = prefix.split()
+    return words[:len(wanted)] == wanted
+
+
+def without_covered(prefixes: list[str]) -> list[str]:
+    unique = list(dict.fromkeys(prefixes))
+    return [prefix for prefix in unique
+            if not any(other != prefix and starts_with_words(prefix.split(), other) for other in unique)]
+
+
+def prefix_rule(prefix: str) -> str:
+    return f"run_command({prefix}{PREFIX_RULE_END})"
+
+
+def scope_text(prefixes: list[str]) -> str:
+    return ", ".join(f"`{prefix}`" for prefix in prefixes)
+
+
+def has_flag_letters(arguments: list[str], letters: set[str]) -> bool:
+    return any(letters & set(short_flags(word)) for word in arguments)
 
 
 def words_of(command: str) -> list[str]:
@@ -162,8 +305,11 @@ def writes_tree_output(arguments: list[str]) -> bool:
 
 
 def is_read_only_command(command: str) -> bool:
-    if SHELL_CONTROL.search(command) or has_bare_grouping(command):
-        return False
+    pieces = command_pieces(command)
+    return bool(pieces) and all(is_read_only_piece(text) for _joiner, text in pieces)
+
+
+def is_read_only_piece(command: str) -> bool:
     words = words_of(command)
     if not words:
         return False
@@ -261,10 +407,19 @@ def looked_at_address(workspace, arguments: dict) -> str:
         return str(arguments.get("url") or "")
 
 
+def command_prefix_of(name: str, pattern: str | None) -> str:
+    if name != "run_command" or pattern is None or not pattern.strip().endswith(PREFIX_RULE_END):
+        return ""
+    return pattern.strip().removesuffix(PREFIX_RULE_END).strip()
+
+
 def rule_matches(rule: str, name: str, targets: list[str]) -> bool:
     parts = rule_parts(rule)
     if parts is None or not fnmatch.fnmatchcase(name, parts[0]):
         return False
+    prefix = command_prefix_of(name, parts[1])
+    if prefix:
+        return any(starts_with_words(words_of(target), prefix) for target in targets)
     return parts[1] is None or any(fnmatch.fnmatchcase(target, parts[1].strip()) for target in targets)
 
 
@@ -286,6 +441,10 @@ class Rules:
         if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)):
             return False
         return any(rule_matches(rule, name, [target]) for rule in self.allow)
+
+    def command_prefixes(self) -> list[str]:
+        found = [command_prefix_of(*parts) for parts in map(rule_parts, self.allow) if parts]
+        return [prefix for prefix in found if prefix]
 
 
 def rules_in(path: Path) -> tuple[dict, list[str]]:
@@ -472,13 +631,69 @@ class Gate:
         self.rules.allow.append(rule)
         return True
 
+    def saved_as_rules(self, rules_to_save: list[str]) -> bool:
+        return all([self.saved_as_rule(rule) for rule in rules_to_save or [""]])
+
     def confirm(self, question: str, preview: str = "", remember: str = "", rule: str = "") -> str | None:
-        answer = self.ask(question, preview)
-        if answer == SAVE and self.saved_as_rule(rule):
+        return self.confirm_scoped(question, preview, [remember] if remember else [], [rule])
+
+    def confirm_scoped(self, question: str, preview: str, remembered: list[str], rules_to_save: list[str],
+                       scope: str = "") -> str | None:
+        answer = self.ask(question, preview, scope)
+        if answer == SAVE and self.saved_as_rules(rules_to_save):
             return None
-        if answer in (ALWAYS, SAVE) and remember:
-            self.always.add(remember)
+        if answer in (ALWAYS, SAVE):
+            self.always.update(remembered)
         return None if answer in AGREEING else self.refused()
+
+    def session_prefixes(self) -> list[str]:
+        return [mark.removeprefix(SESSION_PREFIX_MARK) for mark in self.always if mark.startswith(SESSION_PREFIX_MARK)]
+
+    def is_quiet_filter(self, words: list[str]) -> bool:
+        program, arguments = program_name(words[0]), words[1:]
+        if program not in FILTER_PROGRAMS or follows_links_or_writes(program, arguments):
+            return False
+        if program == "cat":
+            return not arguments
+        if program in FLAGS_ONLY_FILTERS:
+            writes = has_flag_letters(arguments, SORT_WRITING_LETTERS) or any(
+                word.startswith(SORT_WRITING_OPTIONS) for word in arguments)
+            return all(word.startswith("-") and word != "-" for word in arguments) and not writes
+        return not any(self.reaches_outside(path) for path in paths_among(words))
+
+    def piece_allowed(self, joiner: str, text: str, prefixes: list[str]) -> bool:
+        words = words_of(text)
+        if not words:
+            return False
+        if text in self.always or self.rules.allows("run_command", text):
+            return True
+        if any(starts_with_words(words, prefix) for prefix in prefixes):
+            return True
+        return joiner in PIPES and self.is_quiet_filter(words)
+
+    def pieces_allowed(self, command: str) -> bool:
+        pieces = command_pieces(command)
+        prefixes = self.session_prefixes() + self.rules.command_prefixes()
+        return bool(pieces) and all(self.piece_allowed(joiner, text, prefixes) for joiner, text in pieces)
+
+    def prefixes_for(self, command: str) -> list[str]:
+        found = []
+        for joiner, text in command_pieces(command):
+            words = words_of(text)
+            if joiner in PIPES and words and self.is_quiet_filter(words):
+                continue
+            prefix = prefix_words(words)
+            if not prefix:
+                return []
+            found.append(" ".join(prefix))
+        return without_covered(found)
+
+    def confirm_command(self, question: str, command: str) -> str | None:
+        prefixes = self.prefixes_for(command)
+        if not prefixes:
+            return self.confirm(question, remember=command, rule=self.command_rule(command))
+        return self.confirm_scoped(question, "", [SESSION_PREFIX_MARK + prefix for prefix in prefixes],
+                                   [prefix_rule(prefix) for prefix in prefixes], scope_text(prefixes))
 
     def check(self, name: str, arguments: dict) -> str | None:
         denied = self.rule_refusal(name, arguments)
@@ -602,18 +817,20 @@ class Gate:
             return self.check_looking(command)
         if self.mode == PLAN:
             return PLAN_REFUSAL
-        if command in self.always:
+        if command in self.always or self.pieces_allowed(command):
             return None
         label = "Start in the background" if background else "Run"
-        return self.confirm(f"{label}: {command}", remember=command, rule=self.command_rule(command))
+        return self.confirm_command(f"{label}: {command}", command)
 
     def check_looking(self, command: str) -> str | None:
         if command in self.always:
             return None
-        if any(self.reaches_outside(path) for path in named_paths(command)):
+        pieces = [text for _joiner, text in command_pieces(command)]
+        if any(self.reaches_outside(path) for text in pieces for path in named_paths(text)):
             return self.confirm(f"Look outside the project: {command}?", remember=command,
                                 rule=self.command_rule(command))
-        if words_of(command)[0].lower() == "git" and git_settings_run_programs(self.workspace.root):
+        runs_git = any(words_of(text)[0].lower() == "git" for text in pieces)
+        if runs_git and git_settings_run_programs(self.workspace.root):
             return self.confirm(f"This repository's git settings name a program that git would run. Run: {command}?",
                                 remember=command, rule=self.command_rule(command))
         return None

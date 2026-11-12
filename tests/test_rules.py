@@ -16,7 +16,7 @@ class Asker:
         self.answers = list(answers)
         self.questions = []
 
-    def __call__(self, question, preview=""):
+    def __call__(self, question, preview="", scope=""):
         self.questions.append(question)
         return self.answers.pop(0) if self.answers else "n"
 
