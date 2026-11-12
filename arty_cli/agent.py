@@ -324,6 +324,7 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
             done.append(activity_line(name, arguments))
         return result
     recorded = name in RECORDED_TOOLS
+    watched = checks.watch(workspace, name, arguments)
     try:
         result = tools.run(name, arguments, workspace)
     except KeyboardInterrupt:
@@ -332,7 +333,7 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
         raise
     if recorded and (name == "run_command" or not result.startswith("Error")):
         done.append(activity_line(name, arguments))
-    return result
+    return checks.checked_result(workspace, watched, result)
 
 
 def call_parts(call: dict) -> tuple[str, dict | None, str]:
@@ -359,7 +360,6 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
         blocked = f"{HOOK_BLOCKED} {before.feedback}".strip()
         tell(helpers.screen, "show_outcome", one_line(blocked), True)
         return blocked
-    watched = checks.watch(helpers.workspace, name, arguments)
     if name == "explore":
         if not can_explore:
             return "Error: a helper can't start another helper; look for it yourself"
@@ -372,7 +372,6 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
         result = performed(name, arguments, helpers.workspace, helpers.gate, extras, done, before.decision,
                            before.feedback)
     tell(helpers.screen, "show_outcome", *outcome_line(name, result))
-    result = checks.checked_result(helpers.workspace, watched, result)
     result = tools.clipped(result, MAX_RESULT_CHARS)
     if before.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {before.context}"
@@ -462,12 +461,12 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
              squeeze=None, extras=None, stop_hooks=True, stopped=None) -> str:
     extras = extras or extra_tools.NONE
     offered = offered_definitions(extras) + planning_definitions(gate) if offered is None else offered
+    if stop_hooks:
+        checks.start_turn(workspace)
     done = [] if done is None else done
     helpers = Helpers(brain, workspace, gate, screen, extras)
     recent, continued, steered_from, nudged = [], 0, None, False
     approved_with, reminded = None, False
-    if stop_hooks:
-        checks.start_turn(workspace)
     for _round in range(MAX_ROUNDS + 1):
         if stopped is not None and stopped.is_set():
             return HELPER_STOPPED

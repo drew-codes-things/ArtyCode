@@ -13,10 +13,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from arty_cli import extras as extras_module
+from arty_cli import rules
 
 from arty_cli import (__version__, agent, authorise, brain, commands, context, helpers, hooks, lint, mcp, memory,
-                       mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, rules, sandbox,
-                       sessions, settings, skills, tools, waiting, webfetch)
+                       mentions, models, permissions, prompt_line, prompts, providers, remote, repomap, sandbox, sessions,
+                       settings, skills, tools, waiting, webfetch)
 
 NOT_SET_UP = 2
 FAILED = 1
