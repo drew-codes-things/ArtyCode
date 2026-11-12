@@ -72,6 +72,9 @@ class Box:
     def closed(self, rows: int) -> str:
         return UP_A_ROW * (rows + 1) + CLEAR_BELOW
 
+    def left(self, rows: int) -> str:
+        return "\r" + UP_A_ROW * rows + CLEAR_BELOW
+
 
 def mode_box(terminal, mode: str, shared: bool = False, columns=terminal_columns) -> Box:
     room = max(columns() - 1, 1)
@@ -124,7 +127,7 @@ class ReadlineLine:
 
     def show_matches(self, _substitution, matches, _longest) -> None:
         lines = suggest.menu_lines(list(matches), self.meanings, self.columns())
-        lead, redrawn = ("\r" + UP_A_ROW + CLEAR_BELOW, self.box.opened()) if self.box else ("\n", "")
+        lead, redrawn = (self.box.left(1), self.box.opened()) if self.box else ("\n", "")
         self.write(lead + "\n".join(lines) + "\n" + redrawn + self.prompt + self.module.get_line_buffer())
 
     def read(self, prompt: str, width: int, kept: str, box: Box | None = None) -> tuple[str, bool]:
@@ -136,7 +139,7 @@ class ReadlineLine:
             line = self.read_input(for_readline(prompt))
         except BaseException:
             if box:
-                self.write(CLEAR_BELOW)
+                self.write(box.left(rows_of(width, len(self.module.get_line_buffer()), self.columns())))
             raise
         finally:
             self.module.set_startup_hook(None)
@@ -167,7 +170,7 @@ class ConsoleLine:
             return self.read_keys(width)
         except BaseException:
             if box:
-                self.write(CLEAR_BELOW)
+                self.write(box.left(self.rows_to_cursor()))
             raise
 
     def rows_to_cursor(self) -> int:
@@ -179,10 +182,10 @@ class ConsoleLine:
             if key in ENTER_KEYS:
                 return self.finished()
             if key == CTRL_C:
-                self.write(NEW_LINE)
+                self.write("" if self.box else NEW_LINE)
                 raise KeyboardInterrupt
             if key in END_OF_INPUT_KEYS and not self.typed:
-                self.write(NEW_LINE)
+                self.write("" if self.box else NEW_LINE)
                 raise EOFError
             if key in EXTENDED_KEYS:
                 code = self.key()
@@ -204,7 +207,7 @@ class ConsoleLine:
 
     def left_for_new_mode(self, width: int) -> tuple[str, bool]:
         if self.box:
-            self.write("\r" + UP_A_ROW * self.rows_to_cursor() + CLEAR_BELOW)
+            self.write(self.box.left(self.rows_to_cursor()))
         else:
             self.write("\r" + " " * (width + len(self.typed)) + "\r")
         return "".join(self.typed), True
@@ -237,7 +240,7 @@ class ConsoleLine:
         tail = len(self.typed) - self.cursor
         lead, redrawn = NEW_LINE, ""
         if self.box:
-            lead, redrawn = "\r" + UP_A_ROW * self.rows_to_cursor() + CLEAR_BELOW, self.box.opened()
+            lead, redrawn = self.box.left(self.rows_to_cursor()), self.box.opened()
         self.write(lead + NEW_LINE.join(lines) + NEW_LINE + redrawn + self.prompt + "".join(self.typed) + "\b" * tail)
 
     def extended(self, code: str) -> None:

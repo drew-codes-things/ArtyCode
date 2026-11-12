@@ -317,7 +317,7 @@ def test_on_linux_changing_mode_takes_the_box_away_so_the_next_one_shows_the_new
 
 
 @pytest.mark.parametrize("stopped", [KeyboardInterrupt, EOFError])
-def test_on_linux_leaving_the_prompt_clears_the_rest_of_the_box(stopped):
+def test_on_linux_leaving_the_prompt_takes_the_whole_box_away(stopped):
     module, written = FakeReadline(), io.StringIO()
 
     def read(prompt):
@@ -326,7 +326,7 @@ def test_on_linux_leaving_the_prompt_clears_the_rest_of_the_box(stopped):
     reader = prompt_line.ReadlineLine(module, read=read, write=written.write, columns=lambda: 80)
     with pytest.raises(stopped):
         reader.read("› ", 2, "", mode_box())
-    assert written.getvalue().endswith(prompt_line.CLEAR_BELOW)
+    assert written.getvalue().endswith("\r" + prompt_line.UP_A_ROW + prompt_line.CLEAR_BELOW)
 
 
 def test_on_linux_the_command_menu_goes_above_a_fresh_box():
@@ -359,11 +359,12 @@ def test_on_windows_changing_mode_takes_the_box_away():
     assert written.getvalue().endswith("\r" + prompt_line.UP_A_ROW + prompt_line.CLEAR_BELOW)
 
 
-def test_on_windows_ctrl_c_clears_the_rest_of_the_box():
+def test_on_windows_ctrl_c_takes_the_whole_box_away():
     reader, written = console_reader(["\x03"])
+    box = mode_box()
     with pytest.raises(KeyboardInterrupt):
-        reader.read("› ", 2, "", mode_box())
-    assert written.getvalue().endswith(prompt_line.CLEAR_BELOW)
+        reader.read("› ", 2, "", box)
+    assert written.getvalue() == box.opened() + "› " + "\r" + prompt_line.UP_A_ROW + prompt_line.CLEAR_BELOW
 
 
 def test_on_windows_the_command_menu_goes_above_a_fresh_box():
