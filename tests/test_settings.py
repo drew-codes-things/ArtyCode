@@ -101,3 +101,24 @@ def test_saving_over_an_open_config_makes_it_private(tmp_path):
     path.chmod(0o644)
     settings.save(settings.Settings(api_key="secret"), path)
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_limits_can_come_from_the_environment_as_whole_numbers(tmp_path):
+    loaded = settings.load(tmp_path / "none.json", environ={"ARTY_CLI_CONTEXT_TOKENS": "32768",
+                                                             "ARTY_CLI_MAX_COMMAND_SECONDS": "3600"})
+    assert settings.positive_number(loaded, "context_tokens") == 32768
+    assert settings.positive_number(loaded, "max_command_seconds") == 3600
+    assert settings.positive_number(settings.Settings(), "context_tokens") is None
+
+
+@pytest.mark.parametrize("given", ["lots", "0", "-5", "1.5"])
+def test_a_limit_that_is_not_a_whole_number_says_where_to_fix_it(given):
+    with pytest.raises(settings.SettingsError, match="ARTY_CLI_MAX_COMMAND_SECONDS"):
+        settings.positive_number(settings.Settings(max_command_seconds=given), "max_command_seconds")
+
+
+def test_a_saved_config_keeps_set_limits_and_leaves_unset_ones_out(tmp_path):
+    path = tmp_path / "config.json"
+    settings.save(settings.Settings(api_key="k", context_tokens="24576"), path)
+    saved = json.loads(path.read_text())
+    assert saved["context_tokens"] == "24576" and "max_command_seconds" not in saved

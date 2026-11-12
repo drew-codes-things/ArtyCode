@@ -10,6 +10,7 @@ CONFIG_NAME = "config.json"
 DEFAULT_MODEL = "arty/qwen3:14b"
 RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
+OPTIONAL_NUMBERS = ("context_tokens", "max_command_seconds")
 TEMPORARY_NAME_BYTES = 8
 ENVIRONMENT_NAMES = {
     "base_url": "ARTY_URL",
@@ -18,6 +19,8 @@ ENVIRONMENT_NAMES = {
     "access_client_id": "ARTY_ACCESS_CLIENT_ID",
     "access_client_secret": "ARTY_ACCESS_CLIENT_SECRET",
     "model": "ARTY_CLI_MODEL",
+    "context_tokens": "ARTY_CLI_CONTEXT_TOKENS",
+    "max_command_seconds": "ARTY_CLI_MAX_COMMAND_SECONDS",
 }
 
 
@@ -33,9 +36,21 @@ class Settings:
     access_client_id: str = ""
     access_client_secret: str = ""
     model: str = DEFAULT_MODEL
+    context_tokens: str = ""
+    max_command_seconds: str = ""
 
     def is_ready(self) -> bool:
         return bool(self.api_key and (self.base_url or self.remote_url))
+
+
+def positive_number(settings: Settings, name: str) -> int | None:
+    given = str(getattr(settings, name) or "").strip()
+    if not given:
+        return None
+    if not given.isdigit() or int(given) <= 0:
+        raise SettingsError(f"{name} should be a whole number above 0 (set it in {CONFIG_NAME} or "
+                            f"{ENVIRONMENT_NAMES[name]}), not {given!r}.")
+    return int(given)
 
 
 def config_dir(environ=os.environ, platform=sys.platform) -> Path:
@@ -91,7 +106,8 @@ def write_private_json(target: Path, data, indent: int | None = None) -> None:
 def save(settings: Settings, path: Path | None = None) -> Path:
     target = path or config_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    write_private_json(target, asdict(settings), indent=2)
+    kept = {name: value for name, value in asdict(settings).items() if value or name not in OPTIONAL_NUMBERS}
+    write_private_json(target, kept, indent=2)
     return target
 
 
