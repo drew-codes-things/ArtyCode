@@ -1,6 +1,9 @@
+import contextlib
 import json
 import os
+import signal
 import sys
+import time
 
 import pytest
 
@@ -89,6 +92,21 @@ def test_a_command_that_runs_too_long_is_stopped(workspace):
     command = f'"{sys.executable}" -c "import time; time.sleep(5)"'
     result = tools.run("run_command", {"command": command, "timeout_seconds": 1}, workspace)
     assert "stopped after 1 s" in result
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="setsid is POSIX")
+def test_a_stopped_command_returns_even_when_a_child_it_left_behind_holds_the_output(workspace):
+    command = "setsid sh -c 'echo $$ > stray.pid; exec sleep 30' & echo started; sleep 20"
+    began = time.monotonic()
+    try:
+        result = tools.run("run_command", {"command": command, "timeout_seconds": 1}, workspace)
+    finally:
+        stray = workspace.root / "stray.pid"
+        if stray.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(stray.read_text()), signal.SIGKILL)
+    assert time.monotonic() - began < 10
+    assert "started" in result and "stopped after 1 s" in result
 
 
 def test_paths_outside_the_project_are_recognised(workspace, tmp_path):

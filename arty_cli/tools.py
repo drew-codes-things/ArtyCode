@@ -24,6 +24,8 @@ MAX_READ_CHARS = 60_000
 OUTPUT_HEAD_SHARE = 0.4
 DEFAULT_COMMAND_SECONDS = 120
 MAX_COMMAND_SECONDS = 600
+STOPPED_OUTPUT_SECONDS = 3
+STRAY_OUTPUT_NOTE = "\n[a process it started is still running and holding the output, so the rest wasn't read]"
 MAX_JOB_OUTPUT_CHARS = 200_000
 GLOB_CHARACTERS = set("*?[")
 ANY_FOLDERS = "**"
@@ -625,6 +627,20 @@ def web_fetch(workspace, url):
         raise ToolError(str(error)) from None
 
 
+def text_of(output) -> str:
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output or ""
+
+
+def output_after_stop(process: subprocess.Popen) -> str:
+    try:
+        return process.communicate(timeout=STOPPED_OUTPUT_SECONDS)[0]
+    except subprocess.TimeoutExpired as error:
+        process.wait()
+        return text_of(error.output) + STRAY_OUTPUT_NOTE
+
+
 def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, background=False):
     if background:
         return start_job(workspace, command)
@@ -634,8 +650,7 @@ def run_command(workspace, command, timeout_seconds=DEFAULT_COMMAND_SECONDS, bac
         output, _ = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
         stop(process)
-        output, _ = process.communicate()
-        return clipped(output) + f"\n[stopped after {seconds} s]"
+        return clipped(output_after_stop(process)) + f"\n[stopped after {seconds} s]"
     except KeyboardInterrupt:
         stop(process)
         process.wait()
