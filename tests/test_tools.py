@@ -1,4 +1,5 @@
 import contextlib
+import ctypes
 import json
 import os
 import signal
@@ -782,3 +783,52 @@ def test_a_later_window_has_a_header_but_no_outline(tmp_path):
     shown = tools.read_file(tools.Workspace(tmp_path), "steps.py", offset=301, limit=50).splitlines()
     assert shown[0] == "[steps.py: lines 301-350 of 464; 300 above, 114 below]"
     assert shown[1].startswith("301\t") and not any("Outline" in line for line in shown)
+
+
+BEYOND_ASCII = "café ✓ → ü"
+OEM_UNITED_STATES = 437
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell's output encoding is a Windows matter")
+def test_powershell_output_beyond_ascii_comes_back_unchanged(workspace):
+    assert BEYOND_ASCII in tools.run_command(workspace, f"Write-Output '{BEYOND_ASCII}'")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell's output encoding is a Windows matter")
+def test_a_program_writing_utf8_through_powershell_comes_back_unchanged(workspace):
+    script = f"import sys; sys.stdout.buffer.write({BEYOND_ASCII!r}.encode('utf-8'))"
+    assert BEYOND_ASCII in tools.run_command(workspace, f"{python_call('-c', script)} | Write-Output")
+
+
+def test_powershell_is_told_to_write_utf8_on_the_command_line_itself():
+    script = tools.powershell_arguments("Get-Date")[-1]
+    assert script.startswith(tools.POWERSHELL_UTF8_OUTPUT) and "Get-Date" in script
+    assert "\n" not in tools.POWERSHELL_UTF8_OUTPUT and "UTF8Encoding" in tools.POWERSHELL_UTF8_OUTPUT
+
+
+def test_on_windows_a_command_gets_its_own_hidden_console(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    _arguments, options = tools.shell_command("Get-Date")
+    assert options["creationflags"] & tools.OWN_HIDDEN_CONSOLE == tools.OWN_HIDDEN_CONSOLE
+
+
+def test_off_windows_a_command_is_started_without_windows_flags(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    _command, options = tools.shell_command("true")
+    assert "creationflags" not in options
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="console code pages are a Windows matter")
+def test_a_powershell_command_leaves_the_users_console_code_page_alone(workspace):
+    console = ctypes.windll.kernel32
+    original = console.GetConsoleOutputCP()
+    if not original:
+        pytest.skip("no console is attached to this test run")
+    console.SetConsoleOutputCP(OEM_UNITED_STATES)
+    try:
+        output = tools.run_command(workspace, f"Write-Output '{BEYOND_ASCII}'")
+        left = console.GetConsoleOutputCP()
+    finally:
+        console.SetConsoleOutputCP(original)
+    assert BEYOND_ASCII in output
+    assert left == OEM_UNITED_STATES

@@ -640,10 +640,26 @@ def test_a_path_glued_to_a_flag_is_still_seen_as_outside(workspace, command):
 
 @pytest.mark.parametrize("command", ["Get-ChildItem Env:", r"Get-ChildItem HKCU:\Software", "Get-Content Variable:",
                                      "Get-ChildItem Cert:", "Get-ChildItem Env:ARTY_API_KEY",
-                                     "Get-Content -Path:Env:ARTY_API_KEY", "Get-ChildItem -Path HKLM:\\SOFTWARE"])
+                                     "Get-Content -Path:Env:ARTY_API_KEY", "Get-ChildItem -Path HKLM:\\SOFTWARE",
+                                     r"Get-Content Microsoft.PowerShell.Core\FileSystem::C:\Users\me\secret.txt"])
 def test_powershell_provider_drives_are_outside_the_project_on_windows(workspace, monkeypatch, command):
     monkeypatch.setattr(sys, "platform", "win32")
     assert asked_about(workspace, command) == [f"Look outside the project: {command}?"]
+
+
+@pytest.mark.parametrize("path", ["Env:", "env:ARTY_API_KEY", "HKCU:\\Software", "hklm:/SOFTWARE", "Cert:", "Variable:x",
+                                  "Function:", "Alias:", "WSMan:", "FileSystem::C:\\Users\\me\\secret.txt",
+                                  "Registry::HKEY_CURRENT_USER", "Microsoft.PowerShell.Core\\FileSystem::C:\\x"])
+def test_windows_provider_drives_and_provider_paths_are_recognised(monkeypatch, path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.names_a_provider_drive(path)
+
+
+@pytest.mark.parametrize("word", ["https://github.com/octo/demo/pull/1", "is:open author:@me", "HEAD:a.py",
+                                  "author:@me", "origin/main:a.py", "key:value"])
+def test_words_with_a_colon_that_name_no_powershell_drive_are_not_provider_paths(monkeypatch, word):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not permissions.names_a_provider_drive(word)
 
 
 @pytest.mark.parametrize("command", ["ls -la", "cat a.py", "Get-Content a.py", "grep -n x a.py",
@@ -791,6 +807,36 @@ def test_a_command_is_offered_as_its_program_and_subcommand_words(workspace, com
 ])
 def test_commands_that_could_hide_anything_are_only_ever_allowed_exactly(workspace, command):
     assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+POWERSHELL_CHANGING_OR_LAUNCHING = [
+    "Remove-Item -Recurse build", "del build.txt", "erase build.txt", "ri build", "rd build", "New-Item -ItemType File a",
+    "ni a", "Move-Item a b", "move a b", "Copy-Item a b", "copy a b", "Rename-Item a b", "ren a b",
+    "Set-Content a.txt x", "Add-Content a.txt x", "Clear-Content a.txt", "Out-File a.txt", "Set-Item Env:X 1",
+    "Set-ItemProperty HKCU:/x -Name y -Value 1", "New-ItemProperty HKCU:/x -Name y", "Remove-ItemProperty HKCU:/x y",
+    "Invoke-WebRequest https://example.com -OutFile x", "iwr https://example.com", "Invoke-RestMethod https://x",
+    "irm https://example.com", "Stop-Process -Name python", "spps -Id 4", "Start-Process notepad", "saps notepad",
+    "start notepad", "Invoke-Expression x", "iex x", "Invoke-Item x.bat", "ii x.bat", "Start-Job -FilePath x.ps1",
+    "Invoke-Command -FilePath x.ps1", "icm -FilePath x.ps1",
+]
+
+
+@pytest.mark.parametrize("command", POWERSHELL_CHANGING_OR_LAUNCHING)
+def test_powershell_commands_that_change_fetch_stop_or_launch_are_only_ever_allowed_exactly(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+@pytest.mark.parametrize("prefix, command", [("Start-Process", "Start-Process powershell -ArgumentList x"),
+                                             ("Invoke-Expression", "Invoke-Expression x"), ("iex", "iex x")])
+def test_an_older_powershell_launcher_prefix_no_longer_covers_anything(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
 
 
 def test_always_for_a_command_covers_its_variants_and_the_question_says_which(workspace):
@@ -1294,6 +1340,7 @@ def test_a_remembered_prefix_never_covers_an_option_that_runs_a_program_or_write
     assert len(ask.questions) == 2
 
 
+@needs_git
 @pytest.mark.parametrize("prefix, command", [
     ("gh pr view", "gh pr view 12 --comments"), ("gh pr view", "gh pr view 12 -R cli/cli --json title --jq .title"),
     ("gh pr create", "gh pr create --title 'environment import fix' --body done"),
@@ -1431,7 +1478,6 @@ ASKING_GH = [
     "gh pr view HTTPS://evil.example/o/r/pull/1", "gh repo view -q -q evil.example/o/r",
     "gh pr list --search 'see https://evil.example/x'", "gh pr view 'https://[::1/x'",
     "gh repo view -b -q evil.example/o/r",
-    "gh pr list --json title --jq '.[] | .title // \"none\"'", "gh pr view 1 -q '.a//.b'",
     "gh pr list --json title --jq env", "gh pr view 1 -q '$ENV.GH_TOKEN'", "gh pr view 1 --jq='$ENV'",
     "gh pr view 1 --jq 'import \"data\" as $d; $d'", "gh pr view 1 -q 'include \"x\"; .'",
     "gh pr view 1 -q input_filename", "gh pr view 1 -qenv", "gh pr list --template '{{env}}'",
@@ -1522,9 +1568,10 @@ def test_a_remembered_gh_prefix_is_offered_for_a_changing_gh_command(workspace):
 def expansion_bait(workspace):
     (workspace.root / "env").write_text("x\n")
     (workspace.root / "env.HOME").write_text("x\n")
-    address_folder = workspace.root / "git@127.0.0.1:o"
-    address_folder.mkdir()
-    (address_folder / "r").write_text("x\n")
+    if sys.platform != "win32":
+        address_folder = workspace.root / "git@127.0.0.1:o"
+        address_folder.mkdir()
+        (address_folder / "r").write_text("x\n")
     return workspace
 
 
@@ -1631,3 +1678,300 @@ def test_reaching_a_nested_repository_any_other_way_than_cwd_is_not_look_only(wo
     assert not permissions.is_read_only_command(command)
     plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
     assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+POWERSHELL_SINGLE_QUOTES = ["\u2018", "\u2019", "\u201a", "\u201b"]
+POWERSHELL_DOUBLE_QUOTES = ["\u201c", "\u201d", "\u201e"]
+POWERSHELL_LOOKALIKE_HIDING = (
+    [f"Get-Content 'a{quote}; Remove-Item -Recurse -Force x #'" for quote in POWERSHELL_SINGLE_QUOTES]
+    + [f'Get-Content "a{quote}; Remove-Item -Recurse -Force x #"' for quote in POWERSHELL_DOUBLE_QUOTES]
+    + [f"Get-Content {quote}a; Remove-Item x; {quote}" for quote in POWERSHELL_SINGLE_QUOTES + POWERSHELL_DOUBLE_QUOTES]
+    + ["Get-Content \u2013Path:Env:ARTY_API_KEY", "Get-Content \u2014Path a.py", "Get-Content \u2015Path a.py",
+       "Get-Content a.py\u00a0..\\secret.txt", "Get-Content a.py\u2007b.py", "Get-Content a.py\u3000b.py",
+       "Get-Content a.py\x0b..\\secret.txt", "Get-Content a.py\x0c..\\secret.txt", "Get-Content a.py\x85b.py"]
+)
+
+
+@pytest.mark.parametrize("command", POWERSHELL_LOOKALIKE_HIDING)
+def test_on_windows_powershell_lookalike_quotes_dashes_and_spaces_make_a_command_unreadable(workspace, monkeypatch,
+                                                                                            command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.command_pieces(command) == []
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+    allow_all = Asker("n")
+    gate = permissions.Gate(workspace, allow_all, mode=permissions.ALLOW_ALL)
+    assert not gate.allows("run_command", {"command": command})
+    assert len(allow_all.questions) == 1
+
+
+@pytest.mark.parametrize("command", POWERSHELL_LOOKALIKE_HIDING)
+def test_on_windows_a_prefix_never_covers_a_command_with_powershell_lookalikes(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "Get-Content")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("command", ['Get-Content "it\u2019s.txt"', "Get-Content 'say \u201chi\u201d.txt'",
+                                     "Get-Content 'a\u00a0b.txt'", 'Get-Content "notes \u2013 v2.txt"'])
+def test_on_windows_a_lookalike_powershell_reads_as_text_inside_other_quotes_stays_look_only(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.is_read_only_command(command)
+
+
+def test_on_windows_a_commit_message_with_a_curly_apostrophe_is_still_offered_its_prefix(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    command = 'git commit -m "it\u2019s fixed \u2013 really"'
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == ["git commit"]
+
+
+@pytest.mark.parametrize("command", ["cat 'a\u2018; rm x #'", "cat a\u00a0b", "grep \u2013n x a.py"])
+def test_off_windows_lookalike_quotes_dashes_and_spaces_are_ordinary_letters(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert permissions.command_pieces(command) == [("", command)]
+
+
+BACKSLASHED_PROGRAM_NAMES = ["ca\\t a.py", "gi\\t status", "l\\s", "Get-Conten\\t a.py", ".\\cat a.py",
+                             "bin\\grep -n x a.py", "bin/cat a.py", "C:\\tools\\cat.exe a.py", "g\\h pr view 1"]
+
+
+@pytest.mark.parametrize("command", BACKSLASHED_PROGRAM_NAMES)
+def test_on_windows_a_backslash_in_the_program_name_names_a_file_so_it_is_not_look_only(workspace, monkeypatch,
+                                                                                         command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@pytest.mark.parametrize("command", ["npm test | gre\\p x", "npm test | .\\tail -5"])
+def test_on_windows_a_backslashed_filter_after_a_pipe_is_not_a_quiet_filter(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "npm test")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+
+
+def test_on_windows_words_keep_their_backslashes(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.words_of(r'ca\t "src\app.py" "a\"') == ["ca\\t", "src\\app.py", "a\\"]
+
+
+def test_off_windows_a_backslash_still_escapes_the_next_letter(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert permissions.words_of(r"ca\t a\ b") == ["cat", "a b"]
+
+
+POWERSHELL_LISTS_REACHING_OUT = [
+    "Get-Content a.py,..\\secret.txt", "Get-Content a.py,C:\\Users\\me\\secret.txt", "Get-Content a.py,Env:ARTY_API_KEY",
+    "Get-Content \u2013Path:Env:ARTY_API_KEY", "Get-Content \u2013LiteralPath:C:\\Users\\me\\secret.txt",
+    "Get-Content -Path:a.py,..\\secret.txt", "Get-Content -Path a.py,..\\..\\secret.txt",
+    "Select-String -Pattern x -Path a.py,..\\secret.txt", "Get-ChildItem a.py,HKCU:\\Software",
+    "Get-Content src\\..\\..\\secret.txt", "Get-Content a.py, ..\\secret.txt",
+]
+
+
+@pytest.mark.parametrize("command", POWERSHELL_LISTS_REACHING_OUT)
+def test_on_windows_every_item_of_a_powershell_list_or_dashed_parameter_is_checked(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) in (permissions.PLAN_REFUSAL, permissions.REFUSED)
+
+
+@pytest.mark.parametrize("word, path", [("\u2013Path:Env:ARTY_API_KEY", "Env:ARTY_API_KEY"),
+                                        ("\u2014LiteralPath:C:\\x", "C:\\x"), ("-Path:a.py,Env:X", "Env:X"),
+                                        ("a.py,..\\secret.txt", "..\\secret.txt")])
+def test_on_windows_paths_are_found_behind_any_dash_and_in_comma_lists(monkeypatch, word, path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert path in permissions.paths_among(["Get-Content", word])
+
+
+@pytest.mark.parametrize("command", ["Get-Content a.py,b.py", "Get-Content -Path a.py,src\\b.py",
+                                     "Select-String -Pattern x -Path a.py,b.py"])
+def test_on_windows_a_powershell_list_inside_the_project_is_still_look_only(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert asked_about(workspace, command) == []
+
+
+def test_off_windows_a_comma_is_part_of_the_file_name(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert permissions.paths_among(["cat", "a.py,b.py"]) == ["a.py,b.py"]
+
+
+MODULE_QUALIFIED = ["Microsoft.PowerShell.Utility\\Invoke-Expression -Command 'Get-Date'",
+                    "Microsoft.PowerShell.Management\\Remove-Item -Recurse build",
+                    "Microsoft.PowerShell.Management\\Start-Process notepad",
+                    "microsoft.powershell.utility\\IEX 'Get-Date'", "Microsoft.PowerShell.Utility/Invoke-Expression x"]
+
+
+@pytest.mark.parametrize("command", MODULE_QUALIFIED)
+def test_on_windows_a_module_qualified_command_is_never_offered_as_a_prefix(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+def test_on_windows_always_for_a_module_qualified_launcher_covers_only_that_command(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("a", "n")
+    gate = permissions.Gate(workspace, ask)
+    launcher = "Microsoft.PowerShell.Utility\\Invoke-Expression -Command "
+    assert gate.allows("run_command", {"command": launcher + "'Get-Date'"})
+    assert not gate.allows("run_command", {"command": launcher + "'Remove-Item -Recurse src'"})
+    assert len(ask.questions) == 2
+
+
+@pytest.mark.parametrize("prefix", ["Microsoft.PowerShell.Utility\\Invoke-Expression",
+                                    "Microsoft.PowerShell.Management\\Start-Process"])
+def test_on_windows_a_saved_module_qualified_launcher_prefix_covers_nothing(workspace, monkeypatch, prefix):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not gate.allows("run_command", {"command": prefix + " x"})
+    assert len(ask.questions) == 1
+
+
+POWERSHELL_MISSING_CHANGERS = [
+    "cli Env:X", "clp HKCU:/x y", "md build", "sal ls Remove-Item", "Clear-ItemProperty HKCU:/x -Name y",
+    "Move-ItemProperty HKCU:/x -Name y -Destination HKCU:/z", "mp HKCU:/x y HKCU:/z",
+    "Copy-ItemProperty HKCU:/x -Name y -Destination HKCU:/z", "cpp HKCU:/x y HKCU:/z",
+    "Rename-ItemProperty HKCU:/x -Name y -NewName z", "rnp HKCU:/x y z", "Tee-Object -FilePath x.txt",
+    "TEE-OBJECT x.txt", "Start-BitsTransfer -Source https://example.com/x -Destination x",
+    "Invoke-CimMethod -ClassName Win32_Process -MethodName Create", "Invoke-WmiMethod -Class Win32_Process -Name Create",
+    "Start-ThreadJob -FilePath job.ps1", "Set-Alias ls Remove-Item", "New-Alias ll Remove-Item", "nal ll Remove-Item",
+    "Import-Module .\\evil.psm1", "ipmo .\\evil.psm1", "Add-Type -Path x.cs", "ADD-TYPE src", "import-module tools",
+]
+
+
+@pytest.mark.parametrize("command", POWERSHELL_MISSING_CHANGERS)
+def test_more_powershell_commands_that_change_or_launch_are_only_ever_allowed_exactly(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+@pytest.mark.parametrize("prefix", ["Import-Module", "ipmo", "Add-Type", "Invoke-CimMethod", "Invoke-WmiMethod",
+                                    "Start-ThreadJob", "Set-Alias", "sal", "New-Alias", "nal"])
+def test_an_older_prefix_for_a_powershell_command_that_runs_code_covers_nothing(workspace, prefix):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not gate.allows("run_command", {"command": prefix + " x"})
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("deny, command", [
+    ("run_command(Remove-Item:*)", "remove-item x"), ("run_command(Remove-Item:*)", "REMOVE-ITEM x"),
+    ("run_command(Remove-Item:*)", "ri x"), ("run_command(Remove-Item:*)", "del x"),
+    ("run_command(Remove-Item:*)", "rm x"), ("run_command(Remove-Item:*)", "erase x"),
+    ("run_command(Remove-Item:*)", "rd x"), ("run_command(Remove-Item:*)", "rmdir x"),
+    ("run_command(Remove-Item:*)", "RI x"), ("run_command(Remove-Item:*)", "Get-ChildItem; Del x"),
+    ("run_command(Remove-Item:*)", "Microsoft.PowerShell.Management\\Remove-Item x"),
+    ("run_command(remove-item:*)", "Remove-Item x"), ("run_command(rm:*)", "Remove-Item -Recurse x"),
+    ("run_command(del:*)", "ri x"), ("run_command(Remove-Item *)", "erase x"),
+    ("run_command(Invoke-WebRequest:*)", "iwr https://example.com"),
+    ("run_command(Invoke-WebRequest:*)", "curl https://example.com"),
+    ("run_command(Invoke-WebRequest:*)", "WGET https://example.com"),
+    ("run_command(iwr *)", "Invoke-WebRequest https://example.com"),
+    ("run_command(Start-Process:*)", "saps notepad"), ("run_command(Start-Process:*)", "start notepad"),
+    ("run_command(Invoke-Expression:*)", "IEX x"), ("run_command(Set-Content:*)", "sc a.txt x"),
+    ("run_command(Copy-Item:*)", "cp a b"), ("run_command(Move-Item:*)", "mv a b"),
+    ("run_command(Stop-Process:*)", "kill 4"), ("run_command(Get-Content:*)", "type a.py"),
+    ("run_command(Tee-Object:*)", "tee x.txt"), ("run_command(New-Item:*)", "md build"),
+    ("run_command(rm:*)", "C:rm x"), ("run_command(Remove-Item:*)", "FileSystem::C:\\tools\\rm.exe x"),
+])
+def test_on_windows_a_deny_rule_matches_any_letters_and_the_built_in_aliases(workspace, monkeypatch, deny, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=[deny])
+    assert gate.check("run_command", {"command": command}) == permissions.RULE_DENIED
+
+
+@pytest.mark.parametrize("command", ["Remove-ItemProperty HKCU:/x y", "Get-ChildItem", "rename-item a b", "ls"])
+def test_on_windows_a_deny_rule_still_leaves_other_commands_alone(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(Remove-Item:*)"])
+    assert gate.check("run_command", {"command": command}) is None
+
+
+def test_off_windows_a_deny_rule_still_matches_the_name_as_written(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(Remove-Item:*)"])
+    assert gate.check("run_command", {"command": "rm x"}) is None
+
+
+@needs_git
+@pytest.mark.parametrize("prefix, command", [
+    ("gh api", "gh api repos/cli/cli/issues"), ("gh api", "gh api repos/cli/cli/pulls --paginate"),
+    ("gh pr create", "gh pr create --title 'fix src/app/main.py' --body done"),
+    ("gh pr create", "gh pr create --base release/2026/11 --title x"),
+    ("gh issue create", "gh issue create --title 'docs/a/b moved' --body 'see docs/a/b'"),
+])
+def test_a_remembered_gh_prefix_covers_slashed_words_that_name_no_host(workspace, prefix, command):
+    ask = Asker()
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert saved.allows("run_command", {"command": command})
+    assert ask.questions == []
+
+
+def test_always_for_one_gh_api_call_covers_the_next_endpoint(workspace):
+    ask = Asker("a")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("run_command", {"command": "gh api repos/cli/cli/pulls"})
+    assert gate.allows("run_command", {"command": "gh api repos/cli/cli/issues"})
+    assert len(ask.questions) == 1
+
+
+@needs_git
+@pytest.mark.parametrize("command", ["gh pr view feature/login/fix", "gh pr list --search 'path:src/app/main.py'",
+                                     "gh pr list -B release/2026/11", "gh pr diff team/a/b",
+                                     "gh pr list --json title --jq '.[] | .title // \"none\"'",
+                                     "gh pr view 1 -q '.a//.b'"])
+def test_look_only_gh_with_slashed_words_that_name_no_host_needs_no_ok(workspace, command):
+    assert permissions.is_read_only_command(command)
+    ask = Asker()
+    assert permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("prefix, command", [
+    ("gh api", "gh api --hostname evil.example repos/x/y"), ("gh api", "gh api --hostname=evil.example repos/x/y"),
+    ("gh api", "gh api https://evil.example/repos/x"), ("gh pr view", "gh pr view 1 -cR evil.example/o/r"),
+    ("gh pr view", "gh pr view 1 -cRevil.example/o/r"), ("gh pr view", "gh pr view 1 --repo evil.example/o/r"),
+    ("gh pr view", "gh pr view 1 -R git@evil.example:o/r"), ("gh repo view", "gh repo view evil.example/o/r"),
+])
+def test_a_remembered_gh_prefix_still_asks_where_gh_takes_another_host(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+
+@pytest.mark.parametrize("command", ["gh pr view 1 -cR evil.example/o/r", "gh pr view 1 -cRevil.example/o/r",
+                                     "gh issue list -R=intranet/o/r"])
+def test_look_only_gh_asks_for_a_host_in_a_bundled_repo_flag(workspace, command):
+    assert not permissions.is_read_only_command(command)

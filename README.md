@@ -13,7 +13,7 @@
 
 </div>
 
-![ArtyCode in its own terminal interface: the Arty logo and the session details at the top, a request, steps with their results, a numbered diff and a permission panel above the input box at the bottom](screenshot.png)
+![ArtyCode in its own terminal interface: the Arty logo and the session details at the top, a request, steps with their results, a numbered diff with the edit approved, a short summary, and the footer under the input box showing the model, tokens used against the summarising point and the context left](screenshot.png)
 
 ---
 
@@ -32,7 +32,7 @@ It reads, edits and runs code with a set of [tools](docs/tools.md), and asks bef
 ## Requirements
 
 - Python 3.11 or newer.
-- Debian (or another Linux) or Windows; the Windows build has not been run on Windows yet (see [Limits](#limits)).
+- Debian (or another Linux) or Windows; what has been run on each is under [Limits](#limits).
 - An [Arty](https://github.com/drew-codes-things/Arty) brain you can reach, and either an Arty API key or the right
   to approve this computer in Arty from your browser.
 
@@ -200,7 +200,14 @@ The details live in [`docs/`](docs):
 
 - On Arty, the brain runs one model on the GPU at a time, so the first coding request after chatting with Arty (and
   the first chat after coding) waits while the other model loads.
-- Beta: tested on Debian; the Windows build and `install.ps1` have not been run on Windows yet.
+- Where it has been run: Debian, the full test suite and daily use. Windows 10 22H2 in a virtual machine (Windows
+  PowerShell 5.1, Python 3.12): the full test suite, `install.ps1` (a fresh install and an install over an older
+  one), `arty --version`, `arty doctor`, and against a real Arty brain one-off jobs (`arty -p`) that read a file,
+  edited one in auto-edit mode and ran its tests, ran PowerShell commands, ran a command in the AppContainer
+  `--sandbox` (it could write in the project, and could not read or write in the user folder) and searched the web,
+  plus a chat in the full-screen interface over SSH (questions answered with a letter, refused with Esc). Not run
+  yet: Windows 11, Windows on ARM, a physical Windows PC, PowerShell 7 as the shell, and Windows Terminal or the
+  classic console window opened directly on the machine.
 - `web_fetch` checks that an address is public before connecting; a name whose address changes in between could
   still reach a local one.
 - `screenshot` talks to the browser through its debugging port on 127.0.0.1 for the few seconds a shot takes, and a

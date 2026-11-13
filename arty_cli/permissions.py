@@ -37,6 +37,10 @@ READ_ONLY_GH_ALONE = {"status"}
 GH_ASKING_OPTIONS = {"--web", "--output", "--dir", "--watch"}
 GH_ASKING_LETTERS = set("wOD")
 GH_REPO_SHORT = "-R"
+GH_REPO_LETTER = "R"
+GH_REPO_OPTION = "--repo"
+GH_HOSTNAME_OPTION = "--hostname"
+GH_REPO_GROUP = "repo"
 GH_FILTER_SHORTS = ("-q", "-t")
 GH_FILTER_OPTIONS = {"--jq", "--template"}
 GH_FILTER_REACHING_WORDS = ("env", "import", "include", "input")
@@ -59,7 +63,10 @@ LINK_FOLLOWING_FLAGS = {"grep": GREP_LINK_FOLLOWING, "egrep": GREP_LINK_FOLLOWIN
 FIND_LINK_FOLLOWING = {"-L", "-follow"}
 SHELL_DIRECTORY_STACK = ("~+", "~-")
 WINDOWS_ABSOLUTE = re.compile(r"^([A-Za-z]:|\\\\|//)")
-WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
+WINDOWS_PATH_SEPARATORS = re.compile(r"[\\/:]")
+POWERSHELL_DRIVES = {"alias", "cert", "env", "function", "hkcu", "hklm", "variable", "wsman", "temp"}
+PROVIDER_QUALIFIER = "::"
+POWERSHELL_LIST_MARK = ","
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
@@ -78,6 +85,10 @@ GIT_CONFIG_SECONDS = 10
 SHELL_CONTROL = re.compile(r"[;&|<>`$\n]")
 GROUPING = set("(){}")
 QUOTES = "'\""
+POWERSHELL_SINGLE_QUOTES = "\u2018\u2019\u201a\u201b"
+POWERSHELL_DOUBLE_QUOTES = "\u201c\u201d\u201e"
+POWERSHELL_DASHES = "\u2013\u2014\u2015"
+PLAIN_SPACING = " \t\n"
 COMMENT_MARK = "#"
 LINE_CONTINUATION = "\\\n"
 CARRIAGE_RETURN = "\r"
@@ -143,8 +154,32 @@ LAUNCHING_SUBCOMMANDS = {"run", "x", "dlx"}
 SCRIPT_RUNNING_PROGRAMS = {"make", "gmake", "bmake", "cmake", "ninja", "tar", "zip", "vim", "vi", "nvim", "view",
                            "vimdiff", "gvim", "emacs", "nano", "ex", "ed", "less", "more", "most", "pager", "man",
                            "tmux", "screen"}
-NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS
-EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
+POWERSHELL_LAUNCHERS = {"start-process", "saps", "start", "invoke-expression", "iex", "invoke-command", "icm",
+                        "invoke-item", "ii", "start-job", "sajb", "start-threadjob", "invoke-cimmethod",
+                        "invoke-wmimethod", "add-type", "import-module", "ipmo", "set-alias", "sal", "new-alias", "nal"}
+POWERSHELL_CHANGING = {"remove-item", "ri", "del", "erase", "rd", "new-item", "ni", "move-item", "mi", "move",
+                       "copy-item", "cpi", "copy", "rename-item", "rni", "ren", "set-content", "sc", "add-content", "ac",
+                       "clear-content", "clc", "out-file", "set-item", "si", "clear-item", "new-itemproperty",
+                       "set-itemproperty", "sp", "remove-itemproperty", "rp", "invoke-webrequest", "iwr",
+                       "invoke-restmethod", "irm", "stop-process", "spps", "cli", "md", "clear-itemproperty", "clp",
+                       "move-itemproperty", "mp", "copy-itemproperty", "cpp", "rename-itemproperty", "rnp",
+                       "tee-object", "start-bitstransfer"}
+POWERSHELL_ALIAS_FAMILIES = {
+    "remove-item": ("ri", "rm", "rmdir", "del", "erase", "rd"), "new-item": ("ni", "md", "mkdir"),
+    "move-item": ("mi", "mv", "move"), "copy-item": ("cpi", "cp", "copy"), "rename-item": ("rni", "ren"),
+    "set-content": ("sc",), "add-content": ("ac",), "clear-content": ("clc",), "set-item": ("si",),
+    "clear-item": ("cli",), "set-itemproperty": ("sp",), "remove-itemproperty": ("rp",),
+    "clear-itemproperty": ("clp",), "move-itemproperty": ("mp",), "copy-itemproperty": ("cpp",),
+    "rename-itemproperty": ("rnp",), "invoke-webrequest": ("iwr", "curl", "wget"), "invoke-restmethod": ("irm",),
+    "stop-process": ("spps", "kill"), "start-process": ("saps", "start"), "invoke-expression": ("iex",),
+    "invoke-command": ("icm",), "invoke-item": ("ii",), "start-job": ("sajb",), "tee-object": ("tee",),
+    "set-alias": ("sal",), "new-alias": ("nal",), "import-module": ("ipmo",), "get-content": ("gc", "cat", "type"),
+    "get-childitem": ("gci", "ls", "dir"), "select-string": ("sls",), "get-location": ("gl", "pwd"),
+}
+POWERSHELL_COMMAND_OF_ALIAS = {alias: command for command, family in POWERSHELL_ALIAS_FAMILIES.items()
+                               for alias in family}
+NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS | POWERSHELL_LAUNCHERS
+EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | POWERSHELL_CHANGING | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
                                           "ssh", "curl", "wget", "kill", "pkill", "killall", "find", "sed", "awk",
                                           "gawk", "trap", "alias", "export", "unset", "set", "crontab"}
@@ -176,7 +211,8 @@ def refuse(question: str, preview: str = "", scope: str = "") -> str:
 
 
 def program_name(word: str) -> str:
-    return Path(word).name.lower().removesuffix(".exe")
+    name = WINDOWS_PATH_SEPARATORS.split(word)[-1] if sys.platform == "win32" else Path(word).name
+    return name.lower().removesuffix(".exe")
 
 
 def looked_up_name(word: str) -> str:
@@ -211,12 +247,25 @@ def separator_at(command: str, index: int) -> str:
     return next((separator for separator in SEPARATORS if command.startswith(separator, index)), "")
 
 
+def powershell_reads_differently(character: str, quote: str) -> bool:
+    if sys.platform != "win32":
+        return False
+    if quote == "'":
+        return character in POWERSHELL_SINGLE_QUOTES
+    if quote == '"':
+        return character in POWERSHELL_DOUBLE_QUOTES
+    lookalikes = POWERSHELL_SINGLE_QUOTES + POWERSHELL_DOUBLE_QUOTES + POWERSHELL_DASHES
+    return character in lookalikes or (character.isspace() and character not in PLAIN_SPACING)
+
+
 def command_pieces(command: str) -> list[tuple[str, str]]:
     if CARRIAGE_RETURN in command:
         return []
     pieces, text, joiner, quote, index = [], "", "", "", 0
     while index < len(command):
         character = command[index]
+        if powershell_reads_differently(character, quote):
+            return []
         if quote == "'":
             quote = "" if character == "'" else quote
             text, index = text + character, index + 1
@@ -325,6 +374,8 @@ def has_flag_letters(arguments: list[str], letters: set[str]) -> bool:
 
 
 def words_of(command: str) -> list[str]:
+    if not backslash_escapes():
+        return literal_words_of(command)
     try:
         return shlex.split(command)
     except ValueError:
@@ -411,7 +462,7 @@ def gh_options(arguments: list[str]) -> list[str] | None:
 
 def is_read_only_gh(arguments: list[str]) -> bool:
     options = gh_options(arguments)
-    return options is not None and not gh_option_asks(options)
+    return options is not None and not gh_option_asks(options) and not gh_names_another_host(arguments)
 
 
 def gh_option_asks(words: list[str]) -> bool:
@@ -421,17 +472,48 @@ def gh_option_asks(words: list[str]) -> bool:
 def gh_word_asks(word: str) -> bool:
     if any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS) or has_unusual_spacing(word):
         return True
-    if gh_option_opens_writes_or_waits(word):
-        return True
-    return names_another_host(gh_value(word)) or names_another_host(word.lstrip("-"))
+    return gh_option_opens_writes_or_waits(word)
 
 
 def gh_option_reaches_further(arguments: list[str]) -> bool:
     filters_output = any(gh_filter_option(word) for word in arguments)
-    return any(gh_option_opens_writes_or_waits(word) or names_another_host(gh_value(word))
-               or names_another_host(word.lstrip("-")) or has_unusual_spacing(word)
-               or (filters_output and any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS))
-               for word in arguments)
+    return gh_names_another_host(arguments) or any(
+        gh_option_opens_writes_or_waits(word) or has_unusual_spacing(word)
+        or (filters_output and any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS))
+        for word in arguments)
+
+
+def gh_option_values(arguments: list[str], option: str, letter: str = "") -> list[str]:
+    values = []
+    for index, word in enumerate(arguments):
+        following = arguments[index + 1:index + 2]
+        if word == option:
+            values += following
+        elif word.startswith(option + "="):
+            values.append(word.partition("=")[2])
+        elif letter and letter in short_flags(word):
+            glued = short_flags(word).partition(letter)[2].removeprefix("=")
+            values += [glued] if glued else following
+    return values
+
+
+def gh_repositories(arguments: list[str]) -> list[str]:
+    if arguments[:1] == [GH_REPO_GROUP]:
+        return arguments[1:]
+    return gh_option_values(arguments, GH_REPO_OPTION, GH_REPO_LETTER)
+
+
+def names_a_url_elsewhere(word: str) -> bool:
+    return URL_MARK in word and url_host(word.strip()) != GITHUB_HOST
+
+
+def gh_names_another_host(arguments: list[str]) -> bool:
+    if any(names_a_url_elsewhere(word) for word in arguments):
+        return True
+    if any(value.strip().lower() != GITHUB_HOST for value in gh_option_values(arguments, GH_HOSTNAME_OPTION)):
+        return True
+    return any(names_another_host(value) or names_another_host(value.lstrip("-"))
+               for value in gh_repositories(arguments))
 
 
 def gh_filter_option(word: str) -> bool:
@@ -448,14 +530,6 @@ def gh_option_opens_writes_or_waits(word: str) -> bool:
     if not word.startswith("-") or word.startswith((GH_REPO_SHORT, *GH_FILTER_SHORTS)):
         return False
     return bool(GH_ASKING_LETTERS & set(word[1:]))
-
-
-def gh_value(word: str) -> str:
-    if word.startswith("--"):
-        return word.partition("=")[2]
-    if word.startswith(GH_REPO_SHORT):
-        return word.removeprefix(GH_REPO_SHORT).removeprefix("=")
-    return word
 
 
 def names_another_host(value: str) -> bool:
@@ -525,15 +599,29 @@ def flag_values(word: str) -> list[str]:
     return values
 
 
+def parameter_dashes() -> tuple[str, ...]:
+    return ("-", *POWERSHELL_DASHES) if sys.platform == "win32" else ("-",)
+
+
+def list_items(path: str) -> list[str]:
+    return path.split(POWERSHELL_LIST_MARK) if sys.platform == "win32" else [path]
+
+
 def paths_among(words: list[str]) -> list[str]:
     found = []
     for word in words[1:]:
-        found += flag_values(word) if word.startswith("-") else [word]
-    return [path for path in dict.fromkeys(found) if path]
+        found += flag_values(word) if word.startswith(parameter_dashes()) else [word]
+    items = [item for path in found for item in list_items(path)]
+    return [path for path in dict.fromkeys(items) if path]
 
 
 def names_a_provider_drive(path: str) -> bool:
-    return sys.platform == "win32" and bool(WINDOWS_PROVIDER_DRIVE.match(path))
+    if sys.platform != "win32":
+        return False
+    if PROVIDER_QUALIFIER in path:
+        return True
+    drive, colon, _rest = path.partition(":")
+    return bool(colon) and drive.lower() in POWERSHELL_DRIVES
 
 
 def named_paths(command: str) -> list[str]:
@@ -654,6 +742,22 @@ def rule_matches(rule: str, name: str, targets: list[str]) -> bool:
     return parts[1] is None or any(fnmatch.fnmatchcase(target, parts[1].strip()) for target in targets)
 
 
+def powershell_spelling(command: str) -> str:
+    program, _space, rest = command.strip().partition(" ")
+    name = program_name(program)
+    return " ".join(filter(None, [POWERSHELL_COMMAND_OF_ALIAS.get(name, name), rest.lower()]))
+
+
+def powershell_rule(rule: str) -> str:
+    parts = rule_parts(rule)
+    if parts is None or parts[1] is None:
+        return rule
+    pattern = parts[1].strip()
+    if pattern.endswith(PREFIX_RULE_END):
+        return f"{parts[0]}({powershell_spelling(pattern.removesuffix(PREFIX_RULE_END))}{PREFIX_RULE_END})"
+    return f"{parts[0]}({powershell_spelling(pattern)})"
+
+
 def without_settings_and_keywords(words: list[str]) -> list[str]:
     while words and (ENVIRONMENT_SETTING.match(words[0]) or words[0] in SHELL_KEYWORDS):
         words = words[1:]
@@ -731,7 +835,12 @@ class Rules:
     def denies(self, name: str, target: str) -> bool:
         targets = [target] + ([part.strip() for part in COMMAND_PARTS.split(target) if part.strip()]
                               + program_runs(target) if name == "run_command" else [])
-        return any(rule_matches(rule, name, targets) for rule in self.deny)
+        if any(rule_matches(rule, name, targets) for rule in self.deny):
+            return True
+        if name != "run_command" or sys.platform != "win32":
+            return False
+        spelled = [powershell_spelling(each) for each in targets]
+        return any(rule_matches(powershell_rule(rule), name, spelled) for rule in self.deny)
 
     def denies_commands(self) -> bool:
         return any(parts is not None and parts[1] is not None and fnmatch.fnmatchcase("run_command", parts[0])

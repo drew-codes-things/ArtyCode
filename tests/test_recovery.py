@@ -1,9 +1,11 @@
 import json
+import os
 import sys
 
 import pytest
 
 from arty_cli import agent, cli, conversation, finish, permissions, prune, tools
+from tests.portable import plain_python_call, short_python_call
 from tests.scripted import ScriptedBrain, project, session_for
 
 assert project
@@ -207,7 +209,7 @@ def test_after_older_results_are_hidden_the_model_still_sees_the_file_it_is_edit
     calc = project / "calc.py"
     calc.write_text(calc_of())
     (project / "fake_pytest.py").write_text(PYTEST_LIKE)
-    tests = ("run_command", {"command": "python3 fake_pytest.py"})
+    tests = ("run_command", {"command": plain_python_call("fake_pytest.py")})
     steps = [[("read_file", {"path": "calc.py"})], [tests]]
     for number in range(1, 15):
         steps += [[edit_of(number)], [edit_of(number + 20)], [tests]]
@@ -223,11 +225,13 @@ def test_after_older_results_are_hidden_the_model_still_sees_the_file_it_is_edit
     assert not blind, f"{len(blind)} of {len(pruned)} prompts after a prune had no current view of calc.py"
 
 
-def test_the_footer_shows_real_room_right_after_older_results_are_dropped(project):
+def test_the_footer_shows_real_room_right_after_older_results_are_dropped(project, monkeypatch):
     calc = project / "calc.py"
     calc.write_text(calc_of())
     (project / "fake_pytest.py").write_text(PYTEST_LIKE)
-    tests = ("run_command", {"command": "python3 fake_pytest.py"})
+    launchers = project.parent / "launchers"
+    monkeypatch.setenv("PATH", str(launchers) + os.pathsep + os.environ.get("PATH", ""))
+    tests = ("run_command", {"command": short_python_call(launchers, "fake_pytest.py")})
     steps = [[("read_file", {"path": "calc.py"})], [tests]]
     for number in range(1, 15):
         steps += [[edit_of(number)], [edit_of(number + 20)], [tests]]
@@ -453,14 +457,16 @@ def test_the_same_step_right_after_the_warning_still_stops(project):
     assert session.messages[-1]["content"] == agent.STUCK_STOPPED
 
 
-def big_file_and_its_first_window(project):
-    (project / "big.py").write_text("\n".join(f"value_{number} = {number}" for number in range(1, 601)) + "\n")
+def big_file_and_its_first_window(project, line_ending="\n"):
+    lines = [f"value_{number} = {number}" for number in range(1, 601)]
+    (project / "big.py").write_bytes((line_ending.join(lines) + line_ending).encode())
     workspace = tools.Workspace(project)
     return workspace, tools.read_file(workspace, "big.py")
 
 
-def test_a_rewrite_that_copies_the_read_window_tail_line_is_refused_and_the_file_kept(project):
-    workspace, shown = big_file_and_its_first_window(project)
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_a_rewrite_that_copies_the_read_window_tail_line_is_refused_and_the_file_kept(project, line_ending):
+    workspace, shown = big_file_and_its_first_window(project, line_ending)
     tail = shown.splitlines()[-1]
     assert tail.startswith("... ") and "read on with offset=" in tail
     body = "\n".join(line.split("\t", 1)[1] for line in shown.splitlines() if "\t" in line) + "\n" + tail + "\n"
@@ -469,8 +475,9 @@ def test_a_rewrite_that_copies_the_read_window_tail_line_is_refused_and_the_file
     assert len((project / "big.py").read_text().splitlines()) == 600
 
 
-def test_a_rewrite_that_copies_the_read_window_header_is_refused(project):
-    workspace, shown = big_file_and_its_first_window(project)
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_a_rewrite_that_copies_the_read_window_header_is_refused(project, line_ending):
+    workspace, shown = big_file_and_its_first_window(project, line_ending)
     header = shown.splitlines()[0]
     assert header.startswith("[big.py: lines 1-")
     result = tools.run("write_file", {"path": "big.py", "content": header + "\nvalue_1 = 1\n", "overwrite": True},

@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import sys
 
 import pytest
@@ -356,19 +357,22 @@ def test_answers_in_the_interface_are_drawn_as_markdown_under_one_mark(interacti
     assert session.terminal.view is None
 
 
+COUNT_TO_NINE = "1..9" if sys.platform == "win32" else "seq 1 9"
+
+
 def test_a_step_in_the_interface_is_drawn_with_its_result_and_kept_for_slash_last(interactive, tmp_path):
     session = session_for(tmp_path)
     interface = RingingInterface("count", "/last")
     command = {"id": "c1", "type": "function",
-               "function": {"name": "run_command", "arguments": '{"command": "seq 1 9"}'}}
+               "function": {"name": "run_command", "arguments": json.dumps({"command": COUNT_TO_NINE})}}
     replies = [{"role": "assistant", "content": "", "tool_calls": [command]},
                {"role": "assistant", "content": "Done.", "tool_calls": []}]
     session.client.reply = lambda messages, tools, on_text: replies.pop(0)
     session.gate.mode = permissions.ALLOW_ALL
     cli.chat_in_interface(session, interface, share=False)
     shown = interface.scroll.getvalue()
-    assert "● Run seq 1 9\n  └ 9 (exit code 0)\n    1\n    2\n    3\n    … +6 lines" in shown
-    assert shown.rstrip().endswith("● Run seq 1 9\n    1\n    2\n    3\n    4\n    5\n    6\n    7\n    8\n    9")
+    assert f"● Run {COUNT_TO_NINE}\n  └ 9 (exit code 0)\n    1\n    2\n    3\n    … +6 lines" in shown
+    assert shown.rstrip().endswith(f"● Run {COUNT_TO_NINE}\n    1\n    2\n    3\n    4\n    5\n    6\n    7\n    8\n    9")
 
 
 def test_slash_last_at_the_plain_prompt_prints_the_whole_output(interactive, tmp_path):
@@ -407,11 +411,12 @@ def test_the_footer_gets_the_model_branch_and_context_left(interactive, tmp_path
     host = cli.SessionHost(session)
     assert host.footer_details() == ("arty/qwen3:14b", "main", None)
     host.measure()
-    model, branch, left = host.footer_details()
-    assert 50 <= left < 100
+    model, branch, room = host.footer_details()
+    assert 50 <= room.left_percent < 100
+    assert 0 < room.used < room.limit == session.compact_limit()
     session.messages.append({"role": "user", "content": "x" * 200_000})
     host.measure()
-    assert host.footer_details()[2] == 0
+    assert host.footer_details()[2].left_percent == 0
 
 
 def test_slash_last_prefers_the_last_step_with_output_over_a_later_checklist(interactive, tmp_path):

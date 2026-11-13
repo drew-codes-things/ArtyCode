@@ -164,12 +164,16 @@ def handle(session: Session, line: str) -> bool:
     return True
 
 
-def context_left(session: Session) -> int | None:
+def context_room(session: Session) -> context.ContextRoom | None:
     limit = session.compact_limit()
     if limit <= 0:
         return None
-    used = context.estimated_tokens(session.messages, session.client)
-    return max(0, min(100, round(100 * (1 - used / limit))))
+    return context.ContextRoom(context.estimated_tokens(session.messages, session.client), limit)
+
+
+def context_left(session: Session) -> int | None:
+    room = context_room(session)
+    return room.left_percent if room else None
 
 
 class SessionHost:
@@ -181,14 +185,14 @@ class SessionHost:
         self.paint = session.terminal.paint
         self.theme = look.theme_for(session.terminal.colour)
         self.clock = clock
-        self.left = None
+        self.room = None
         self.branch, self.branch_checked = "", None
 
     def measure(self) -> None:
         try:
-            self.left = context_left(self.session)
+            self.room = context_room(self.session)
         except providers.ERRORS:
-            self.left = None
+            self.room = None
 
     def current_branch(self) -> str:
         now = self.clock()
@@ -196,8 +200,8 @@ class SessionHost:
             self.branch, self.branch_checked = look.git_branch(self.root) or "", now
         return self.branch
 
-    def footer_details(self) -> tuple[str, str, int | None]:
-        return self.session.client.model, self.current_branch(), self.left
+    def footer_details(self) -> tuple[str, str, context.ContextRoom | None]:
+        return self.session.client.model, self.current_branch(), self.room
 
     def expand(self) -> None:
         self.session.terminal.show_last()
@@ -371,6 +375,7 @@ def signals_end_cleanly():
 
 
 def main(argv=None) -> int:
+    screen.write_utf8_when_redirected()
     argv = sys.argv[1:] if argv is None else argv
     if upkeep.handles(argv):
         return upkeep.run(argv)

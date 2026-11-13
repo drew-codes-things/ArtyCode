@@ -1,4 +1,5 @@
 import contextlib
+import io
 import json
 import os
 import sys
@@ -48,6 +49,14 @@ REMOTE_ANSWER_HINT = "  Or answer Allow or Deny on another device."
 
 def is_interactive() -> bool:
     return sys.stdin.isatty()
+
+
+def write_utf8_when_redirected(streams=None, platform: str = sys.platform) -> None:
+    if platform != "win32":
+        return
+    for stream in streams if streams is not None else (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper) and not stream.isatty():
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def scoped_choice(choice: tuple[str, str], scoped: str, scope: str) -> tuple[str, str]:

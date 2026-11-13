@@ -14,7 +14,9 @@ command the program and its subcommand words, which the question names (`Yes, an
 (`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like), one that starts another
 program (`systemd-run`, `stdbuf`, `xvfb-run`, `strace`, `timeout`, `nice`, `uv run --with ...` and the like), one that
 runs a script or a command through an option (`make`, `cmake`, `tar`, `zip`, `vim`, `emacs`, `less`, `man`, `tmux`
-and the like), one that
+and the like), a PowerShell command that changes, fetches, stops or launches (`Remove-Item`, `Set-Content`,
+`Tee-Object`, `Invoke-WebRequest`, `Start-Process`, `Invoke-Expression`, `Import-Module`, `Add-Type`, `Set-Alias` and
+their aliases, in any letters and also behind a module name such as `Microsoft.PowerShell.Utility\`), one that
 starts with a shell keyword (`if`, `then`, `do`), or one with `$`, backticks, `(`, `<`, a `#` comment or output written
 to a file is only ever remembered exactly, as before. A prefix rule for such a program or keyword in the settings is not
 followed as an allow rule (it would cover any command); as a deny rule it still forbids. In a trusted project there is also
@@ -46,6 +48,14 @@ links out of the project (`rg --pre`, `find -fprint`, `find -L`, `grep -R`, `ls 
 repository it runs in (the project, or a repository inside it reached through `cwd`) name a program git would run (an
 fsmonitor, an external diff, a textconv or filter driver, a gpg program).
 
+On Windows, PowerShell also reads the curly quotes (U+2018 to U+201E) as quote marks, the en dash, em dash and
+horizontal bar as a parameter's dash, and the non-breaking space and other Unicode spaces as spaces. A command with one
+of these outside quotes, or with a curly quote that would end the quoted text it sits in, can't be read: it asks (in
+allow-all too) and is only ever remembered exactly. A backslash is not an escape there either: `ca\t` or `.\cat` names a
+program file in a folder (which auto-edit could have written), not `cat`, so it is never look-only. Each item of a
+PowerShell list (`Get-Content a.py,..\secret.txt`) and the value of a `-Name:value` parameter behind any of the dashes is
+checked as a path of its own.
+
 The GitHub CLI's look-only commands run without a question too: `gh pr view`, `gh pr list`, `gh pr diff`,
 `gh pr checks`, `gh pr status`, `gh issue view`, `gh issue list`, `gh issue status`, `gh run view` (with `--log` or
 `--log-failed` as well), `gh run list`, `gh release view`, `gh release list`, `gh repo view`, `gh workflow view`,
@@ -55,8 +65,11 @@ extension. They ask when they open a browser (`--web`, `-w`), write files (`--ou
 watching (`--watch`), name a host other than github.com (`-R host/owner/repo`, `-R host:port/repo`, a URL or
 `git@host:` address, also behind leading dashes), have a tab, line break, non-breaking space or other unusual space, have a wildcard or `~` outside quotes (the shell would swap it for file names first), or have a
 word containing `env`, `import`, `include` or `input` (the jq words for environment variables, modules and
-inputs, which `--jq` passes on). `-R owner/repo` (with a space) and github.com URLs are fine; a word with two or more
-`/` that doesn't start with `github.com` asks, so a jq `//` does too. Like git, they ask when the repository's git
+inputs, which `--jq` passes on). `-R owner/repo` (with a space) and github.com URLs are fine. A host is looked for only
+where gh takes one: a URL anywhere, `--hostname`, and the repository of `-R`/`--repo` (also inside a bundle such as
+`-cR`) or of `gh repo`, where `host/owner/repo` names a host other than github.com. Other words with slashes (an API
+path, a branch, a title naming a file, a jq `//`) are fine, so a yes to `gh api repos/o/r/pulls` covers
+`gh api repos/o/r/issues`. Like git, they ask when the repository's git
 settings name a program, and deny rules still stop them.
 
 ## Permission rules
@@ -78,7 +91,9 @@ to the project), the command, the address or the list pattern. A command pattern
 `run_command(npm test:*)`, is a prefix: it matches any command whose first words are those words. Deny wins over
 everything, including `allow-all` and hooks, and is checked against each part of a chained command and against the
 program each part runs, also behind a path (`/bin/rm`), a setting (`X=1 rm`), a shell keyword or a program that starts
-another (`sudo`, `xargs`, `bash -c`). It is still a match on the command's words, not on what a program does:
+another (`sudo`, `xargs`, `bash -c`). On Windows the program is matched in any letters, behind a module name, and
+through PowerShell's built-in aliases, so `run_command(Remove-Item:*)` also stops `remove-item`, `ri`, `del`, `rm`,
+`erase`, `rd` and `rmdir` (and `run_command(rm:*)` stops `Remove-Item`). It is still a match on the command's words, not on what a program does:
 `find -delete` or a script that removes files is not caught by `run_command(rm *)`, so a command deny rule stops the usual
 ways of running that program, not every way of doing what it does. While any `run_command` deny rule is set, a command
 ArtyCode can't read through (a `$` or backtick expansion, brackets or braces, `<`, `>` into a file, a `#` comment, or a
