@@ -30,6 +30,20 @@ GIT_WRITING_OPTIONS = ("--output", "--ext-diff", "--exec-path")
 GIT_RUNNING_OPTIONS = ("--textconv", "--upload-pack", "--receive-pack", "--exec=", "--open-files-in-pager")
 GIT_CONFIG_OPTIONS = ("-c", "--config-env")
 GIT_GREP_PAGER_OPTION = "-O"
+GH_PROGRAM = "gh"
+READ_ONLY_GH = {"pr": {"view", "list", "diff", "checks", "status"}, "issue": {"view", "list", "status"},
+                "run": {"view", "list"}, "release": {"view", "list"}, "repo": {"view"}, "workflow": {"view", "list"}}
+READ_ONLY_GH_ALONE = {"status"}
+GH_ASKING_OPTIONS = {"--web", "--output", "--dir", "--watch"}
+GH_ASKING_LETTERS = set("wOD")
+GH_REPO_SHORT = "-R"
+GH_FILTER_SHORTS = ("-q", "-t")
+GH_FILTER_REACHING_WORDS = ("env", "import", "include", "input")
+GITHUB_HOST = "github.com"
+URL_MARK = "://"
+SSH_ADDRESS = re.compile(r"^[^@/\s]+@([^:/\s]+):")
+HOST_PATH_SLASHES = 2
+PROGRAMS_RUNNING_GIT = {"git", GH_PROGRAM}
 BRANCH_LISTING_FLAGS = {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current",
                         "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case", "--abbrev",
                         "--no-abbrev", "--omit-empty", "-q", "--quiet"}
@@ -384,6 +398,61 @@ def git_option_runs_or_writes(arguments: list[str]) -> bool:
     return subcommand == ["grep"] and any(word.startswith(GIT_GREP_PAGER_OPTION) for word in arguments)
 
 
+def gh_options(arguments: list[str]) -> list[str] | None:
+    group, verb = (arguments + ["", ""])[:2]
+    if group in READ_ONLY_GH_ALONE:
+        return arguments[1:]
+    return arguments[2:] if verb in READ_ONLY_GH.get(group, ()) else None
+
+
+def is_read_only_gh(arguments: list[str]) -> bool:
+    options = gh_options(arguments)
+    return options is not None and not gh_option_asks(options)
+
+
+def gh_option_asks(words: list[str]) -> bool:
+    return any(gh_word_asks(word) for word in words)
+
+
+def gh_word_asks(word: str) -> bool:
+    if any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS):
+        return True
+    return gh_option_opens_writes_or_waits(word) or names_another_host(gh_value(word))
+
+
+def gh_option_opens_writes_or_waits(word: str) -> bool:
+    if word.startswith("--"):
+        return option_name(word) in GH_ASKING_OPTIONS
+    if not word.startswith("-") or word.startswith((GH_REPO_SHORT, *GH_FILTER_SHORTS)):
+        return False
+    return bool(GH_ASKING_LETTERS & set(word[1:]))
+
+
+def gh_value(word: str) -> str:
+    if word.startswith("--"):
+        return word.partition("=")[2]
+    if word.startswith(GH_REPO_SHORT):
+        return word.removeprefix(GH_REPO_SHORT).removeprefix("=")
+    return word
+
+
+def names_another_host(value: str) -> bool:
+    value = value.strip()
+    if URL_MARK in value:
+        return url_host(value) != GITHUB_HOST
+    address = SSH_ADDRESS.match(value)
+    if address:
+        return address.group(1).lower() != GITHUB_HOST
+    return value.count("/") >= HOST_PATH_SLASHES and value.split("/", 1)[0].lower() != GITHUB_HOST
+
+
+def url_host(value: str) -> str:
+    try:
+        return urlparse(value).hostname or ""
+    except ValueError:
+        return ""
+
+
 def option_runs_or_writes(words: list[str]) -> bool:
     program = program_name(words[0])
     if program == "git":
@@ -410,6 +479,8 @@ def is_read_only_piece(command: str) -> bool:
     program, arguments = looked_up_name(words[0]), words[1:]
     if program == "git":
         return is_read_only_git(arguments)
+    if words[0] == GH_PROGRAM:
+        return is_read_only_gh(arguments)
     if follows_links_or_writes(program, arguments):
         return False
     if program == "find":
@@ -1080,7 +1151,7 @@ class Gate:
                for text in pieces):
             return self.confirm(f"Look outside the project: {command}?", remember=command,
                                 rule=self.command_rule(command))
-        runs_git = any(words_of(text)[0].lower() == "git" for text in pieces)
+        runs_git = any(words_of(text)[0].lower() in PROGRAMS_RUNNING_GIT for text in pieces)
         if runs_git and git_settings_run_programs(self.workspace.root):
             return self.confirm(f"This repository's git settings name a program that git would run. Run: {command}?",
                                 remember=command, rule=self.command_rule(command))
