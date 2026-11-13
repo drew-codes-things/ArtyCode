@@ -941,3 +941,25 @@ def test_on_windows_ordinary_backslash_paths_are_still_look_only(monkeypatch, co
 def test_off_windows_an_escaped_separator_is_still_one_harmless_argument(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     assert permissions.command_pieces(r"ls .\; rm -r src") == [("", r"ls .\; rm -r src")]
+
+
+@pytest.mark.parametrize("command", ["ls >&2file", "ls 2>&1file", "ls >&-x", "cat a.py >&0001_initial.py"])
+def test_a_descriptor_redirection_glued_to_a_name_writes_a_file_so_it_is_not_look_only(workspace, command):
+    assert not permissions.is_read_only_command(command)
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@pytest.mark.parametrize("prefix, command", [("python3 -m pytest", "python3 -m pytest >&0001_initial.py"),
+                                             ("echo", "echo 'import os' >&9conftest.py")])
+def test_a_prefix_never_covers_output_written_to_a_file_through_a_descriptor_form(workspace, prefix, command):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("command", ["ls 2>&1", "ls >&2", "ls 2>&-", "ls 2>&1 | wc -l", "ls 2>&1;pwd", "ls >&2 && pwd"])
+def test_descriptor_redirections_that_end_the_word_are_still_look_only(command):
+    assert permissions.is_read_only_command(command)

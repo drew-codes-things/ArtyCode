@@ -115,7 +115,7 @@ SUBCOMMAND_PROGRAMS = {"git", "npm", "yarn", "pnpm", "cargo", "go", "docker", "p
 PIPES = ("|", "|&")
 SEPARATORS = ("||", "&&", "|&", "|", "&", ";", "\n")
 ENDING_SEPARATORS = (";", "&", "\n")
-REDIRECTION = re.compile(r"&?>>?(?:&(?:\d+|-)|[ \t]*([^\s;&|<>()]+))")
+REDIRECTION = re.compile(r"&?>>?(?:&(?:\d+|-)(?=$|[\s;&|])|[ \t]*([^\s;&|<>()]+))")
 DESCRIPTOR_AT_END = re.compile(r"(^|\s)\d+$")
 DISCARDED_OUTPUT = "/dev/null"
 SUBSTITUTIONS = ("<(", ">(")
