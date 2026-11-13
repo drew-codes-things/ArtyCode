@@ -1,11 +1,12 @@
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
-from arty_cli import finish, permissions, tools
+from arty_cli import eyes, finish, permissions, tools
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git isn't installed")
 LOOK_ONLY_COMMANDS = [pytest.param("git status", marks=needs_git), "ls -la"]
@@ -176,6 +177,31 @@ def test_ordinary_looking_around_still_needs_no_ok(command):
     assert permissions.is_read_only_command(command)
 
 
+@pytest.mark.parametrize("command", ["CAT a.py", "LS -la", "Git status", "Grep -n x a.py", "Find . -name x"])
+def test_off_windows_a_look_only_name_in_other_letters_is_another_program(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert not permissions.is_read_only_command(command)
+
+
+@pytest.mark.parametrize("command", ["CAT a.py", "Get-Content a.py", "GET-CHILDITEM", "DIR"])
+def test_on_windows_look_only_names_match_in_any_letters(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.is_read_only_command(command)
+
+
+@pytest.mark.parametrize("command", ["npm test | ./cat", "npm test | bin/grep x", "npm test | GREP x",
+                                     "npm test | /usr/bin/grep x", "npm test | Tail -5"])
+def test_after_a_pipe_only_a_filter_named_plainly_counts_as_look_only(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "linux")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "npm test")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    assert gate.allows("run_command", {"command": "npm test | grep x"})
+    assert len(ask.questions) == 1
+
+
 @pytest.mark.parametrize("command", ["cat ~/.ssh/id_rsa", "cat /etc/passwd", "grep -r token ~/.config",
                                      "cat ../secret.txt", "head -n 5 /home/someone/.netrc", "ls ..",
                                      "rg --file=/etc/shadow x", "cat sub/../../x"])
@@ -191,6 +217,56 @@ def test_looking_outside_with_a_command_asks_even_in_plan_mode(workspace):
     gate = permissions.Gate(workspace, ask, mode=permissions.PLAN)
     assert gate.allows("run_command", {"command": "cat /etc/hostname"})
     assert len(ask.questions) == 1
+
+
+@pytest.fixture
+def hard_linked(workspace, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("elsewhere") / "secret.conf"
+    outside.write_text("not a real secret\n")
+    outside.with_name("page.html").write_text("<p>not a real secret</p>\n")
+    try:
+        os.link(outside, workspace.root / "shared.conf")
+        os.link(outside.with_name("page.html"), workspace.root / "page.html")
+    except OSError as error:
+        pytest.skip(f"hard links aren't possible here: {error}")
+    return workspace.root / "shared.conf"
+
+
+def test_a_hard_linked_file_asks_before_it_is_read(workspace, hard_linked):
+    ask = Asker("n", "n", "n")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.check("read_file", {"path": "shared.conf"}) == permissions.REFUSED
+    assert gate.check("run_command", {"command": "cat shared.conf"}) == permissions.REFUSED
+    assert gate.check("search", {"pattern": "secret", "path": "shared.conf"}) == permissions.REFUSED
+    assert [question for question, _preview in ask.questions] == [
+        "Read outside the project: shared.conf?", "Look outside the project: cat shared.conf?",
+        "Read outside the project: shared.conf?"]
+    assert not gate.shows_quietly("shared.conf")
+
+
+def test_a_hard_linked_page_asks_before_it_is_opened(workspace, hard_linked):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.check(eyes.SCREENSHOT, {"url": "page.html"}) == permissions.REFUSED
+    assert ask.questions[0][0].startswith("Open a file outside the project")
+
+
+def test_a_hard_linked_file_still_reads_quietly_in_allow_all_and_writes_like_any_project_file(workspace,
+                                                                                            hard_linked):
+    ask = Asker()
+    allow_all = permissions.Gate(workspace, ask, mode=permissions.ALLOW_ALL)
+    assert allow_all.check("read_file", {"path": "shared.conf"}) is None
+    auto = permissions.Gate(workspace, ask, mode=permissions.AUTO_EDIT)
+    assert auto.check("write_file", {"path": "shared.conf", "content": "x\n", "overwrite": True}) is None
+    assert ask.questions == []
+
+
+def test_a_file_with_one_name_inside_still_reads_quietly(workspace, hard_linked):
+    ask = Asker()
+    gate = permissions.Gate(workspace, ask)
+    assert gate.check("read_file", {"path": "a.py"}) is None
+    assert gate.check("run_command", {"command": "cat a.py"}) is None
+    assert ask.questions == []
 
 
 def test_a_symlink_out_of_the_project_counts_as_outside(workspace, tmp_path_factory):
@@ -962,6 +1038,62 @@ def test_a_deny_prefix_rule_for_a_launcher_still_forbids_it(workspace):
     gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
     gate.rules = rules(deny=["run_command(sudo:*)"])
     assert gate.check("run_command", {"command": "sudo make install"}) == permissions.RULE_DENIED
+
+
+EXPANSION_HIDDEN = [("run_command(rm *)", "rm$IFS-rf$IFS/tmp/x"), ("run_command(rm:*)", "r$@m -rf build"),
+                    ("run_command(curl:*)", "curl$IFS-sSfL http://x"), ("run_command(curl:*)", "curl$'\\t'http://x"),
+                    ("run_command(curl:*)", "c$@url x"), ("run_command(*curl*)", "c$@url x"),
+                    ("run_command(rm:*)", "/bin/r[m] -rf build"), ("run_command(rm:*)", "sudo r? -rf build"),
+                    ("run_command(rm:*)", "bash -c 'r$@m -rf build'")]
+EVERY_MODE = [permissions.DEFAULT, permissions.AUTO_EDIT, permissions.PLAN, permissions.ALLOW_ALL]
+
+
+@pytest.mark.parametrize("mode", EVERY_MODE)
+@pytest.mark.parametrize("deny, command", EXPANSION_HIDDEN)
+def test_a_command_whose_programs_hide_behind_an_expansion_is_refused_under_a_deny_rule(workspace, mode, deny,
+                                                                                       command):
+    ask = Asker("y")
+    gate = permissions.Gate(workspace, ask, mode=mode)
+    gate.rules = rules(deny=[deny])
+    assert gate.check("run_command", {"command": command}) == permissions.UNCHECKABLE_COMMAND
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("command", ["echo $HOME", "make > build.log", "cat <<< x"])
+def test_any_command_deny_rule_refuses_a_command_that_cannot_be_checked(workspace, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(git push:*)"])
+    assert gate.check("run_command", {"command": command}) == permissions.UNCHECKABLE_COMMAND
+
+
+def test_a_deny_rule_for_another_tool_leaves_unreadable_commands_to_the_mode(workspace):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.rules = rules(deny=["read_file(*.env)"])
+    assert gate.check("run_command", {"command": "r$@m -rf build"}) == permissions.REFUSED
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("deny, command", EXPANSION_HIDDEN)
+def test_allow_all_asks_before_a_command_it_cannot_read_even_without_rules(workspace, deny, command):
+    ask = Asker("n", "y")
+    gate = permissions.Gate(workspace, ask, mode=permissions.ALLOW_ALL)
+    assert gate.check("run_command", {"command": command}) == permissions.REFUSED
+    assert gate.check("run_command", {"command": command}) is None
+    assert len(ask.questions) == 2
+    assert command in ask.questions[0][0]
+
+
+@pytest.mark.parametrize("command", ["ls -la", "make test", "pytest -q tests", "npm run build && npm test",
+                                     "cat a.py | grep x", "X=1 python3 -m pytest", "sudo apt-get update",
+                                     "git commit -m 'rm the old file'", "python3 -m pytest 2>&1 | tail -5"])
+@pytest.mark.parametrize("mode", [permissions.ALLOW_ALL, permissions.DEFAULT])
+def test_plain_commands_are_unaffected_by_the_expansion_check(workspace, mode, command):
+    ask = Asker("y")
+    gate = permissions.Gate(workspace, ask, mode=mode)
+    gate.rules = rules(allow=["run_command(*)"], deny=["run_command(rm:*)", "run_command(curl:*)"])
+    assert gate.check("run_command", {"command": command}) is None
+    assert ask.questions == []
 
 
 POWERSHELL_HIDDEN = [r"ls .\; rm -r src", 'dir "a\\" ; Remove-Item -Recurse src ; echo "', "dir a\\\nrm a.py",

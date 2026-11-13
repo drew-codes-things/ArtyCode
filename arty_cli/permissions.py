@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -19,8 +20,9 @@ YES, NO, ALWAYS, SAVE = "y", "n", "a", "s"
 AGREEING = (YES, ALWAYS, SAVE)
 RULE_WILDCARDS = re.compile(r"([*?\[])")
 MAX_PREVIEW_CHARS = 6_000
+POWERSHELL_READ_ONLY = {"get-childitem", "get-content", "select-string", "get-location"}
 READ_ONLY_PROGRAMS = {"ls", "pwd", "cat", "head", "tail", "wc", "grep", "rg", "find", "tree", "which", "file", "stat",
-                      "du", "diff", "dir", "type", "get-childitem", "get-content", "select-string", "get-location"}
+                      "du", "diff", "dir", "type"} | POWERSHELL_READ_ONLY
 READ_ONLY_GIT = {"status", "diff", "log", "show", "branch", "blame", "rev-parse", "ls-files"}
 FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 RG_RUNNING_OPTIONS = ("--pre", "--hostname-bin")
@@ -45,6 +47,7 @@ WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
+SHELL_PATTERN = re.compile(r"[*?]|\[.*\]")
 BASH_ONLY_BRACKETS = re.compile(r"\[(?:\^|!?\[[:=.])")
 END_OF_OPTIONS = "--"
 QUOTED_OR_ESCAPED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.", re.DOTALL)
@@ -72,6 +75,11 @@ REFUSED_INSTEAD = (REFUSED_LEAD + " They said what to do instead: {said}. Do tha
                    "what they refused.")
 RULE_DENIED = ("A permission rule in the settings forbids this, so it wasn't done. Don't try another way round it; "
                "tell the user.")
+UNCHECKABLE_COMMAND = ("A permission rule in the settings forbids some commands, and this command hides which "
+                       "programs it runs from that rule (a $ or backtick expansion, brackets or braces, a < or a > "
+                       "into a file, a # comment, or a wildcard where a program's name goes), so it wasn't run. If it "
+                       "is allowed, write it again as plain words without those; don't try another way round the rule.")
+UNCHECKABLE_QUESTION = "Run: {command}? (allow-all still asks: ArtyCode can't tell which programs this runs)"
 RULE_SHAPE = re.compile(r"^([A-Za-z0-9_*?\[\]-]+)(?:\((.*)\))?$", re.DOTALL)
 COMMAND_PARTS = re.compile(r"[;&|\n]+")
 SETTINGS_FILE = "settings.json"
@@ -151,6 +159,19 @@ def refuse(question: str, preview: str = "", scope: str = "") -> str:
 
 def program_name(word: str) -> str:
     return Path(word).name.lower().removesuffix(".exe")
+
+
+def looked_up_name(word: str) -> str:
+    lowered = word.lower()
+    return lowered if sys.platform == "win32" or lowered in POWERSHELL_READ_ONLY else word
+
+
+def has_other_names(path: Path) -> bool:
+    try:
+        details = path.stat()
+    except OSError:
+        return False
+    return stat.S_ISREG(details.st_mode) and details.st_nlink > 1
 
 
 def discards_output(command: str, index: int) -> int:
@@ -386,7 +407,7 @@ def is_read_only_piece(command: str) -> bool:
     words = words_of(command)
     if not words:
         return False
-    program, arguments = words[0].lower(), words[1:]
+    program, arguments = looked_up_name(words[0]), words[1:]
     if program == "git":
         return is_read_only_git(arguments)
     if follows_links_or_writes(program, arguments):
@@ -567,6 +588,25 @@ def rough_words(part: str) -> list[str]:
     return [word.strip(UNREADABLE_WORD_EDGES) for word in part.split() if word.strip(UNREADABLE_WORD_EDGES)]
 
 
+def hides_its_programs(command: str) -> bool:
+    if not command.strip():
+        return False
+    pieces = command_pieces(command)
+    return not pieces or any(piece_hides_programs(words_of(text) or text.split()) for _joiner, text in pieces)
+
+
+def piece_hides_programs(words: list[str]) -> bool:
+    words = without_settings_and_keywords(words)
+    if not words:
+        return False
+    if SHELL_PATTERN.search(words[0]):
+        return True
+    program = program_name(words[0].lstrip("\\"))
+    if program not in WRAPPER_PROGRAMS and program not in SHELL_PROGRAMS:
+        return False
+    return any(hides_its_programs(word) for word in words[1:] if not word.startswith("-"))
+
+
 def prefix_covers_an_option(rule: str, name: str, target: str) -> bool:
     parts = rule_parts(rule)
     words = words_of(target)
@@ -586,6 +626,13 @@ class Rules:
         targets = [target] + ([part.strip() for part in COMMAND_PARTS.split(target) if part.strip()]
                               + program_runs(target) if name == "run_command" else [])
         return any(rule_matches(rule, name, targets) for rule in self.deny)
+
+    def denies_commands(self) -> bool:
+        return any(parts is not None and parts[1] is not None and fnmatch.fnmatchcase("run_command", parts[0])
+                   for parts in map(rule_parts, self.deny))
+
+    def cannot_check(self, name: str, target: str) -> bool:
+        return name == "run_command" and self.denies_commands() and hides_its_programs(target)
 
     def allows(self, name: str, target: str) -> bool:
         if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)
@@ -711,7 +758,10 @@ class Gate:
         return REFUSED_INSTEAD.format(said=said) if said else REFUSED
 
     def rule_refusal(self, name: str, arguments: dict) -> str | None:
-        return RULE_DENIED if self.rules.denies(name, call_target(self.workspace, name, arguments)) else None
+        target = call_target(self.workspace, name, arguments)
+        if self.rules.denies(name, target):
+            return RULE_DENIED
+        return UNCHECKABLE_COMMAND if self.rules.cannot_check(name, target) else None
 
     def rule_allows(self, name: str, arguments: dict) -> bool:
         return self.rules.allows(name, call_target(self.workspace, name, arguments))
@@ -732,6 +782,19 @@ class Gate:
         except tools.ToolError:
             return False
 
+    def holds_only_here(self, path: str) -> bool:
+        place = self.workspace.resolve(path)
+        return place.is_relative_to(self.workspace.root) and not has_other_names(place)
+
+    def reads_outside(self, arguments: dict) -> bool:
+        path = arguments.get("path")
+        if not path:
+            return False
+        try:
+            return not self.holds_only_here(str(path))
+        except tools.ToolError:
+            return False
+
     def has_read(self, path: str) -> bool:
         try:
             return self.workspace.resolve(path) in self.workspace.seen
@@ -742,7 +805,7 @@ class Gate:
         arguments = {"path": path}
         if self.rule_refusal("read_file", arguments):
             return False
-        if self.mode == ALLOW_ALL or not self.outside(arguments) or self.rule_allows("read_file", arguments):
+        if self.mode == ALLOW_ALL or not self.reads_outside(arguments) or self.rule_allows("read_file", arguments):
             return True
         return self.has_read(path)
 
@@ -764,7 +827,7 @@ class Gate:
             return True
         expanded = with_tilde_expanded(path, folder)
         try:
-            return not all(self.workspace.contains(found) for found in shell_matches(expanded, folder))
+            return not all(self.holds_only_here(found) for found in shell_matches(expanded, folder))
         except (tools.ToolError, OSError, ValueError):
             return True
 
@@ -826,7 +889,7 @@ class Gate:
         return [prefix for prefix in found if not launches_anything(prefix)]
 
     def is_quiet_filter(self, words: list[str], folder: Path) -> bool:
-        program, arguments = program_name(words[0]), words[1:]
+        program, arguments = looked_up_name(words[0]), words[1:]
         if program not in FILTER_PROGRAMS or follows_links_or_writes(program, arguments):
             return False
         if program == "cat":
@@ -877,6 +940,8 @@ class Gate:
             return denied
         if self.mode != PLAN and rules.is_record_change(self.workspace, name, arguments):
             return rules.append_only_refusal(self.workspace, name, arguments)
+        if self.mode == ALLOW_ALL and name == "run_command":
+            return self.confirm_unreadable(str(arguments.get("command") or ""))
         if self.mode == ALLOW_ALL or name in FREE_TOOLS:
             return None
         if name in tools.CHANGING_TOOLS and self.mode != PLAN and self.protects(arguments):
@@ -888,7 +953,7 @@ class Gate:
         if name in READING_TOOLS:
             if name == "list_files" and self.lists_outside(arguments):
                 return self.confirm(f"List files outside the project: {arguments.get('pattern')}?")
-            if not self.outside(arguments):
+            if not self.reads_outside(arguments):
                 return None
             return self.confirm(f"Read outside the project: {arguments.get('path')}?")
         if name == "web_fetch":
@@ -903,6 +968,11 @@ class Gate:
             return self.check_command(str(arguments.get("command", "")), bool(arguments.get("background")),
                                       self.command_folder(arguments))
         return self.check_other(name, read_only=False, arguments=arguments)
+
+    def confirm_unreadable(self, command: str) -> str | None:
+        if command in self.always or not hides_its_programs(command):
+            return None
+        return self.confirm(UNCHECKABLE_QUESTION.format(command=command), remember=command)
 
     def check_other(self, name: str, read_only: bool, preview: str = "", arguments: dict | None = None) -> str | None:
         denied = self.rule_refusal(name, arguments or {})
@@ -952,7 +1022,7 @@ class Gate:
         parts = urlparse(address)
         if parts.scheme == eyes.FILE_SCHEME:
             place = eyes.file_of(address)
-            inside = self.workspace.contains(str(place))
+            inside = self.holds_only_here(str(place))
             return None if inside else self.confirm(OUTSIDE_PAGE_QUESTION.format(path=place))
         if eyes.is_this_computer(parts.hostname or ""):
             return None
