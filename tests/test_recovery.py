@@ -451,3 +451,28 @@ def test_the_same_step_right_after_the_warning_still_stops(project):
     session = session_for(project, brain)
     session.ask("tidy the config")
     assert session.messages[-1]["content"] == agent.STUCK_STOPPED
+
+
+def big_file_and_its_first_window(project):
+    (project / "big.py").write_text("\n".join(f"value_{number} = {number}" for number in range(1, 601)) + "\n")
+    workspace = tools.Workspace(project)
+    return workspace, tools.read_file(workspace, "big.py")
+
+
+def test_a_rewrite_that_copies_the_read_window_tail_line_is_refused_and_the_file_kept(project):
+    workspace, shown = big_file_and_its_first_window(project)
+    tail = shown.splitlines()[-1]
+    assert tail.startswith("... ") and "read on with offset=" in tail
+    body = "\n".join(line.split("\t", 1)[1] for line in shown.splitlines() if "\t" in line) + "\n" + tail + "\n"
+    result = tools.run("write_file", {"path": "big.py", "content": body, "overwrite": True}, workspace)
+    assert result.startswith("Error") and "placeholder" in result
+    assert len((project / "big.py").read_text().splitlines()) == 600
+
+
+def test_a_rewrite_that_copies_the_read_window_header_is_refused(project):
+    workspace, shown = big_file_and_its_first_window(project)
+    header = shown.splitlines()[0]
+    assert header.startswith("[big.py: lines 1-")
+    result = tools.run("write_file", {"path": "big.py", "content": header + "\nvalue_1 = 1\n", "overwrite": True},
+                       workspace)
+    assert result.startswith("Error") and "placeholder" in result

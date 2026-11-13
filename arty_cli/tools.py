@@ -79,7 +79,9 @@ NO_CHANGE = (NOTHING_CHANGED + ". If that code is already what you want, the cha
 SAME_TEXT_TOOLS = ("edit_file", "multi_edit")
 DROPPED_MARK = "characters dropped to save room"
 HIDDEN_MARK = "[Hidden to save room"
-PLACEHOLDERS = re.compile(rf"\(\d+ {DROPPED_MARK}\)|^\.\.\. \d+ characters cut \.\.\.$|{re.escape(HIDDEN_MARK)}", re.M)
+PLACEHOLDERS = re.compile(rf"\(\d+ {DROPPED_MARK}\)|^\.\.\. \d+ characters cut \.\.\.$|{re.escape(HIDDEN_MARK)}"
+                          r"|^\.\.\. \d+ more lines; read on with offset=\d+$"
+                          r"|^\[[^\n\]]+: lines \d+-\d+ of \d+; \d+ above, \d+ below\]$|^\.\.\. \(diff cut\)$", re.M)
 PLACEHOLDER_REFUSAL = ("the new text has ArtyCode's placeholder \"{placeholder}\" in it. That marks text hidden from "
                        "an earlier step, not code, so nothing was changed: write the real lines out in full")
 KEY_ALIASES = {"file_path": "path", "filepath": "path", "file": "path", "filename": "path", "file_name": "path",
