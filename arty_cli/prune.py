@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from arty_cli import context, tools
 
-STUB_LEAD = "[Hidden to save room"
+STUB_LEAD = tools.HIDDEN_MARK
 KEPT_ROUNDS = 5
 MAX_OUTCOME_CHARS = 80
 EXIT_CODE = re.compile(r"\[(?:job \S+ finished with )?exit code (-?\d+)\]\s*$")
@@ -112,9 +112,9 @@ def is_stale(step: Step, later: list[Step]) -> bool:
 
 def shortened(value, key: str = ""):
     if isinstance(value, str):
-        if key in KEPT_WHOLE or len(value) <= KEPT_ARGUMENT_CHARS:
+        if key in KEPT_WHOLE or len(value) <= KEPT_ARGUMENT_CHARS or tools.PLACEHOLDERS.search(value):
             return value
-        return f"{value[:KEPT_ARGUMENT_CHARS]}... ({len(value) - KEPT_ARGUMENT_CHARS} characters dropped to save room)"
+        return f"{value[:KEPT_ARGUMENT_CHARS]}... ({len(value) - KEPT_ARGUMENT_CHARS} {tools.DROPPED_MARK})"
     if isinstance(value, dict):
         return {inner_key: shortened(inner, inner_key) for inner_key, inner in value.items()}
     if isinstance(value, list):

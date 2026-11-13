@@ -1,4 +1,6 @@
-from arty_cli import agent
+import json
+
+from arty_cli import agent, prune, tools
 from tests.scripted import ScriptedBrain, project, session_for
 
 assert project
@@ -57,3 +59,55 @@ def test_the_same_failing_call_after_the_note_still_stops_the_request(project):
     session.ask("make evaluate strip the input")
     assert session.messages[-1]["content"] == agent.STUCK_STOPPED
     assert brain.log.count("edit_file") == 4
+
+
+PARSE_ATOM = '''    def parse_atom(self):
+        token = self.peek()
+        if token is None:
+            raise CalculatorError("expected a number")
+        self.pos += 1
+        return token
+'''
+COPIED_PLACEHOLDER = ("    def parse_atom(self):\n        token = self.peek()\n        if token is None:\n"
+                      "            raise CalculatorError(\n                f\"expected a closing ')', got {f... "
+                      "(37 characters dropped to save room)\"\n            )")
+
+
+def test_an_edit_that_copies_the_dropped_text_placeholder_is_refused_and_the_file_kept(project):
+    (project / "calc.py").write_text(PARSE_ATOM)
+    copied = ("edit_file", {"path": "calc.py", "old_text": PARSE_ATOM.split("\n        self.pos")[0],
+                            "new_text": COPIED_PLACEHOLDER})
+    brain = ScriptedBrain([[("read_file", {"path": "calc.py"})], [copied], "Gave up."])
+    session = session_for(project, brain)
+    session.ask("make parse_atom report the closing bracket")
+    refused = brain.tool_results()[-1]
+    assert refused.startswith("Error") and "characters dropped to save room" in refused
+    assert (project / "calc.py").read_text() == PARSE_ATOM
+
+
+def test_a_write_that_copies_a_hidden_result_or_a_cut_marker_is_refused(project):
+    workspace = tools.Workspace(project)
+    for placeholder in (f"{prune.STUB_LEAD}: read_file calc.py (9 lines). Do it again if you need it.]",
+                        "x = 1\n... 4000 characters cut ...\ny = 2"):
+        found = tools.run("write_file", {"path": "new.py", "content": placeholder}, workspace)
+        assert found.startswith("Error"), found
+        assert not (project / "new.py").exists()
+
+
+def test_a_file_that_already_holds_the_marker_text_can_still_be_edited(project):
+    holding = "NOTE = '(12 characters dropped to save room)'\nvalue = 1\n"
+    (project / "notes.py").write_text(holding)
+    workspace = tools.Workspace(project)
+    tools.read_file(workspace, "notes.py")
+    found = tools.run("edit_file", {"path": "notes.py", "old_text": "value = 1", "new_text": "value = 2"}, workspace)
+    assert found.startswith("Edited"), found
+
+
+def test_past_arguments_are_shortened_once_with_the_real_count(project):
+    content = "x" * 5_000
+    call = {"id": "c1", "type": "function",
+            "function": {"name": "write_file", "arguments": json.dumps({"path": "a.py", "content": content})}}
+    once = prune.with_short_arguments(call)
+    twice = prune.with_short_arguments(once)
+    assert once == twice
+    assert "4800 characters dropped" in json.loads(twice["function"]["arguments"])["content"]

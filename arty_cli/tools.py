@@ -68,6 +68,11 @@ MIN_CLOSENESS = 0.5
 ECHO_CONTEXT_LINES = 3
 MAX_ECHO_LINES = 30
 NOT_FOUND = "old_text was not found"
+DROPPED_MARK = "characters dropped to save room"
+HIDDEN_MARK = "[Hidden to save room"
+PLACEHOLDERS = re.compile(rf"\(\d+ {DROPPED_MARK}\)|^\.\.\. \d+ characters cut \.\.\.$|{re.escape(HIDDEN_MARK)}", re.M)
+PLACEHOLDER_REFUSAL = ("the new text has ArtyCode's placeholder \"{placeholder}\" in it. That marks text hidden from "
+                       "an earlier step, not code, so nothing was changed: write the real lines out in full")
 KEY_ALIASES = {"file_path": "path", "filepath": "path", "file": "path", "filename": "path", "file_name": "path",
                "old_string": "old_text", "old_str": "old_text", "new_string": "new_text", "new_str": "new_text",
                "cmd": "command", "todos": "items", "content": "text", "task": "text", "title": "text",
@@ -625,7 +630,19 @@ def notebook_json(notebook: dict) -> str:
     return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
 
 
+def refuse_placeholders(before: str, after: str) -> None:
+    added = [found.group(0) for found in PLACEHOLDERS.finditer(after)]
+    if len(added) > len(PLACEHOLDERS.findall(before)):
+        raise ToolError(PLACEHOLDER_REFUSAL.format(placeholder=added[-1]))
+
+
 def planned_change(name: str, arguments: dict, workspace) -> tuple[Path, str, str]:
+    target, before, after = planned_text(name, arguments, workspace)
+    refuse_placeholders(before, after)
+    return target, before, after
+
+
+def planned_text(name: str, arguments: dict, workspace) -> tuple[Path, str, str]:
     target = workspace.resolve(arguments.get("path", ""))
     if name == "write_file":
         if target.exists() and not arguments.get("overwrite"):
