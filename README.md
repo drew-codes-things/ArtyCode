@@ -12,7 +12,7 @@
 
 </div>
 
-![ArtyCode in its own terminal interface: the welcome card, a request, steps with their results, a numbered diff and a permission panel above the input box](screenshot.png)
+![ArtyCode in its own terminal interface: the Arty logo and the session details at the top, a request, steps with their results, a numbered diff and a permission panel above the input box at the bottom](screenshot.png)
 
 ---
 
@@ -67,25 +67,51 @@ auto-edit, plan, then default again. allow-all is never reached with Shift+Tab, 
 
 ### The terminal interface
 
-On a terminal ArtyCode runs as its own interface inside it (built on [prompt_toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit),
-with [Pygments](https://pygments.org) colouring code). It doesn't take over the screen: everything it prints stays in
-the terminal's normal scrollback, and only the live part at the bottom (status, questions, the input box and the
-footer) is redrawn.
+On a terminal ArtyCode runs as its own full-screen interface (built on [prompt_toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit),
+with [Pygments](https://pygments.org) colouring code). It opens in the terminal's alternate screen: what was on the
+terminal goes away while it runs and comes back when you leave, with `/exit`, Ctrl-D, Ctrl-C twice, or when it stops
+on an error. The Arty logo and the session's details are the first thing in the conversation and scroll away as it
+grows; the input box and the footer stay at the bottom of the terminal. On the way out it prints the command that
+carries the chat on, once something has been asked:
 
 ```
-╭─ ◆ ArtyCode 0.1.0 ───────────────────────────────╮
-│ model   arty/qwen3:14b                           │
-│ folder  ~/calc-demo                              │
-│ mode    default: asks before it changes anything │
-│ rules   off                                      │
-╰──────────────────────────────────────────────────╯
+Resume this chat: arty --resume 20261113-101500-123456
+```
+
+(`--project <folder>` is added when you started it for another folder.) A chat looks like this:
+
+```
+     ▄████▄
+    ██▀  ▀██               ██
+   ██   ▄▄▄██▄ ██▄████   ███████  ██    ██
+  ██▄▄██▀▀  ██ ██▀         ██     ██    ██   ArtyCode 0.1.0
+  ██▀       ██ ██          ▀█▄▄▄  ▀██▄▄███   coding on your own Arty
+                                  ▄▄▄▄▄▄█▀
+
+  model    arty/qwen3:14b
+  folder   ~/calc-demo
+  context  24,576 tokens
+  mode     default: asks before it changes anything
+  rules    off
+
+  Esc stops a request · Enter while Arty works queues your next message
+  ? for shortcuts · /help for every command · @ attaches a file
+  No ARTY.md here yet: /init looks through the project and writes notes Arty reads every time.
 
 › fix the add function in calc.py
 
+✻ Thought for 1s
+● Update the checklist
+  └ 0 of 3 done
+    ☐ Read calc.py
+    ☐ Fix add
+    ☐ Run the tests
+
+✻ Thought for 1s
 ● Read calc.py
   └ 2 lines
 
-✻ Thought for 2s
+✻ Thought for 1s
 ● Run python3 -c "for n in range(1, 41): print(f'line {n} of the long output')"
 Run: python3 -c "for n in range(1, 41): print(f'line {n} of the long output')" → Yes
   └ line 40 of the long output (exit code 0)
@@ -94,7 +120,7 @@ Run: python3 -c "for n in range(1, 41): print(f'line {n} of the long output')" �
     line 3 of the long output
     … +37 lines (ctrl+o or /last to see all)
 
-✻ Thought for 2s
+✻ Thought for 1s
 ● Edit calc.py
     1  def add(a, b):
     2 -    return a - b
@@ -102,7 +128,7 @@ Run: python3 -c "for n in range(1, 41): print(f'line {n} of the long output')" �
 Edit calc.py? → Yes
   └ Edited calc.py +1 -1
 
-✻ Thought for 2s
+✻ Thought for 1s
 ● Run python3 -c "import calc; assert calc.add(2, 3) == 6, 'add(2, 3) gave 5'"
 Run: python3 -c "import calc; assert calc.add(2, 3) == 6, 'add(2, 3) gave 5'" → Yes
   └ AssertionError: add(2, 3) gave 5 (exit code 1)
@@ -111,6 +137,14 @@ Run: python3 -c "import calc; assert calc.add(2, 3) == 6, 'add(2, 3) gave 5'" �
                             ^^^^^^^^^^^^^^^^^^^
     AssertionError: add(2, 3) gave 5
 
+✻ Thought for 1s
+● Update the checklist
+  └ 3 of 3 done
+    ☑ Read calc.py
+    ☑ Fix add
+    ☑ Run the tests
+
+✻ Thought for 1s
 ● What I changed
 
   The bug was in calc.py: add subtracted instead of adding.
@@ -123,14 +157,23 @@ Run: python3 -c "import calc; assert calc.add(2, 3) == 6, 'add(2, 3) gave 5'" �
 
   Run the check again with python3 -m pytest.
 
-Worked for 20s · 6 steps · ↓ 2.1k tokens
+Worked for 12s · 6 steps · ↓ 2.1k tokens
+
+
 ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ › Ask Arty to fix, explain or build something                                                              │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
   default mode (shift+tab to cycle) · ? for shortcuts                       arty/qwen3:14b · 90% context left
 ```
 
-- **Welcome card.** A bordered card with the model, folder, mode and rules, then two short tips.
+- **Header.** The Arty logo in block letters, in Arty's red, with `ArtyCode` and the version beside it, then the
+  model, folder, context window, mode and rules, then two short tips. Under 60 columns the logo is a smaller one,
+  and under 40 it is a single line.
+- **Scrolling.** The conversation scrolls inside the interface, since the terminal's own scrollback isn't used while
+  it runs: **PageUp** and **PageDown** move a page, the mouse wheel three lines. While you are scrolled back a line
+  above the box says how many lines are below; sending a message, or a question from Arty, brings you back to the
+  newest lines. The mouse is the interface's while it runs, so to select text with it hold **Shift** as you drag
+  (most terminals).
 - **Your messages** are drawn as a shaded block starting with `›`, so they stand out from what Arty writes.
 - **Answers** are rendered as they stream: headings and `**bold**` turn bold, `` `code` `` and lists are drawn
   without their marks, and fenced code keeps its spacing behind a `│` with its syntax coloured.
@@ -161,18 +204,19 @@ Worked for 20s · 6 steps · ↓ 2.1k tokens
   stays one message.
 - **Questions.** Permission questions, plan approval and the model list from `/model` are asked in a bordered panel
   that takes the box's place: move with Up and Down or press the answer's letter or number, Enter confirms, Esc
-  refuses. The answer is then noted in the scrollback (`Edit greet.py? → Yes`). "What should Arty do instead?" and
+  refuses. The answer is then noted in the conversation (`Edit greet.py? → Yes`). "What should Arty do instead?" and
   plan feedback are typed in the box (what you were writing is put back afterwards). With remote control on, an answer
   from another device still wins or loses the same way as before.
 - **Notices.** When a permission question is waiting, or a request finishes after more than 30 seconds, the terminal
   bell rings and, on Linux with `notify-send`, a desktop notice appears. Set `notify` to `off` in the config file (or
   `ARTY_CLI_NOTIFY=off`) to turn both off.
-- **Resizing.** Making the window narrower or wider redraws the live part in place, also on terminals that rewrap
-  their lines (tmux, a phone's web terminal), so a question is never left behind twice.
+- **Resizing.** Making the window narrower or wider redraws the whole screen for the new width: long lines wrap
+  again, and the header switches between the logo sizes.
 
 `--plain` keeps the line-at-a-time prompt instead: a `›` between two rules with the mode bar under it, read with
 readline on Linux (arrow keys and history work) and key by key on Windows. The plain prompt is also what you get
-when output isn't a terminal, with `-p`, and when the interface can't start (it says why).
+when output isn't a terminal, with `-p`, and when the interface can't start (it says why). It prints the same
+`Resume this chat:` line when you leave.
 
 ### Look-only commands
 
