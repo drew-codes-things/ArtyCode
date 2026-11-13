@@ -186,3 +186,26 @@ def test_a_notify_setting_that_is_neither_on_nor_off_is_refused():
     with pytest.raises(settings.SettingsError, match="notify should be on or off"):
         notify.wanted(settings.Settings(notify="sometimes"))
     assert notify.wanted(settings.Settings(notify="yes")) and notify.wanted(None)
+
+
+CLIPBOARD = "\x1b]52;c;cHduZWQ=\x07"
+TERMINAL_TRICKS = [CLIPBOARD, "\x01" + CLIPBOARD + "\x02", "\x1b]8;;http://x.example\x1b\\link\x1b]8;;\x1b\\",
+                   "\x1bP1$qm\x1b\\", "\x9d0;title\x07", "\x9b31m", "\x1b]0;new title\x07", "\x1b[2J"]
+RAW_ESCAPES = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+@pytest.mark.parametrize("trick", TERMINAL_TRICKS)
+def test_readable_text_has_no_escape_or_control_sequences_left_and_keeps_the_words_around_them(trick):
+    cleaned = view.readable(f"before {trick}after")
+    assert not RAW_ESCAPES.search(cleaned) and cleaned.startswith("before ") and cleaned.endswith("after")
+    assert "52;c" not in cleaned and "title" not in cleaned
+
+
+@pytest.mark.parametrize("trick", TERMINAL_TRICKS)
+def test_a_step_label_and_its_outcome_line_never_carry_terminal_sequences(trick):
+    shown, out = shown_view()
+    shown.step(f"Run cat notes{trick}.txt")
+    shown.outcome(f"{trick}all good (exit code 0)", False)
+    shown.text(f"The file says {trick}hello\n")
+    assert not RAW_ESCAPES.search(bare(out.getvalue()).replace("\n", ""))
+    assert "all good (exit code 0)" in out.getvalue()

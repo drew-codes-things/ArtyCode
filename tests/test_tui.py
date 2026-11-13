@@ -738,3 +738,9 @@ def test_after_a_pause_a_letter_then_enter_answers_and_escape_always_refuses(sta
     assert interface.wait_answer(3) == "n"
     interface.close_question()
     assert typed_text(interface) == "and al"
+
+
+def test_text_between_the_zero_width_marks_never_reaches_the_terminal_raw():
+    rows = tui.screen_rows("\x01\x1b]52;c;cHduZWQ=\x07\x02ok", 80)
+    assert all("ZeroWidthEscape" not in style and "\x1b" not in text for row in rows for style, text in row)
+    assert rows_text(rows) == ["ok"]

@@ -1380,3 +1380,18 @@ def test_the_finish_check_follows_the_settings(ready, monkeypatch):
     made = started_workspaces(monkeypatch)
     cli.main(["-p", "hello"])
     assert made[0].finish_check.enabled is False
+
+
+def test_plain_mode_never_writes_terminal_sequences_from_a_command_or_the_model(monkeypatch):
+    clipboard = "\x1b]52;c;cHduZWQ=\x07"
+    out, err = io.StringIO(), io.StringIO()
+    terminal = cli.Terminal(out, err)
+    terminal.show_step(f"Run cat notes{clipboard}.txt")
+    terminal.show_outcome(f"{clipboard}all good (exit code 0)", False)
+    terminal.show_activity(f"hook: {clipboard}done")
+    terminal.show_text(f"The notes say {clipboard}hello\n")
+    monkeypatch.setattr(cli, "is_interactive", lambda: False)
+    terminal.ask(f"Run: cat {clipboard}notes.txt")
+    written = out.getvalue() + err.getvalue()
+    assert "\x1b]" not in written and "\x07" not in written
+    assert "all good (exit code 0)" in written and "hello" in written

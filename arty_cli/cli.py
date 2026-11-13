@@ -355,7 +355,8 @@ class Terminal:
         if self.view:
             self.view.text(text)
         else:
-            self.out.write(self.flow.feed(text) if self.out.isatty() else text)
+            shown = view.readable(text)
+            self.out.write(self.flow.feed(shown) if self.out.isatty() else shown)
             self.out.flush()
             self.mid_line = not text.endswith("\n")
         self.streamed_chars += len(text)
@@ -393,7 +394,7 @@ class Terminal:
         if self.view:
             self.view.step(line)
             return
-        first, *rest = self.err_lines(f"{STEP_MARK} {line}", STEP_HANG)
+        first, *rest = self.err_lines(f"{STEP_MARK} {view.readable(line)}", STEP_HANG)
         marked = self.paint(STEP_MARK, "accent") + first[len(STEP_MARK):]
         self.err.write("\n".join([marked, *rest]) + "\n")
         self.err.flush()
@@ -408,6 +409,7 @@ class Terminal:
         self.err.flush()
 
     def show_outcome(self, line: str, is_problem: bool) -> None:
+        line = view.readable(line)
         if self.view:
             self.stop_thinking()
             self.view.outcome(line, is_problem)
@@ -419,7 +421,7 @@ class Terminal:
 
     def show_activity(self, line: str) -> None:
         self.end_line()
-        for shown in self.err_lines(f"  · {line}", OUTCOME_HANG):
+        for shown in self.err_lines(f"  · {view.readable(line)}", OUTCOME_HANG):
             self.err.write(self.paint(shown, "dim") + "\n")
         self.err.flush()
 
@@ -447,6 +449,7 @@ class Terminal:
             return self.asked_about(question, preview, scope)
 
     def asked_about(self, question: str, preview: str = "", scope: str = "") -> str:
+        question = view.readable(question)
         if not is_interactive() and not self.remote:
             self.note(f"Refused without asking (no terminal to ask in): {question}", "error")
             return permissions.NO

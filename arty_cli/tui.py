@@ -45,6 +45,7 @@ START_SECONDS = 5.0
 WHEEL_ROWS = 3
 PAGE_OVERLAP_ROWS = 2
 TAB_STOP = 8
+ZERO_WIDTH_ESCAPE = "[ZeroWidthEscape]"
 SCROLLED_HINT = "  ↓ {} more lines below · pgdn or the mouse wheel to scroll down"
 JOIN_SECONDS = 2.0
 QUIT_SECONDS = 2.0
@@ -219,6 +220,8 @@ def screen_rows(line: str, width: int) -> list[list]:
     width = max(width, 1)
     rows, row, used = [], [], 0
     for style, text, *_rest in to_formatted_text(ANSI(line)):
+        if ZERO_WIDTH_ESCAPE in style:
+            continue
         for character in text:
             shown = " " * (TAB_STOP - used % TAB_STOP) if character == "\t" else character
             size = len(shown) if character == "\t" else get_cwidth(character)
