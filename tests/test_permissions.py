@@ -1538,3 +1538,29 @@ def test_quoted_wildcards_in_a_gh_command_stay_quiet(expansion_bait, command):
     ask = Asker()
     assert permissions.Gate(expansion_bait, ask, mode=permissions.PLAN).check("run_command", {"command": command}) is None
     assert ask.questions == []
+
+
+@pytest.fixture
+def project_beside_a_secret(tmp_path):
+    (tmp_path / "secret.txt").write_text("s\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "a.py").write_text("x = 1\n")
+    return tools.Workspace(project)
+
+
+@pytest.mark.parametrize("command", ["cat .*/secret.txt", "cat .?/secret.txt", "cat .[.]/secret.txt",
+                                     "cat .[!x]/secret.txt", "cat ./.*/secret.txt", "ls .*", "grep -r s .?",
+                                     "grep -f.*/secret.txt a.py", "grep --file=.*/secret.txt a.py",
+                                     "git diff --no-index a.py .*/secret.txt", "git log | grep s .*/secret.txt"])
+def test_a_wildcard_some_shells_expand_to_the_parent_folder_asks(project_beside_a_secret, command):
+    ask = Asker("n")
+    assert not permissions.Gate(project_beside_a_secret, ask).allows("run_command", {"command": command})
+    assert "outside" in ask.questions[0][0]
+
+
+@pytest.mark.parametrize("command", ["ls *.py", "cat a*", "ls -d .git*", "grep -n x .a*", "ls ?.py", "cat [a].py"])
+def test_wildcards_that_cannot_match_the_parent_folder_stay_quiet(project_beside_a_secret, command):
+    ask = Asker()
+    assert permissions.Gate(project_beside_a_secret, ask).allows("run_command", {"command": command})
+    assert ask.questions == []

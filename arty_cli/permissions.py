@@ -63,6 +63,7 @@ FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
 SHELL_EXPANDING_CHARACTERS = GLOB_CHARACTERS | {"~"}
+PARENT_FOLDER = ".."
 SHELL_PATTERN = re.compile(r"[*?]|\[.*\]")
 BASH_ONLY_BRACKETS = re.compile(r"\[(?:\^|!?\[[:=.])")
 END_OF_OPTIONS = "--"
@@ -528,6 +529,11 @@ def has_shell_expansion(text: str) -> bool:
     return bool(SHELL_EXPANDING_CHARACTERS & set(QUOTED_OR_ESCAPED.sub("", text)))
 
 
+def may_match_parent_folder(path: str) -> bool:
+    return any(part.startswith(".") and GLOB_CHARACTERS & set(part) and fnmatch.fnmatchcase(PARENT_FOLDER, part)
+               for part in path.replace("\\", "/").split("/"))
+
+
 def has_bash_only_wildcard(text: str) -> bool:
     return bool(BASH_ONLY_BRACKETS.search(QUOTED_OR_ESCAPED.sub("", text)))
 
@@ -903,6 +909,8 @@ class Gate:
 
     def reaches_outside(self, path: str, folder: Path) -> bool:
         if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path) or names_a_provider_drive(path):
+            return True
+        if may_match_parent_folder(path):
             return True
         expanded = with_tilde_expanded(path, folder)
         try:

@@ -232,7 +232,8 @@ shown there is thrown away when the question appears, so only an answer typed af
 `ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project,
 also when joined by pipes or `&&` (`cat a.py | grep -n x`), as long as there is no `$`, backtick or file redirection.
 Every path is read the way the shell would: `~`, `~+` and `~-`, wildcards (each match is followed through links), and
-Windows backslash, drive and network paths. Anything that reaches outside the project, or can't be read, asks first,
+Windows backslash, drive and network paths. A wildcard that starts with a dot (`.*`, `.?`) asks, since some shells
+match it to `..`, the folder above the project. Anything that reaches outside the project, or can't be read, asks first,
 in plan mode and in helpers too; so does a file with more than one hard link, since another of its names may be outside.
 Program names are matched letter for letter (`CAT` is not `cat`), except on Windows and for PowerShell commands. A command also asks when it uses an option that writes, runs a program or follows
 links out of the project (`rg --pre`, `find -fprint`, `find -L`, `grep -R`, `ls -L`, `du -L`, `tree -l`, `tree -o`,
