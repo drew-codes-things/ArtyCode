@@ -120,3 +120,12 @@ def test_a_run_with_fewer_passing_tests_after_a_change_is_worse_and_offers_undo(
     assert note.startswith(finish.WORSE_LEAD) and "13 failed, 17 passed" in note
     assert check.undo_target().last_change is first
     assert check.record("pytest", PYTEST_FAILING, second) == "" and check.undo_target() is None
+
+
+def test_each_test_command_is_compared_with_its_own_best_run():
+    check = finish.FinishCheck()
+    first, second, third = object(), object(), object()
+    check.record("pytest", PYTEST_FAILING, first)
+    check.record("pytest test_other.py", PYTEST_PASSING, second)
+    note = check.record("pytest", "=== 20 failed, 10 passed in 0.1s ===\n[exit code 1]", third)
+    assert note.startswith(finish.WORSE_LEAD) and "13 failed, 17 passed" in note

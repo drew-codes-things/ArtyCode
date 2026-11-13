@@ -99,8 +99,8 @@ def failed_names(lines: list[str]) -> tuple:
     return tuple(names)
 
 
-def same_command(first: str, second: str) -> bool:
-    return " ".join(first.split()) == " ".join(second.split())
+def command_key(command: str) -> str:
+    return " ".join(command.split())
 
 
 def newly_failing(run: TestRun, before: TestRun) -> str:
@@ -136,7 +136,7 @@ class FinishCheck:
     last: TestRun | None = None
     follow_ups: int = 0
     failures_when_asked: int | None = None
-    best: GoodRun | None = None
+    best: dict = field(default_factory=dict)
     went_worse_from: GoodRun | None = None
     notice: str = ""
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -144,7 +144,7 @@ class FinishCheck:
     def start_request(self) -> None:
         with self.lock:
             self.last, self.follow_ups, self.failures_when_asked = None, 0, None
-            self.best, self.went_worse_from, self.notice = None, None, ""
+            self.best, self.went_worse_from, self.notice = {}, None, ""
 
     def record(self, command: str, result: str, last_change: object = None) -> str:
         run = test_run_of(command, result)
@@ -155,9 +155,9 @@ class FinishCheck:
             return self.compared(run, last_change)
 
     def compared(self, run: TestRun, last_change: object) -> str:
-        best = self.best
-        if best is None or not same_command(best.run.command, run.command) or run.standing() >= best.run.standing():
-            self.best, self.went_worse_from = GoodRun(run, last_change), None
+        best = self.best.get(command_key(run.command))
+        if best is None or run.standing() >= best.run.standing():
+            self.best[command_key(run.command)], self.went_worse_from = GoodRun(run, last_change), None
             return ""
         if last_change is best.last_change:
             return ""
