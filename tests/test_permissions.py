@@ -640,10 +640,26 @@ def test_a_path_glued_to_a_flag_is_still_seen_as_outside(workspace, command):
 
 @pytest.mark.parametrize("command", ["Get-ChildItem Env:", r"Get-ChildItem HKCU:\Software", "Get-Content Variable:",
                                      "Get-ChildItem Cert:", "Get-ChildItem Env:ARTY_API_KEY",
-                                     "Get-Content -Path:Env:ARTY_API_KEY", "Get-ChildItem -Path HKLM:\\SOFTWARE"])
+                                     "Get-Content -Path:Env:ARTY_API_KEY", "Get-ChildItem -Path HKLM:\\SOFTWARE",
+                                     r"Get-Content Microsoft.PowerShell.Core\FileSystem::C:\Users\me\secret.txt"])
 def test_powershell_provider_drives_are_outside_the_project_on_windows(workspace, monkeypatch, command):
     monkeypatch.setattr(sys, "platform", "win32")
     assert asked_about(workspace, command) == [f"Look outside the project: {command}?"]
+
+
+@pytest.mark.parametrize("path", ["Env:", "env:ARTY_API_KEY", "HKCU:\\Software", "hklm:/SOFTWARE", "Cert:", "Variable:x",
+                                  "Function:", "Alias:", "WSMan:", "FileSystem::C:\\Users\\me\\secret.txt",
+                                  "Registry::HKEY_CURRENT_USER", "Microsoft.PowerShell.Core\\FileSystem::C:\\x"])
+def test_windows_provider_drives_and_provider_paths_are_recognised(monkeypatch, path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.names_a_provider_drive(path)
+
+
+@pytest.mark.parametrize("word", ["https://github.com/octo/demo/pull/1", "is:open author:@me", "HEAD:a.py",
+                                  "author:@me", "origin/main:a.py", "key:value"])
+def test_words_with_a_colon_that_name_no_powershell_drive_are_not_provider_paths(monkeypatch, word):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not permissions.names_a_provider_drive(word)
 
 
 @pytest.mark.parametrize("command", ["ls -la", "cat a.py", "Get-Content a.py", "grep -n x a.py",

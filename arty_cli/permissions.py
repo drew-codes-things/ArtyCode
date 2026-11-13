@@ -59,7 +59,8 @@ LINK_FOLLOWING_FLAGS = {"grep": GREP_LINK_FOLLOWING, "egrep": GREP_LINK_FOLLOWIN
 FIND_LINK_FOLLOWING = {"-L", "-follow"}
 SHELL_DIRECTORY_STACK = ("~+", "~-")
 WINDOWS_ABSOLUTE = re.compile(r"^([A-Za-z]:|\\\\|//)")
-WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
+POWERSHELL_DRIVES = {"alias", "cert", "env", "function", "hkcu", "hklm", "variable", "wsman", "temp"}
+PROVIDER_QUALIFIER = "::"
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
@@ -540,7 +541,12 @@ def paths_among(words: list[str]) -> list[str]:
 
 
 def names_a_provider_drive(path: str) -> bool:
-    return sys.platform == "win32" and bool(WINDOWS_PROVIDER_DRIVE.match(path))
+    if sys.platform != "win32":
+        return False
+    if PROVIDER_QUALIFIER in path:
+        return True
+    drive, colon, _rest = path.partition(":")
+    return bool(colon) and drive.lower() in POWERSHELL_DRIVES
 
 
 def named_paths(command: str) -> list[str]:
