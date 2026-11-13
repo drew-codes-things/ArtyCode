@@ -1065,3 +1065,52 @@ def test_a_line_continuation_between_words_still_reads_as_one_look_only_command(
     assert permissions.command_pieces("echo 'a\\\nb'") == [("", "echo 'a\\\nb'")]
     assert permissions.is_read_only_command("ls \\\n-la")
 
+
+
+@pytest.fixture
+def linked_out(workspace, tmp_path_factory):
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    (elsewhere / "secret.conf").write_text("secret\n")
+    (workspace.root / "link").symlink_to(elsewhere)
+    (workspace.root / "sub").mkdir()
+    (workspace.root / "sub" / "l").symlink_to(elsewhere)
+    (workspace.root / "sub" / "notes.txt").write_text("hi\n")
+    return workspace
+
+
+@pytest.mark.parametrize("command", ["cat [[:alpha:]]ink/secret.conf", "cat [^x]ink/secret.conf",
+                                     "cat [[:lower:]][[:lower:]]nk/secret.conf", "cat [[=l=]]ink/secret.conf",
+                                     "cat [[.l.]]ink/secret.conf"])
+def test_a_wildcard_bash_reads_differently_from_python_asks(linked_out, command):
+    ask = Asker("n")
+    assert not permissions.Gate(linked_out, ask).allows("run_command", {"command": command})
+    assert "outside" in ask.questions[0][0]
+
+
+@pytest.mark.parametrize("command", ["cat l/secret.conf", "cat ./l/secret.conf", "cat l*/secret.conf",
+                                     "cat ~+/l/secret.conf", "ls -la l/"])
+def test_a_relative_path_is_read_from_the_folder_the_command_runs_in(linked_out, command):
+    ask = Asker("n")
+    assert not permissions.Gate(linked_out, ask).allows("run_command", {"command": command, "cwd": "sub"})
+    assert "outside" in ask.questions[0][0]
+
+
+def test_a_quiet_filter_after_a_prefix_reads_paths_from_the_folder_the_command_runs_in(linked_out):
+    ask = Asker("n")
+    gate = permissions.Gate(linked_out, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "python3 -m pytest")
+    assert not gate.allows("run_command", {"command": "python3 -m pytest | grep x l/secret.conf", "cwd": "sub"})
+    assert len(ask.questions) == 1
+
+
+def test_a_path_inside_the_folder_the_command_runs_in_still_needs_no_question(linked_out):
+    ask = Asker()
+    assert permissions.Gate(linked_out, ask).allows("run_command", {"command": "cat notes.txt", "cwd": "sub"})
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("command", ["grep -n '[^a]' a.py", "grep -E '[[:space:]]+x' a.py", 'grep -rn "[[:upper:]]" .'])
+def test_a_quoted_or_escaped_bracket_class_is_a_pattern_not_a_wildcard(workspace, command):
+    ask = Asker()
+    assert permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert ask.questions == []

@@ -41,6 +41,8 @@ WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
+BASH_ONLY_BRACKETS = re.compile(r"\[(?:\^|!?\[[:=.])")
+QUOTED_OR_ESCAPED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.", re.DOTALL)
 GIT_PROGRAM_SETTINGS = re.compile(r"^(core\.(fsmonitor|pager|sshcommand|askpass|editor)|diff\.external|"
                                   r"diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|"
                                   r"gpg(\..+)?\.program|log\.showsignature|include(if)?\..+)=", re.IGNORECASE)
@@ -396,9 +398,20 @@ def is_directory_stack_form(path: str) -> bool:
     return head.startswith(SHELL_DIRECTORY_STACK) and head != "~+"
 
 
-def with_tilde_expanded(path: str, root) -> str:
+def has_bash_only_wildcard(text: str) -> bool:
+    return bool(BASH_ONLY_BRACKETS.search(QUOTED_OR_ESCAPED.sub("", text)))
+
+
+def shell_matches(path: str, folder: Path) -> list[str]:
+    pattern = path if os.path.isabs(path) else str(Path(folder) / path)
+    if not GLOB_CHARACTERS & set(path):
+        return [pattern]
+    return glob.glob(pattern) or [pattern]
+
+
+def with_tilde_expanded(path: str, folder) -> str:
     if path == "~+" or path.startswith("~+/"):
-        return str(root) + path[2:]
+        return str(folder) + path[2:]
     return os.path.expanduser(path)
 
 
@@ -689,20 +702,23 @@ class Gate:
         question = f"{verb} {arguments.get('path')}? ({PROTECTED_NOTE})"
         return None if self.ask(question, diff_preview(self.workspace, name, arguments)) in AGREEING else self.refused()
 
-    def reaches_outside(self, path: str) -> bool:
+    def reaches_outside(self, path: str, folder: Path) -> bool:
         if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path) or names_a_provider_drive(path):
             return True
-        expanded = with_tilde_expanded(path, self.workspace.root)
+        expanded = with_tilde_expanded(path, folder)
         try:
-            return not all(self.workspace.contains(found) for found in self.shell_matches(expanded))
+            return not all(self.workspace.contains(found) for found in shell_matches(expanded, folder))
         except (tools.ToolError, OSError, ValueError):
             return True
 
-    def shell_matches(self, path: str) -> list[str]:
-        if not GLOB_CHARACTERS & set(path):
-            return [path]
-        pattern = path if os.path.isabs(path) else str(self.workspace.root / path)
-        return glob.glob(pattern) or [path]
+    def command_folder(self, arguments: dict) -> Path:
+        cwd = str(arguments.get("cwd") or "")
+        if not cwd:
+            return self.workspace.root
+        try:
+            return self.workspace.resolve(cwd)
+        except (tools.ToolError, OSError, ValueError):
+            return self.workspace.root
 
     def lists_outside(self, arguments: dict) -> bool:
         try:
@@ -752,7 +768,7 @@ class Gate:
         found = [mark.removeprefix(SESSION_PREFIX_MARK) for mark in self.always if mark.startswith(SESSION_PREFIX_MARK)]
         return [prefix for prefix in found if not launches_anything(prefix)]
 
-    def is_quiet_filter(self, words: list[str]) -> bool:
+    def is_quiet_filter(self, words: list[str], folder: Path) -> bool:
         program, arguments = program_name(words[0]), words[1:]
         if program not in FILTER_PROGRAMS or follows_links_or_writes(program, arguments):
             return False
@@ -762,9 +778,9 @@ class Gate:
             writes = has_flag_letters(arguments, SORT_WRITING_LETTERS) or any(
                 word.startswith(SORT_WRITING_OPTIONS) for word in arguments)
             return all(word.startswith("-") and word != "-" for word in arguments) and not writes
-        return not any(self.reaches_outside(path) for path in paths_among(words))
+        return not any(self.reaches_outside(path, folder) for path in paths_among(words))
 
-    def piece_allowed(self, joiner: str, text: str, prefixes: list[str]) -> bool:
+    def piece_allowed(self, joiner: str, text: str, prefixes: list[str], folder: Path) -> bool:
         words = words_of(text)
         if not words:
             return False
@@ -772,18 +788,18 @@ class Gate:
             return True
         if any(starts_with_words(words, prefix) for prefix in prefixes):
             return True
-        return joiner in PIPES and self.is_quiet_filter(words)
+        return joiner in PIPES and not has_bash_only_wildcard(text) and self.is_quiet_filter(words, folder)
 
-    def pieces_allowed(self, command: str) -> bool:
+    def pieces_allowed(self, command: str, folder: Path) -> bool:
         pieces = command_pieces(command)
         prefixes = self.session_prefixes() + self.rules.command_prefixes()
-        return bool(pieces) and all(self.piece_allowed(joiner, text, prefixes) for joiner, text in pieces)
+        return bool(pieces) and all(self.piece_allowed(joiner, text, prefixes, folder) for joiner, text in pieces)
 
-    def prefixes_for(self, command: str) -> list[str]:
+    def prefixes_for(self, command: str, folder: Path | None = None) -> list[str]:
         found = []
         for joiner, text in command_pieces(command):
             words = words_of(text)
-            if joiner in PIPES and words and self.is_quiet_filter(words):
+            if joiner in PIPES and words and self.is_quiet_filter(words, folder or self.workspace.root):
                 continue
             prefix = prefix_words(words)
             if not prefix:
@@ -791,8 +807,8 @@ class Gate:
             found.append(" ".join(prefix))
         return without_covered(found)
 
-    def confirm_command(self, question: str, command: str) -> str | None:
-        prefixes = self.prefixes_for(command)
+    def confirm_command(self, question: str, command: str, folder: Path) -> str | None:
+        prefixes = self.prefixes_for(command, folder)
         if not prefixes:
             return self.confirm(question, remember=command, rule=self.command_rule(command))
         return self.confirm_scoped(question, "", [SESSION_PREFIX_MARK + prefix for prefix in prefixes],
@@ -827,7 +843,8 @@ class Gate:
         if name in tools.CHANGING_TOOLS:
             return PLAN_REFUSAL if self.mode == PLAN else self.check_change(name, arguments)
         if name == "run_command":
-            return self.check_command(str(arguments.get("command", "")), bool(arguments.get("background")))
+            return self.check_command(str(arguments.get("command", "")), bool(arguments.get("background")),
+                                      self.command_folder(arguments))
         return self.check_other(name, read_only=False, arguments=arguments)
 
     def check_other(self, name: str, read_only: bool, preview: str = "", arguments: dict | None = None) -> str | None:
@@ -917,21 +934,22 @@ class Gate:
         return self.confirm(f"{verb} {arguments.get('path')}?", preview, remember=EDITS,
                             rule=self.rule_for(name, arguments))
 
-    def check_command(self, command: str, background: bool) -> str | None:
+    def check_command(self, command: str, background: bool, folder: Path) -> str | None:
         if is_read_only_command(command) and not background:
-            return self.check_looking(command)
+            return self.check_looking(command, folder)
         if self.mode == PLAN:
             return PLAN_REFUSAL
-        if command in self.always or self.pieces_allowed(command):
+        if command in self.always or self.pieces_allowed(command, folder):
             return None
         label = "Start in the background" if background else "Run"
-        return self.confirm_command(f"{label}: {command}", command)
+        return self.confirm_command(f"{label}: {command}", command, folder)
 
-    def check_looking(self, command: str) -> str | None:
+    def check_looking(self, command: str, folder: Path) -> str | None:
         if command in self.always:
             return None
         pieces = [text for _joiner, text in command_pieces(command)]
-        if any(self.reaches_outside(path) for text in pieces for path in named_paths(text)):
+        if any(has_bash_only_wildcard(text) or any(self.reaches_outside(path, folder) for path in named_paths(text))
+               for text in pieces):
             return self.confirm(f"Look outside the project: {command}?", remember=command,
                                 rule=self.command_rule(command))
         runs_git = any(words_of(text)[0].lower() == "git" for text in pieces)
