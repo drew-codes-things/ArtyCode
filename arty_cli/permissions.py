@@ -46,6 +46,7 @@ FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
 BASH_ONLY_BRACKETS = re.compile(r"\[(?:\^|!?\[[:=.])")
+END_OF_OPTIONS = "--"
 QUOTED_OR_ESCAPED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.", re.DOTALL)
 GIT_PROGRAM_SETTINGS = re.compile(r"^(core\.(fsmonitor|pager|sshcommand|askpass|editor)|diff\.external|"
                                   r"diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|"
@@ -429,6 +430,26 @@ def is_directory_stack_form(path: str) -> bool:
 
 def has_bash_only_wildcard(text: str) -> bool:
     return bool(BASH_ONLY_BRACKETS.search(QUOTED_OR_ESCAPED.sub("", text)))
+
+
+def raw_words_of(text: str) -> list[str]:
+    try:
+        return shlex.split(text, posix=False)
+    except ValueError:
+        return text.split()
+
+
+def wildcard_names_an_option(text: str, folder: Path) -> bool:
+    for word in raw_words_of(text)[1:]:
+        if word == END_OF_OPTIONS:
+            return False
+        if not GLOB_CHARACTERS & set(QUOTED_OR_ESCAPED.sub("", word)):
+            continue
+        pattern = words_of(word)
+        matches = glob.glob(pattern[0], root_dir=folder) if pattern else []
+        if any(found.startswith("-") for found in matches):
+            return True
+    return False
 
 
 def shell_matches(path: str, folder: Path) -> list[str]:
@@ -971,11 +992,12 @@ class Gate:
                             rule=self.rule_for(name, arguments))
 
     def check_command(self, command: str, background: bool, folder: Path) -> str | None:
-        if is_read_only_command(command) and not background:
+        hidden_option = any(wildcard_names_an_option(text, folder) for _joiner, text in command_pieces(command))
+        if is_read_only_command(command) and not background and not hidden_option:
             return self.check_looking(command, folder)
         if self.mode == PLAN:
             return PLAN_REFUSAL
-        if command in self.always or self.pieces_allowed(command, folder):
+        if command in self.always or (not hidden_option and self.pieces_allowed(command, folder)):
             return None
         label = "Start in the background" if background else "Run"
         return self.confirm_command(f"{label}: {command}", command, folder)
