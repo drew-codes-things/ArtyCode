@@ -251,7 +251,11 @@ Saved rules skip or forbid questions. Put them in `settings.json` in the config 
 A rule is a tool name, or a tool name with a wildcard pattern in brackets that is matched against the path (relative
 to the project), the command, the address or the list pattern. A command pattern ending in `:*`, such as
 `run_command(npm test:*)`, is a prefix: it matches any command whose first words are those words. Deny wins over
-everything, including `allow-all` and hooks, and is checked against each part of a chained command. A chained command
+everything, including `allow-all` and hooks, and is checked against each part of a chained command and against the
+program each part runs, also behind a path (`/bin/rm`), a setting (`X=1 rm`), a shell keyword or a program that starts
+another (`sudo`, `xargs`, `bash -c`). It is still a match on the command's words, not on what a program does:
+`find -delete` or a script that removes files is not caught by `run_command(rm *)`, so a command deny rule stops the usual
+ways of running that program, not every way of doing what it does. A chained command
 or pipeline (`|`, `&&`, `||`, `;`, a new line) is allowed only when every part is: a part matches an allow rule or a
 prefix allowed with **a**, or, after a `|`, is only a look-only filter (`tail`, `head`, `grep`, `wc`, `sort`, `uniq`,
 or `cat` with nothing after it) that reads nothing outside the project. Nothing is allowed this way with `$`,

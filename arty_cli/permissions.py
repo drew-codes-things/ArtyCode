@@ -114,6 +114,11 @@ SUBCOMMAND_PROGRAMS = {"git", "npm", "yarn", "pnpm", "cargo", "go", "docker", "p
                        "poetry", "pipenv", "conda", "dotnet", "gradle", "gradlew", "mvn", "apt", "apt-get", "brew",
                        "systemctl", "gh", "helm", "terraform", "composer", "bundle", "gem", "rustup", "flutter",
                        "dart", "swift"}
+ENVIRONMENT_SETTING = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+SHELL_PROGRAMS = {"sh", "bash", "zsh", "dash", "ksh", "fish", "pwsh", "powershell", "cmd"}
+UNREADABLE_COMMAND_STARTS = re.compile(r"\$\(|[;&|()`{}\n]")
+UNREADABLE_WORD_EDGES = "\"'\\$<>"
+MAX_INNER_RUN_WORDS = 64
 PIPES = ("|", "|&")
 SEPARATORS = ("||", "&&", "|&", "|", "&", ";", "\n")
 ENDING_SEPARATORS = (";", "&", "\n")
@@ -457,6 +462,46 @@ def rule_matches(rule: str, name: str, targets: list[str]) -> bool:
     return parts[1] is None or any(fnmatch.fnmatchcase(target, parts[1].strip()) for target in targets)
 
 
+def without_settings_and_keywords(words: list[str]) -> list[str]:
+    while words and (ENVIRONMENT_SETTING.match(words[0]) or words[0] in SHELL_KEYWORDS):
+        words = words[1:]
+    return words
+
+
+def run_from(words: list[str]) -> str:
+    return shlex.join([program_name(words[0].lstrip("\\")), *words[1:]])
+
+
+def inner_runs(arguments: list[str]) -> list[str]:
+    runs = []
+    for index, word in enumerate(arguments):
+        if any(character.isspace() for character in word):
+            runs += program_runs(word)
+        elif not word.startswith("-"):
+            runs.append(run_from(arguments[index:index + MAX_INNER_RUN_WORDS]))
+    return runs
+
+
+def piece_runs(words: list[str]) -> list[str]:
+    words = without_settings_and_keywords(words)
+    if not words:
+        return []
+    program = program_name(words[0].lstrip("\\"))
+    launches_others = program in WRAPPER_PROGRAMS or program in SHELL_PROGRAMS
+    return [run_from(words)] + (inner_runs(words[1:]) if launches_others else [])
+
+
+def program_runs(command: str) -> list[str]:
+    pieces = command_pieces(command)
+    if not pieces:
+        return [run for part in UNREADABLE_COMMAND_STARTS.split(command) for run in piece_runs(rough_words(part))]
+    return [run for _joiner, text in pieces for run in piece_runs(words_of(text) or text.split())]
+
+
+def rough_words(part: str) -> list[str]:
+    return [word.strip(UNREADABLE_WORD_EDGES) for word in part.split() if word.strip(UNREADABLE_WORD_EDGES)]
+
+
 @dataclass
 class Rules:
     allow: list[str] = field(default_factory=list)
@@ -468,7 +513,7 @@ class Rules:
 
     def denies(self, name: str, target: str) -> bool:
         targets = [target] + ([part.strip() for part in COMMAND_PARTS.split(target) if part.strip()]
-                              if name == "run_command" else [])
+                              + program_runs(target) if name == "run_command" else [])
         return any(rule_matches(rule, name, targets) for rule in self.deny)
 
     def allows(self, name: str, target: str) -> bool:

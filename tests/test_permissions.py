@@ -903,6 +903,37 @@ def test_an_older_launcher_or_keyword_prefix_no_longer_covers_anything(workspace
     assert len(ask.questions) == 2
 
 
+RM_HIDDEN_FROM_TEXT_MATCHING = ["/bin/rm -rf build", "if true; then rm -rf build; fi", "command rm -rf build",
+                                "X=1 rm -rf build", "echo $(rm -rf build)", "sudo rm -rf build", "(rm -rf build)",
+                                "{ rm -rf build; }", "ls | xargs -0 rm -f", "bash -c 'rm -rf build'",
+                                "\\rm -rf build", "eval 'rm -rf build'", "echo `rm -rf build`",
+                                "timeout 5 rm -rf build", "env A=1 rm -rf build", "sh -c \"cd src && rm -rf x\""]
+
+
+@pytest.mark.parametrize("deny", ["run_command(rm:*)", "run_command(rm *)"])
+@pytest.mark.parametrize("command", RM_HIDDEN_FROM_TEXT_MATCHING)
+def test_a_deny_rule_matches_the_program_however_the_command_reaches_it(workspace, deny, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=[deny])
+    assert gate.check("run_command", {"command": command}) == permissions.RULE_DENIED
+
+
+@pytest.mark.parametrize("command", ["git commit -m 'rm the old file'", "grep -n rm notes.txt", "echo rm",
+                                     "npm run format", "firmware --list", "ls -la"])
+def test_a_deny_rule_for_a_program_leaves_commands_that_only_mention_it(workspace, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(rm:*)", "run_command(rm *)"])
+    assert gate.check("run_command", {"command": command}) is None
+
+
+@pytest.mark.parametrize("command", ["/usr/bin/git push --force", "GIT_TRACE=1 git push", "env git push origin",
+                                     "cd app && command git push"])
+def test_a_two_word_deny_prefix_matches_behind_paths_settings_and_wrappers(workspace, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(git push:*)"])
+    assert gate.check("run_command", {"command": command}) == permissions.RULE_DENIED
+    assert gate.check("run_command", {"command": "git pull"}) is None
+
 def test_a_deny_prefix_rule_for_a_launcher_still_forbids_it(workspace):
     gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
     gate.rules = rules(deny=["run_command(sudo:*)"])
