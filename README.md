@@ -533,7 +533,8 @@ usual:
 It is off by default. When it can't run (no `bwrap`, or a container that blocks it) ArtyCode says so and runs commands
 without it; `"sandbox": "required"` refuses commands instead. A trusted project's `.arty/settings.json` can switch
 the sandbox on or make it required, never off, and can't turn the network on. Helpers' commands and the ones you type
-after `!` run in the sandbox too; hooks and MCP servers don't.
+after `!` run in the sandbox too; hooks, MCP servers, the headless browser for `screenshot` and the checks after
+edits don't.
 
 ### Built-in working rules
 
@@ -672,7 +673,11 @@ middle of one, so the brain can keep reusing what it already read.
   The pictures go to `.arty/screenshots/` (that folder ignores itself in git), and the result gives the HTTP status,
   the title, console errors, uncaught errors, failed or 4xx/5xx requests and the start of the visible text. With
   `question`, each screenshot also goes through `view_image`. The browser runs with a throwaway profile in the temp
-  folder, never your own, with no extensions or sound, and the profile is deleted when the shot is done. The browser
+  folder, never your own, with no extensions or sound, and the profile is deleted when the shot is done. An HTML file
+  is opened with every network request sent nowhere, this computer's addresses included (the result lists them as
+  failed requests), so a project page can't send anything out; a page from a local server loads what it asks for,
+  as in a normal browser.
+  The browser
   is found on the PATH (Chrome, `chromium`, `microsoft-edge` and others), where Windows and macOS install Chrome,
   Edge and Chromium, or at `ARTY_BROWSER`; without one, `screenshot` isn't offered.
 - `http_check` sends a GET or HEAD (no request body, no saved headers or keys) and returns the status, the time,

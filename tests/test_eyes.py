@@ -149,12 +149,14 @@ def test_a_brain_without_a_vision_model_says_so(tmp_path):
 class FakeBrowser:
     opened = []
 
-    def __init__(self, program):
+    def __init__(self, program, offline=False):
         self.program = program
+        self.offline = offline
         self.leftover = ""
 
     def __enter__(self):
         FakeBrowser.opened.append(self.program)
+        FakeBrowser.offline.append(self.offline)
         return "page"
 
     def __exit__(self, *details):
@@ -173,6 +175,7 @@ def fake_visit(page, url, width, height, mobile=False, settle_seconds=headless.S
 @pytest.fixture
 def fake_browser(monkeypatch):
     FakeBrowser.opened = []
+    FakeBrowser.offline = []
     fake_visit.calls = []
     monkeypatch.setattr(headless, "Browser", FakeBrowser)
     monkeypatch.setattr(headless, "visit", fake_visit)
@@ -203,6 +206,20 @@ def test_one_width_gives_one_screenshot_of_a_project_file(tmp_path, fake_browser
     assert fake_visit.calls == [((tmp_path / "index.html").as_uri(), 1024, 700, False)]
     assert "Opened the file" in result and ".arty/screenshots/index-1024.png (1024x700)" in result
 
+
+def test_a_project_file_is_opened_with_outside_requests_blocked_and_the_report_says_so(tmp_path, fake_browser):
+    (tmp_path / "index.html").write_text("<p>hi</p>")
+    result = eyes.Eyes(tools.Workspace(tmp_path), None, lambda: "chrome").run(
+        "screenshot", {"url": "index.html", "width": 800})
+    assert FakeBrowser.offline == [True]
+    assert eyes.OFFLINE_NOTE in result
+
+
+def test_a_local_server_page_is_opened_with_the_network_as_before(tmp_path, fake_browser):
+    result = eyes.Eyes(tools.Workspace(tmp_path), None, lambda: "chrome").run(
+        "screenshot", {"url": "http://localhost:8000/", "width": 800})
+    assert FakeBrowser.offline == [False]
+    assert eyes.OFFLINE_NOTE not in result
 
 def test_screenshots_can_be_looked_at_with_a_question(tmp_path, fake_browser):
     with serving([VISION_ANSWER, VISION_ANSWER], "application/json") as (url, recorder):
@@ -318,6 +335,53 @@ def test_a_real_browser_shrinks_a_big_picture_before_it_is_sent(tmp_path):
         result = eyes.Eyes(tools.Workspace(tmp_path), client_for(url)).run("view_image", {"path": "huge.png"})
     assert eyes.picture_facts(sent_picture(recorder.requests[0])[1]) == (eyes.PNG, 1280, 320)
     assert result.startswith("huge.png (2000x500, sent as 1280x320 PNG)")
+
+
+def outward_address() -> str:
+    finder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        finder.connect(("192.0.2.1", 9))
+        found = finder.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        finder.close()
+    return "" if found.startswith("127.") else found
+
+
+
+
+class CountingHandler(BaseHTTPRequestHandler):
+    hits = []
+
+    def do_GET(self):
+        CountingHandler.hits.append(self.path)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"x")
+
+    def log_message(self, *details):
+        pass
+
+
+@needs_browser
+@pytest.mark.parametrize("listening_on", [outward_address, lambda: "127.0.0.1"])
+def test_a_real_browser_never_lets_a_project_page_reach_the_network(tmp_path, listening_on):
+    if not listening_on():
+        pytest.skip("no address other than loopback here")
+    CountingHandler.hits = []
+    server = ThreadingHTTPServer((listening_on(), 0), CountingHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address[:2]
+    try:
+        (tmp_path / "page.html").write_text(f"<p>hi</p><img src='http://{host}:{port}/img?d=secret'>"
+                                            f"<script>fetch('http://{host}:{port}/fetch?d=secret')</script>")
+        result = eyes.Eyes(tools.Workspace(tmp_path), None).run("screenshot", {"url": "page.html", "width": 800})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert CountingHandler.hits == []
+    assert "Visible text (start): hi" in result
 
 
 def test_a_screenshot_is_never_saved_through_an_arty_folder_that_links_outside(tmp_path):
