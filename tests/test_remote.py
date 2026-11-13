@@ -33,17 +33,21 @@ def relay_client(relay):
 
 
 class Lines:
-    def __init__(self, *typed):
+    def __init__(self, *typed, ahead=()):
         self.typed = list(typed)
+        self.ahead = list(ahead)
         self.discarded = 0
 
     def line(self, seconds):
+        if self.ahead:
+            return self.ahead.pop(0)
         if self.typed:
             return self.typed.pop(0)
         time.sleep(min(seconds, 0.02))
         return None
 
     def discard(self):
+        self.ahead = []
         self.discarded += 1
 
 
@@ -254,13 +258,20 @@ def test_an_answer_from_another_device_wins_and_the_half_typed_one_is_dropped(re
     finally:
         answering.join()
         bridge.stop()
-    assert lines.discarded == 1
+    assert lines.discarded == 2
     assert written[0] == "Run `ls`? [y/n/a]: "
     assert relay.events_of("permission")[0]["text"] == "Run `ls`?"
     assert relay.events_of("permission_answered") == [
         {"type": "permission_answered", "request_id": relay.events_of("permission")[0]["request_id"], "allow": True,
          "by": PHONE}]
 
+
+def test_a_line_typed_before_a_shared_question_is_shown_never_answers_it(relay):
+    bridge, _written = started_bridge(relay, Lines("n\n", ahead=["y\n"]))
+    try:
+        assert bridge.answer("Run `git push`? ", ANSWERS, "Run `git push`?", "") == (permissions.NO, "")
+    finally:
+        bridge.stop()
 
 def test_an_answer_typed_here_first_wins_and_a_late_one_from_afar_is_ignored(relay):
     bridge, written = started_bridge(relay, Lines("maybe\n", "n\n"))

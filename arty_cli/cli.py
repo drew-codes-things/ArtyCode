@@ -531,6 +531,7 @@ class Terminal:
     def asked(self, question: str) -> str:
         if self.console:
             return self.console.line(question)
+        prompt_line.discard_typed_ahead()
         return input(prompt_line.readline_safe(self.paint(question, "accent")))
 
     def review_plan(self, plan: str) -> tuple[str, str]:

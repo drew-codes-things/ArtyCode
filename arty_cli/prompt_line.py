@@ -40,6 +40,19 @@ SLASH_SHOWS_COMMANDS = '"/": "\\C-v/\\t"'
 COMPLETION_SETTINGS = ("tab: complete", "set show-all-if-ambiguous on", "set bell-style none", SLASH_SHOWS_COMMANDS)
 
 
+def discard_typed_ahead(stream=None) -> None:
+    stream = stream if stream is not None else sys.stdin
+    if stream is None or not stream.isatty():
+        return
+    if os.name == "nt":
+        import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+        return
+    import termios
+    termios.tcflush(stream.fileno(), termios.TCIFLUSH)
+
+
 def shown_at_once(text: str) -> None:
     sys.stdout.write(text)
     sys.stdout.flush()

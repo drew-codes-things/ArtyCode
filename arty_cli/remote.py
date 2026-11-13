@@ -536,6 +536,8 @@ class Bridge:
 
     def raced(self, request_id: str, prompt: str, answers: dict) -> tuple[str, str]:
         self.write_prompt(prompt)
+        if self.lines:
+            self.lines.discard()
         while True:
             found = self.remote_answer(request_id, 0 if self.lines else LINE_POLL_SECONDS)
             if found:

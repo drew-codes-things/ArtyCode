@@ -221,7 +221,8 @@ Worked for 12s · 6 steps · ↓ 2.1k tokens
 `--plain` keeps the line-at-a-time prompt instead: a `›` between two rules with the mode bar under it, read with
 readline on Linux (arrow keys and history work) and key by key on Windows. The plain prompt is also what you get
 when output isn't a terminal, with `-p`, and when the interface can't start (it says why). It prints the same
-`Resume this chat:` line when you leave.
+`Resume this chat:` line when you leave, with the name you started ArtyCode as. Anything typed before a question is
+shown there is thrown away when the question appears, so only an answer typed after it counts.
 
 ### Look-only commands
 

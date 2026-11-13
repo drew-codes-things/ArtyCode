@@ -6,6 +6,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -1305,6 +1306,56 @@ def test_a_question_pauses_the_interrupt_key_so_typing_works(monkeypatch):
     assert terminal.ask("Edit app.py?") == cli.permissions.YES
     assert terminal.stop_key.paused_while == ["in", "out"]
 
+
+needs_a_pty = pytest.mark.skipif(sys.platform == "win32", reason="pseudo terminals are POSIX only")
+
+
+def answer_after_a_pause(terminal_end: int, text: bytes, seconds: float = 0.5) -> threading.Thread:
+    writer = threading.Thread(target=lambda: (time.sleep(seconds), os.write(terminal_end, text)), daemon=True)
+    writer.start()
+    return writer
+
+
+@needs_a_pty
+@pytest.mark.parametrize("typed_ahead", [b"y\n", b"a\n", b"s\nyes\n"])
+def test_a_line_typed_before_a_plain_question_is_shown_never_answers_it(monkeypatch, typed_ahead):
+    import pty
+    keyboard, terminal_end = pty.openpty()
+    with os.fdopen(terminal_end, "r", closefd=False) as typed_in:
+        monkeypatch.setattr(sys, "stdin", typed_in)
+        os.write(keyboard, typed_ahead)
+        terminal = cli.Terminal(io.StringIO(), io.StringIO())
+        terminal.offers_rules = True
+        answers = []
+        asking = threading.Thread(target=lambda: answers.append(terminal.ask("Run: git push --force?")), daemon=True)
+        asking.start()
+        answer_after_a_pause(keyboard, b"n\n").join()
+        asking.join(5)
+    os.close(keyboard)
+    os.close(terminal_end)
+    assert answers == [cli.permissions.NO]
+
+
+def test_typed_ahead_keys_are_drained_on_windows_before_a_question(monkeypatch):
+    pending = list("y\r")
+
+    class Keys:
+        @staticmethod
+        def kbhit():
+            return bool(pending)
+
+        @staticmethod
+        def getwch():
+            return pending.pop(0)
+
+    class Console(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(cli.prompt_line.os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "msvcrt", Keys)
+    cli.prompt_line.discard_typed_ahead(Console())
+    assert pending == []
 
 def test_without_a_terminal_there_is_no_interrupt_key():
     terminal = cli.Terminal(io.StringIO(), io.StringIO())
