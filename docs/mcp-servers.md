@@ -46,7 +46,7 @@ Add which MCP service? It opens in your browser for you to sign in.
 ● Sign in to Notion in the browser
   └ Opened the sign-in page
 ● Finish signing in to Notion
-  └ Signed in
+  └ Signed in as you@example.com
 notion (yours): connected with <n> tools
 ```
 
@@ -74,13 +74,23 @@ registered by hand, so use a token in `headers` for those.
 |---|---|
 | `/mcp add [service or address] [name]`, `arty mcp add [service or address] [--name NAME]` | Sign in and add it |
 | `/mcp login <name>`, `arty mcp login <name>` | Sign in to it again |
-| `/mcp remove <name>`, `arty mcp remove <name>` | Remove it and its saved sign-in |
+| `/mcp remove <name>`, `arty mcp remove <name>` | Remove it and its saved sign-in, and ask the service to forget the sign-in if it offers that |
 | `/mcp` | Every server: connected with how many tools, needs sign-in again, or why it didn't start |
+| `arty mcp`, `arty mcp list` | How to use these commands (the list itself is `/mcp` in a chat) |
 
 How the sign-in works: ArtyCode follows the MCP authorization rules. It reads the server's protected resource
 metadata (from its `401` answer or the `.well-known` address) and then its sign-in server's metadata, registers itself
 as a public client, and sends you to the sign-in page with PKCE (S256), a random `state` and a return address on
-`127.0.0.1` with a random port. It only answers a return with the same `state`, and gives up after 5 minutes.
+`127.0.0.1` with a random port. A return with any other `state` is turned away and ArtyCode keeps waiting for the
+real one; it gives up after 5 minutes. When the service says which account you signed in with, ArtyCode shows it
+(`Signed in as ...`).
+
+- **Where it will sign in.** For an address you typed (not one from the list), if the sign-in page is on a different
+  host from the MCP server, ArtyCode names both and asks before it goes on. The sign-in, token and registration
+  addresses must be https; a server on the internet can't send ArtyCode to this computer, a private network
+  (`10.x`, `192.168.x`, `169.254.x`, `fc00::/7` and the like) or names such as `localhost`, `*.local` and
+  `*.internal`. Only an MCP server on this computer may use a sign-in server on this computer. None of these requests
+  follow a redirect, and an answer over 1 MB is not read.
 
 - **What is saved.** Your `settings.json` gets `"notion": {"url": "https://mcp.notion.com/mcp", "signIn": "notion"}`,
   with no token in it. The tokens go in `mcp-sign-ins.json` in the same config folder, readable only by you (mode
@@ -91,12 +101,25 @@ as a public client, and sends you to the sign-in page with PKCE (S256), a random
   same address; with any other address the server isn't started and the token isn't sent. Signed-in requests never
   follow a redirect.
 - **Renewing.** A token about to run out is renewed before it is used, and a `401` renews it once and tries again. If
-  renewing fails, the tool answers that the sign-in has run out, `/mcp` shows **needs sign-in again** and offers to
-  open the sign-in page, and `/mcp login <name>` does it any time. Signing in again stops if the service has moved to
-  a different sign-in server; remove it and add it again if that is expected.
+  the sign-in server turns the renewal down, the tool answers that the sign-in has run out, `/mcp` shows **needs
+  sign-in again** and offers to open the sign-in page, and `/mcp login <name>` does it any time. If the sign-in server
+  can't be reached (or is busy), that is what the tool says, a token that is still valid keeps being used, and the
+  next call that works clears the warning. Signing in again stops if the service has moved to a different sign-in
+  server; remove it and add it again if that is expected.
+- **Several ArtyCodes at once.** Every ArtyCode on the computer takes a lock (`mcp-sign-ins.lock` beside the sign-ins
+  file) while it reads, renews or saves, and reads the file again before renewing: if another one has just renewed,
+  it uses that token instead of renewing again, so services that hand out a new refresh token each time don't sign
+  the others out. If the renewed sign-in can't be saved (a full disk, a read-only folder), the tool's answer says so
+  and the new token is kept until ArtyCode quits.
 - **No browser here (SSH, a server).** ArtyCode prints the sign-in address. Open it on any device; after you approve,
   the browser tries to load an address starting `http://127.0.0.1:<port>/callback`, which won't load there. Copy that
   whole address and paste it into ArtyCode. Or forward the port first (`ssh -L <port>:127.0.0.1:<port> <computer>`)
   and it finishes by itself; press Enter once it has.
 - **Remote control.** Messages from your phone or starfire.ai go to the model, never to `/mcp`, so a shared chat
   can't start a sign-in, and the offer to sign in again isn't made while the chat is shared.
+- **Shared computers.** While the browser is open on the sign-in page, its address (with the `state`, the PKCE
+  challenge and the return port, but not the PKCE verifier) is on the browser's command line, which other people
+  signed in to the same computer can usually read. Someone there could race you to the return address with a sign-in
+  to their own account, and ArtyCode would then hold their account, not yours. Check the `Signed in as` line when the
+  service shows one, and on a computer you share with people you don't trust, sign in on a computer of your own
+  and copy `mcp-sign-ins.json` and the `settings.json` entry across instead.

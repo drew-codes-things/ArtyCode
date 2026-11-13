@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from arty_cli import mcp, oauth, screen, settings, sign_ins
+from arty_cli import mcp, oauth, permissions, screen, settings, sign_ins, view
 from arty_cli.screen import Terminal
 
 MCP_WORD = "mcp"
@@ -18,6 +18,11 @@ ADD, LOGIN, REMOVE = "add", "login", "remove"
 ACTIONS = (ADD, LOGIN, REMOVE)
 NAME_OPTION = "--name"
 EXIT_GOOD, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
+EXIT_INTERRUPTED = 130
+HELP_WORDS = ("", "list", "help", "-h", "--help")
+LIST_HINT = "In a chat, /mcp lists your MCP servers, whether each is connected and its tools."
+PASTE_TRIES = 3
+YES_NO = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO}
 CUSTOM_LABEL = "Another service, by its MCP address"
 PICK_QUESTION = "Add which MCP service? It opens in your browser for you to sign in."
 ADDRESS_QUESTION = "MCP server address (https://...): "
@@ -95,7 +100,7 @@ def service_keys() -> str:
 
 
 def default_name(url: str) -> str:
-    labels = [label for label in (urlsplit(url).hostname or "").lower().split(".")[:-1]
+    labels = [label for label in oauth.host_of(url).lower().split(".")[:-1]
               if label not in NAME_PARTS_DROPPED]
     found = SAFE_NAME.sub("-", labels[-1] if labels else "").strip("-")
     return found or FALLBACK_NAME
@@ -196,6 +201,25 @@ def opened_callback(world: World):
         return None
 
 
+def is_catalogue_address(url: str) -> bool:
+    return any(service.url == url for service in CATALOGUE)
+
+
+def agreed_to_sign_in_elsewhere(terminal: Terminal, url: str, discovery: oauth.Discovery, world: World) -> bool:
+    server_host, sign_in_host = oauth.host_of(url), oauth.host_of(discovery.authorization_endpoint)
+    if is_catalogue_address(url) or server_host == sign_in_host:
+        return True
+    question = view.readable(f"{server_host} sends you to {sign_in_host} to sign in. Sign in there?")
+    if not world.is_interactive():
+        raise SignInStopped(f"{question} ArtyCode needs to ask you that first, so run it in a terminal.")
+    prompt = terminal.show_choices(question, (("y", f"Yes, open the sign-in page at {view.readable(sign_in_host)}"),
+                                              ("n", "No, stop here")))
+    try:
+        return terminal.answer(prompt, YES_NO, question)[0] == permissions.YES
+    except EOFError:
+        return False
+
+
 def finished_code(terminal: Terminal, pending: oauth.Pending, callback, world: World, shown_browser: bool) -> str:
     if callback is not None and (shown_browser or not world.is_interactive()):
         with terminal.working("Waiting for you to sign in in the browser"):
@@ -204,13 +228,22 @@ def finished_code(terminal: Terminal, pending: oauth.Pending, callback, world: W
 
 
 def pasted_code(terminal: Terminal, pending: oauth.Pending, callback) -> str:
+    tries_left = PASTE_TRIES
     while True:
         try:
             pasted = terminal.asked(PASTE_QUESTION).strip()
         except EOFError:
             raise SignInStopped("The sign-in was stopped before it finished.") from None
         if pasted:
-            return oauth.code_from_address(pasted, pending.state)
+            try:
+                return oauth.code_from_address(pasted, pending.state)
+            except oauth.WrongAnswer as error:
+                tries_left -= 1
+                if not tries_left:
+                    raise
+                terminal.note(view.readable(f"{error} Paste the whole address again ({tries_left} more "
+                                            f"{'try' if tries_left == 1 else 'tries'})."), "error")
+            continue
         if callback is not None and callback.finished():
             return callback.wait(0)
         terminal.note("Nothing has come back yet. Paste the address, or finish signing in first.")
@@ -244,6 +277,8 @@ def signed_in(terminal: Terminal, name: str, label: str, url: str, store: sign_i
     if bound_issuer and oauth.comparable(discovery.issuer) != oauth.comparable(bound_issuer):
         raise SignInStopped(f"{label} now signs in at {discovery.issuer}, not {bound_issuer} as before, so ArtyCode "
                             f"stopped. If that is expected, run arty mcp remove {name} and add it again.")
+    if not agreed_to_sign_in_elsewhere(terminal, url, discovery, world):
+        raise SignInStopped(f"You chose not to sign in at {oauth.host_of(discovery.authorization_endpoint)}.")
     callback = opened_callback(world)
     if callback is None and not world.is_interactive():
         raise SignInStopped(NO_TERMINAL.format(name=name))
@@ -256,8 +291,7 @@ def signed_in(terminal: Terminal, name: str, label: str, url: str, store: sign_i
             callback.listen(pending.state)
         code = browser_code(terminal, label, pending, callback, world)
         tokens = stepped(terminal, f"Finish signing in to {label}",
-                         lambda: oauth.exchange(discovery, client, pending, code, world.fetch),
-                         lambda _found: "Signed in")
+                         lambda: oauth.exchange(discovery, client, pending, code, world.fetch), signed_in_as)
     except oauth.OAuthError as error:
         raise SignInStopped(f"Not signed in: {error}") from None
     finally:
@@ -268,11 +302,15 @@ def signed_in(terminal: Terminal, name: str, label: str, url: str, store: sign_i
     return record
 
 
+def signed_in_as(tokens: oauth.Tokens) -> str:
+    return f"Signed in as {tokens.account}" if tokens.account else "Signed in"
+
+
 def browser_code(terminal: Terminal, label: str, pending: oauth.Pending, callback, world: World) -> str:
     terminal.show_step(f"Sign in to {label} in the browser")
     shown = has_browser(world) and bool(world.open_browser(pending.url))
     terminal.show_outcome("Opened the sign-in page" if shown else "Open the sign-in page yourself", False)
-    terminal.note(f"Sign-in page: {pending.url}")
+    terminal.note(f"Sign-in page: {view.readable(pending.url)}")
     if shown:
         terminal.note("If no browser appeared, open that address yourself.")
     else:
@@ -318,32 +356,51 @@ def signed_in_again(terminal: Terminal, personal: Path, name: str, store: sign_i
     return mcp.ServerConfig(name, "", [], {}, "yours", url=url, sign_in=name)
 
 
-def removed(terminal: Terminal, personal: Path, name: str, store: sign_ins.Store) -> bool:
+def removed(terminal: Terminal, personal: Path, name: str, store: sign_ins.Store, fetch=oauth.fetched) -> bool:
     entry = saved_entry(personal, name)
     if entry is not None and not is_signed_in_entry(entry, name):
         terminal.note(f"{name} isn't a service you signed in to; change it in {personal_settings_path(personal)}.",
                       "error")
         return False
+    record = store.get(name)
     dropped_entry = drop_entry(personal, name)
     dropped_sign_in = store.remove(name)
     if not (dropped_entry or dropped_sign_in):
         terminal.note(f"There's no MCP server called {name} in your settings.", "error")
         return False
     terminal.note(f"Removed {name} and its saved sign-in.", "green")
+    if dropped_sign_in and record is not None and record.revocation_endpoint:
+        revoke_at_service(terminal, name, record, fetch)
     return True
+
+
+def revoke_at_service(terminal: Terminal, name: str, record: sign_ins.Record, fetch) -> None:
+    token, hint = (record.refresh_token, "refresh_token") if record.refresh_token else (record.access_token,
+                                                                                         "access_token")
+    try:
+        with terminal.working(f"Asking {name} to forget the sign-in"):
+            oauth.revoked(record.revocation_endpoint, record.server_url, record.client(), token, hint, fetch)
+    except oauth.OAuthError as error:
+        terminal.note(view.readable(f"{name} wasn't told to forget the sign-in ({error}); it is removed here anyway."))
+        return
+    terminal.note(f"{name} was told to forget the sign-in too.")
 
 
 def wanted_service(wanted: str) -> Service | None:
     found = service_named(wanted)
     if found is not None:
         return found
-    if urlsplit(wanted).scheme in mcp.WEB_SCHEMES:
+    try:
+        scheme = urlsplit(wanted).scheme
+    except ValueError:
+        return None
+    if scheme in mcp.WEB_SCHEMES:
         return Service(default_name(wanted), wanted, wanted, "")
     return None
 
 
 def handles(argv: list[str]) -> bool:
-    return len(argv) >= 2 and argv[0] == MCP_WORD and argv[1] in ACTIONS
+    return argv[:1] == [MCP_WORD]
 
 
 def split_name_option(rest: list[str]) -> tuple[list[str], str]:
@@ -361,26 +418,41 @@ def is_good_name(name: str) -> bool:
 
 def run(argv: list[str], terminal: Terminal | None = None, world: World | None = None) -> int:
     terminal, world = terminal or Terminal(), world or World()
+    action = argv[1] if len(argv) > 1 else ""
+    usage = USAGE.format(services=service_keys())
+    if action in HELP_WORDS:
+        terminal.note(usage)
+        terminal.note(LIST_HINT)
+        return EXIT_GOOD
+    if action not in ACTIONS:
+        terminal.note(usage, "error")
+        return EXIT_USAGE
+    try:
+        return acted(terminal, world, action, argv, usage)
+    except KeyboardInterrupt:
+        terminal.note("Stopped. Nothing more was changed.", "error")
+        return EXIT_INTERRUPTED
+    except (SignInStopped, sign_ins.SignInError, oauth.OAuthError, mcp.McpError, OSError) as error:
+        terminal.note(view.readable(f"{error} Nothing was saved."), "error")
+        return EXIT_FAILED
+
+
+def acted(terminal: Terminal, world: World, action: str, argv: list[str], usage: str) -> int:
     personal = settings.config_dir()
     store = sign_ins.Store(personal)
-    action, (rest, name) = argv[1], split_name_option(argv[2:])
-    usage = USAGE.format(services=service_keys())
-    try:
-        if action == ADD:
-            service = wanted_service(rest[0]) if rest else (picked_service(terminal) if world.is_interactive() else None)
-            if service is None or len(rest) > 1 or (name and not is_good_name(name)):
-                terminal.note(usage, "error")
-                return EXIT_USAGE
-            added(terminal, personal, service, name or service.key, store, world)
-            terminal.note("Start ArtyCode and its tools are there; /mcp shows them.")
-            return EXIT_GOOD
-        if len(rest) != 1 or not is_good_name(rest[0]):
+    rest, name = split_name_option(argv[2:])
+    if action == ADD:
+        service = wanted_service(rest[0]) if rest else (picked_service(terminal) if world.is_interactive() else None)
+        if service is None or len(rest) > 1 or (name and not is_good_name(name)):
             terminal.note(usage, "error")
             return EXIT_USAGE
-        if action == LOGIN:
-            signed_in_again(terminal, personal, rest[0], store, world)
-            return EXIT_GOOD
-        return EXIT_GOOD if removed(terminal, personal, rest[0], store) else EXIT_FAILED
-    except (SignInStopped, sign_ins.SignInError) as error:
-        terminal.note(f"{error} Nothing was saved.", "error")
-        return EXIT_FAILED
+        added(terminal, personal, service, name or service.key, store, world)
+        terminal.note("Start ArtyCode and its tools are there; /mcp shows them.")
+        return EXIT_GOOD
+    if len(rest) != 1 or not is_good_name(rest[0]):
+        terminal.note(usage, "error")
+        return EXIT_USAGE
+    if action == LOGIN:
+        signed_in_again(terminal, personal, rest[0], store, world)
+        return EXIT_GOOD
+    return EXIT_GOOD if removed(terminal, personal, rest[0], store, world.fetch) else EXIT_FAILED

@@ -1,9 +1,12 @@
 import contextlib
+import http.client
 import io
 import json
 import os
 import re
+import signal
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -16,7 +19,7 @@ import pytest
 from arty_cli import cli, mcp, mcp_sign_in, oauth, screen, settings, sign_ins, tools
 from tests import fake_http_mcp, fake_oauth_mcp
 from tests.scripted import ScriptedBrain, session_for
-from tests.test_oauth import no_redirect
+from tests.test_oauth import cut_short_server, no_redirect
 
 SIGN_IN_PAGE = re.compile(r"Sign-in page: (\S+)")
 
@@ -242,6 +245,7 @@ class Redirecting(BaseHTTPRequestHandler):
         return None
 
     def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
         self.send_response(302)
         self.send_header("Location", Redirecting.target)
         self.send_header("Content-Length", "0")
@@ -425,7 +429,7 @@ def test_arty_mcp_add_is_its_own_command_not_a_question(monkeypatch):
     ran = []
     monkeypatch.setattr(mcp_sign_in, "run", lambda argv: ran.append(argv) or 0)
     assert cli.main(["mcp", "add", "notion"]) == 0 and ran == [["mcp", "add", "notion"]]
-    assert not mcp_sign_in.handles(["mcp"]) and not mcp_sign_in.handles(["mcp", "is", "what"])
+    assert not mcp_sign_in.handles(["mcp servers?"]) and not mcp_sign_in.handles(["fix", "mcp"])
 
 
 def test_the_lettered_list_offers_every_catalogue_service_and_a_custom_address(home, monkeypatch):
@@ -574,3 +578,329 @@ def test_tokens_stay_out_of_saved_conversations_and_transcripts(home, provider, 
 ])
 def test_a_browser_is_only_opened_where_one_can_appear(environ, platform, expected):
     assert mcp_sign_in.has_browser(mcp_sign_in.World(environ=environ, platform=platform)) is expected
+
+
+def test_two_sessions_share_a_sign_in_whose_refresh_token_rotates(home, provider):
+    found, url = provider
+    signed_in_through_cli(url)
+    first, second = hub_for(home), hub_for(home)
+    try:
+        assert first.start([signed_in_config(url)]) == [] and second.start([signed_in_config(url)]) == []
+        found.revoke_access()
+        assert first.run("mcp__fake__whoami", {}) == f"signed in as {fake_oauth_mcp.USER}"
+        assert second.run("mcp__fake__whoami", {}) == f"signed in as {fake_oauth_mcp.USER}"
+        assert [state.status for state in second.states()] == [mcp.CONNECTED]
+    finally:
+        first.close()
+        second.close()
+    assert [form["grant_type"] for form in found.token_requests].count("refresh_token") == 1
+    assert stored().refresh_token in found.refresh_tokens and stored().access_token in found.access_tokens
+
+
+def flaky_credentials(store: sign_ins.Store, network: dict, clock: dict):
+    real = store.credentials
+
+    def fetch(*args, **kwargs):
+        if not network["up"]:
+            raise oauth.Unavailable("Couldn't reach the token address: [Errno -3] Temporary failure in name resolution")
+        return oauth.fetched(*args, **kwargs)
+
+    return lambda name, server_url: real(name, server_url, fetch, lambda: clock["now"])
+
+
+def test_a_brief_network_failure_is_not_reported_as_a_lost_sign_in(home, provider):
+    found, url = provider
+    signed_in_through_cli(url)
+    store = sign_ins.Store(personal())
+    network, clock = {"up": True}, {"now": time.time()}
+    store.credentials = flaky_credentials(store, network, clock)
+    hub = mcp.Hub(tools.Workspace(home), sign_ins_store=store)
+    try:
+        assert hub.start([signed_in_config(url)]) == []
+        clock["now"] += found.expires_in - 30
+        network["up"] = False
+        assert hub.run("mcp__fake__whoami", {}) == f"signed in as {fake_oauth_mcp.USER}"
+        found.revoke_access()
+        answer = hub.run("mcp__fake__whoami", {})
+        assert "couldn't reach the sign-in server" in answer and "has run out" not in answer
+        assert [state.status for state in hub.states()] == [mcp.CONNECTED]
+        network["up"] = True
+        assert hub.run("mcp__fake__whoami", {}) == f"signed in as {fake_oauth_mcp.USER}"
+    finally:
+        hub.close()
+
+
+def test_needs_sign_in_clears_once_the_sign_in_works_again(home, provider):
+    found, url = provider
+    signed_in_through_cli(url)
+    hub = hub_for(home)
+    try:
+        hub.start([signed_in_config(url)])
+        found.revoke_access()
+        found.refresh_works = False
+        assert "has run out" in hub.run("mcp__fake__whoami", {})
+        assert [state.status for state in hub.states()] == [mcp.NEEDS_SIGN_IN]
+        found.refresh_works = True
+        assert hub.run("mcp__fake__whoami", {}) == f"signed in as {fake_oauth_mcp.USER}"
+        assert [state.status for state in hub.states()] == [mcp.CONNECTED]
+    finally:
+        hub.close()
+
+
+def test_a_renewal_that_cannot_be_saved_still_answers_and_says_so(home, provider, monkeypatch):
+    found, url = provider
+    signed_in_through_cli(url)
+    hub = hub_for(home)
+    try:
+        hub.start([signed_in_config(url)])
+        found.revoke_access()
+
+        def unwritable(target, data, indent=None):
+            raise PermissionError(13, "Permission denied", str(target))
+
+        monkeypatch.setattr(sign_ins.settings, "write_private_json", unwritable)
+        answer = hub.run("mcp__fake__whoami", {})
+    finally:
+        hub.close()
+    assert answer.startswith(f"signed in as {fake_oauth_mcp.USER}") and "couldn't save it" in answer
+
+
+def test_a_token_answer_cut_short_does_not_stop_artycode_starting(home):
+    listener, token_endpoint = cut_short_server()
+    store = sign_ins.Store(personal())
+    url = "http://127.0.0.1:9/mcp"
+    store.put("fake", sign_ins.Record(url, url, "http://127.0.0.1:9", token_endpoint, "client", "", "none", "old",
+                                      "refresh", 1.0, ""))
+    hub = mcp.Hub(None, sign_ins_store=store)
+    try:
+        problems = hub.start([signed_in_config(url)])
+    finally:
+        listener.close()
+    assert len(problems) == 1 and "couldn't reach the sign-in server" in problems[0]
+
+
+def test_a_tool_call_that_fails_at_the_network_answers_with_an_error(home, provider, monkeypatch):
+    _found, url = provider
+    signed_in_through_cli(url)
+    hub = hub_for(home)
+    try:
+        hub.start([signed_in_config(url)])
+
+        def broken(*args, **kwargs):
+            raise http.client.IncompleteRead(b"{")
+
+        monkeypatch.setattr(hub.servers["fake"], "opened", broken)
+        assert hub.run("mcp__fake__whoami", {}).startswith("Error: ")
+        monkeypatch.setattr(hub.servers["fake"], "call", lambda *args: (_ for _ in ()).throw(OSError("gone")))
+        assert hub.run("mcp__fake__whoami", {}) == "Error: gone"
+    finally:
+        hub.close()
+
+
+def test_closing_never_renews_a_token(home, provider):
+    found, url = provider
+    signed_in_through_cli(url)
+    hub = hub_for(home)
+    hub.start([signed_in_config(url)])
+    credentials = hub.servers["fake"].credentials
+    credentials.clock = lambda: credentials.record.expires_at + 1
+    before = len(found.token_requests)
+    hub.close()
+    assert len(found.token_requests) == before
+
+
+HOSTILE_SERVER = "https://mcp.hostile.example/mcp"
+HOSTILE_ISSUER = "https://mcp.hostile.example"
+ESCAPE = "\x1b"
+
+
+def canned_world(resource: dict, metadata: dict, extra: dict | None = None, **changes) -> mcp_sign_in.World:
+    answers = {
+        HOSTILE_SERVER: (401, {}, b""),
+        f"{HOSTILE_ISSUER}/.well-known/oauth-protected-resource/mcp": (200, {}, json.dumps(resource).encode()),
+        f"{HOSTILE_ISSUER}/.well-known/oauth-authorization-server": (200, {}, json.dumps(metadata).encode()),
+        f"{HOSTILE_ISSUER}/register": (201, {}, json.dumps({"client_id": "c"}).encode()),
+        **(extra or {}),
+    }
+    return mcp_sign_in.World(**{"environ": {"DISPLAY": ":0"}, "platform": "linux", "open_browser": lambda url: True,
+                                "fetch": lambda url, *rest: answers.get(url, (404, {}, b"{}")),
+                                "is_interactive": lambda: True, "wait_seconds": 0.2, **changes})
+
+
+def hostile_metadata(**changes) -> dict:
+    return {"issuer": HOSTILE_ISSUER, "code_challenge_methods_supported": ["S256"],
+            "authorization_endpoint": f"{HOSTILE_ISSUER}/authorize", "token_endpoint": f"{HOSTILE_ISSUER}/token",
+            "registration_endpoint": f"{HOSTILE_ISSUER}/register", **changes}
+
+
+def test_hostile_metadata_in_slash_mcp_add_is_a_note_not_the_end_of_the_chat(home, monkeypatch):
+    world = canned_world({"resource": HOSTILE_SERVER, "authorization_servers": [HOSTILE_ISSUER],
+                          "scopes_supported": [1]}, hostile_metadata())
+    session_world(monkeypatch, world)
+    session = session_for(home, ScriptedBrain([]))
+    session.extras = cli.extras_module.Extras(hub=hub_for(home))
+    session.command(f"/mcp add {HOSTILE_SERVER} hostile")
+    assert "isn't a list of text" in session.terminal.err.getvalue() and stored("hostile") is None
+
+
+@pytest.mark.parametrize("problem", [oauth.OAuthError("odd answer"), mcp.McpError("odd answer"),
+                                     OSError(28, "No space left on device")])
+def test_any_sign_in_or_mcp_failure_in_arty_mcp_add_is_a_note(home, monkeypatch, problem):
+    def failing(*args, **kwargs):
+        raise problem
+
+    monkeypatch.setattr(mcp_sign_in, "added", failing)
+    code, shown = signed_in_through_cli("https://mcp.example/mcp")
+    assert code == mcp_sign_in.EXIT_FAILED and str(problem) in shown and "Traceback" not in shown
+
+
+def test_a_sign_in_address_with_escape_codes_never_reaches_the_terminal(home):
+    world = canned_world({"resource": HOSTILE_SERVER, "authorization_servers": [HOSTILE_ISSUER]},
+                         hostile_metadata(authorization_endpoint=f"{HOSTILE_ISSUER}/authorize{ESCAPE}]0;owned\x07"
+                                                                 f"{ESCAPE}[2J"))
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "add", HOSTILE_SERVER, "--name", "hostile"], terminal, world) == 1
+    assert ESCAPE not in terminal.err.getvalue() and "\x07" not in terminal.err.getvalue()
+
+
+def test_a_refusal_with_escape_codes_from_the_server_is_shown_without_them(home):
+    refusal = json.dumps({"error_description": f"{ESCAPE}[2J{ESCAPE}[Hfake prompt"}).encode()
+    world = canned_world({"resource": HOSTILE_SERVER, "authorization_servers": [HOSTILE_ISSUER]}, hostile_metadata(),
+                         {f"{HOSTILE_ISSUER}/register": (400, {}, refusal)})
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "add", HOSTILE_SERVER, "--name", "hostile"], terminal, world) == 1
+    shown = terminal.err.getvalue()
+    assert ESCAPE not in shown and "fake prompt Nothing was saved." in shown
+
+
+def signing_in_elsewhere(provider_and_url, answer: str):
+    found, url = provider_and_url
+    found.sign_in_base = found.base.replace("127.0.0.1", "localhost")
+    terminal = quiet_terminal()
+    asked = []
+    terminal.asked = lambda question: asked.append(question) or answer
+    code = mcp_sign_in.run(["mcp", "add", url, "--name", "fake"], terminal, desktop())
+    return code, terminal.err.getvalue(), asked
+
+
+def test_an_address_that_signs_in_on_another_host_asks_first_naming_both(home, provider):
+    code, shown, asked = signing_in_elsewhere(provider, "y")
+    assert code == 0 and len(asked) == 1
+    assert "127.0.0.1 sends you to localhost to sign in. Sign in there?" in shown
+    assert "  y  Yes, open the sign-in page at localhost" in shown and "  n  No, stop here" in shown
+    assert stored() is not None
+
+
+def test_saying_no_to_signing_in_on_another_host_stops_before_registering(home, provider):
+    found, _url = provider
+    code, shown, _asked = signing_in_elsewhere(provider, "n")
+    assert code == mcp_sign_in.EXIT_FAILED and "chose not to sign in at localhost" in shown
+    assert found.registrations == [] and stored() is None
+
+
+def test_a_catalogue_service_signing_in_on_another_host_does_not_ask(home):
+    discovery = oauth.Discovery("https://mcp.stripe.com", "https://mcp.stripe.com", "https://access.stripe.com/mcp",
+                                "https://access.stripe.com/mcp/authorize", "", "", "")
+    terminal = quiet_terminal()
+    terminal.asked = lambda question: pytest.fail("asked about a catalogue service")
+    assert mcp_sign_in.agreed_to_sign_in_elsewhere(terminal, "https://mcp.stripe.com", discovery, desktop())
+
+
+def test_the_signed_in_account_is_shown_when_the_service_says_which_it_is(home, provider):
+    found, url = provider
+    found.account = "drew@example.com"
+    code, shown = signed_in_through_cli(url)
+    assert code == 0 and "Signed in as drew@example.com" in shown
+
+
+def test_ctrl_c_while_waiting_for_the_browser_ends_cleanly(home, provider):
+    _found, url = provider
+
+    def interrupted(address):
+        raise KeyboardInterrupt
+
+    code, shown = signed_in_through_cli(url, world=desktop(open_browser=interrupted))
+    assert code == mcp_sign_in.EXIT_INTERRUPTED and "Stopped." in shown and "Traceback" not in shown
+    assert stored() is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="sends a POSIX SIGINT")
+def test_ctrl_c_in_a_real_arty_mcp_add_exits_without_a_traceback(home, provider, tmp_path):
+    _found, url = provider
+    environ = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "APPDATA": str(tmp_path / "config"),
+               "NO_COLOR": "1", "DISPLAY": "", "WAYLAND_DISPLAY": ""}
+    environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    child = subprocess.Popen([sys.executable, "-m", "arty_cli", "mcp", "add", url, "--name", "fake"], env=environ,
+                             cwd=home, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True)
+    try:
+        waited = time.monotonic() + 30
+        while time.monotonic() < waited and not (tmp_path / "config").exists():
+            time.sleep(0.05)
+        time.sleep(1)
+        child.send_signal(signal.SIGINT)
+        _out, err = child.communicate(timeout=30)
+    finally:
+        if child.poll() is None:
+            child.kill()
+    assert child.returncode == mcp_sign_in.EXIT_INTERRUPTED and "Traceback" not in err and "Stopped." in err
+
+
+def test_a_mistyped_paste_is_asked_for_again(home, provider):
+    found, url = provider
+    terminal = quiet_terminal()
+    real = pasting(terminal, follow_redirect=False)
+    typed = iter(["http://127.0.0.1:1/callback?code=x&state=typo", "not even an address"])
+    terminal.asked = lambda question: next(typed, None) or real(question)
+    world = desktop(environ={"SSH_CONNECTION": "10.0.0.2 5 10.0.0.1 22"})
+    assert mcp_sign_in.run(["mcp", "add", url, "--name", "fake"], terminal, world) == 0
+    shown = terminal.err.getvalue()
+    assert "2 more tries" in shown and "1 more try" in shown and stored().access_token in found.access_tokens
+
+
+def test_three_mistyped_pastes_stop_the_sign_in(home, provider):
+    _found, url = provider
+    terminal = quiet_terminal()
+    terminal.asked = lambda question: "http://127.0.0.1:1/callback?code=x&state=typo"
+    world = desktop(environ={"SSH_CONNECTION": "10.0.0.2 5 10.0.0.1 22"})
+    assert mcp_sign_in.run(["mcp", "add", url, "--name", "fake"], terminal, world) == mcp_sign_in.EXIT_FAILED
+    assert "doesn't match" in terminal.err.getvalue() and stored() is None
+
+
+@pytest.mark.parametrize("argv, expected", [(["mcp"], mcp_sign_in.EXIT_GOOD), (["mcp", "list"], mcp_sign_in.EXIT_GOOD),
+                                            (["mcp", "logn", "notion"], mcp_sign_in.EXIT_USAGE),
+                                            (["mcp", "is", "what"], mcp_sign_in.EXIT_USAGE)])
+def test_arty_mcp_without_a_known_action_shows_how_to_use_it(home, monkeypatch, argv, expected):
+    monkeypatch.setattr(cli, "main_session", lambda arguments: pytest.fail("went to the model"))
+    terminal = quiet_terminal()
+    monkeypatch.setattr(mcp_sign_in, "Terminal", lambda: terminal)
+    assert cli.main(argv) == expected
+    assert "arty mcp add" in terminal.err.getvalue()
+
+
+def test_removing_a_service_tells_it_to_forget_the_sign_in(home, provider):
+    found, url = provider
+    found.offers_revocation = True
+    signed_in_through_cli(url)
+    refresh = stored().refresh_token
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "remove", "fake"], terminal, desktop()) == 0
+    assert stored() is None and "told to forget the sign-in too" in terminal.err.getvalue()
+    assert [(form["token"], form["token_type_hint"]) for form in found.revocations] == [(refresh, "refresh_token")]
+
+
+def test_a_service_that_will_not_forget_the_sign_in_is_still_removed(home, provider):
+    found, url = provider
+    found.offers_revocation = True
+    found.revocation_status = 503
+    signed_in_through_cli(url)
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "remove", "fake"], terminal, desktop()) == 0
+    assert stored() is None and "removed here anyway" in terminal.err.getvalue()
+    assert "fake" not in json.loads((personal() / "settings.json").read_text())["mcpServers"]
+
+
+def test_an_unreadable_address_given_to_arty_mcp_add_is_a_usage_note(home):
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "add", "https://["], terminal, desktop()) == mcp_sign_in.EXIT_USAGE
+    assert "arty mcp add" in terminal.err.getvalue()

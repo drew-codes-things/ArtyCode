@@ -21,6 +21,11 @@ class Provider:
         self.registration_open = True
         self.offers_s256 = True
         self.resource_override = ""
+        self.sign_in_base = ""
+        self.offers_revocation = False
+        self.revocation_status = 200
+        self.revocations = []
+        self.account = ""
         self.clients = {}
         self.codes = {}
         self.access_tokens = set()
@@ -40,6 +45,8 @@ class Provider:
         self.access_tokens.add(access)
         self.refresh_tokens.add(refresh)
         answer = {"access_token": access, "token_type": "Bearer", "refresh_token": refresh, "scope": "read"}
+        if self.account:
+            answer["email"] = self.account
         if self.expires_in is not None:
             answer["expires_in"] = self.expires_in
         return answer
@@ -60,11 +67,14 @@ def handler_for(provider: Provider):
                 return self.json(200, {"resource": provider.resource_override or f"{provider.base}/mcp",
                                        "authorization_servers": [provider.base]})
             if parts.path == "/.well-known/oauth-authorization-server":
-                metadata = {"issuer": provider.base, "authorization_endpoint": f"{provider.base}/authorize",
+                metadata = {"issuer": provider.base,
+                            "authorization_endpoint": f"{provider.sign_in_base or provider.base}/authorize",
                             "token_endpoint": f"{provider.base}/token",
                             "code_challenge_methods_supported": ["S256"] if provider.offers_s256 else ["plain"]}
                 if provider.registration_open:
                     metadata["registration_endpoint"] = f"{provider.base}/register"
+                if provider.offers_revocation:
+                    metadata["revocation_endpoint"] = f"{provider.base}/revoke"
                 return self.json(200, metadata)
             if parts.path == "/authorize":
                 return self.authorize(dict(urllib.parse.parse_qsl(parts.query)))
@@ -92,6 +102,9 @@ def handler_for(provider: Provider):
                 return self.register(json.loads(raw))
             if path == "/token":
                 return self.token(dict(urllib.parse.parse_qsl(raw.decode())))
+            if path == "/revoke":
+                provider.revocations.append(dict(urllib.parse.parse_qsl(raw.decode())))
+                return self.json(provider.revocation_status, {})
             if path == "/mcp":
                 return self.mcp(json.loads(raw))
             return self.json(404, {"error": "not_found"})

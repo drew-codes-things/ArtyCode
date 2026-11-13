@@ -1,3 +1,4 @@
+import http.client
 import json
 import os
 import queue
@@ -257,25 +258,30 @@ class WebServer:
         self.post({"jsonrpc": "2.0", "method": "notifications/initialized"}, self.start_seconds).close()
         return tools_listed(self.request, self.config.name, self.start_seconds)
 
-    def headers(self) -> dict:
+    def headers(self, renewing: bool = True) -> dict:
         found = {"Content-Type": "application/json", "Accept": f"application/json, {EVENT_STREAM}",
                  "User-Agent": f"arty-cli/{__version__}", **self.config.headers}
         if self.credentials is not None:
-            found["Authorization"] = f"Bearer {self.bearer()}"
+            found["Authorization"] = f"Bearer {self.bearer(renewing)}"
         if self.session:
             found.update({SESSION_HEADER: self.session, VERSION_HEADER: PROTOCOL_VERSION})
         return found
 
-    def bearer(self) -> str:
+    def bearer(self, renewing: bool) -> str:
         try:
-            return self.credentials.bearer()
+            return self.credentials.bearer() if renewing else self.credentials.current()
         except sign_ins.SignInError as error:
-            raise self.sign_in_needed(error) from None
+            raise self.sign_in_trouble(error) from None
 
-    def sign_in_needed(self, error: sign_ins.SignInError) -> SignInNeeded:
+    def sign_in_trouble(self, error: sign_ins.SignInError) -> McpError:
+        if not error.needs_sign_in:
+            return McpError(str(error))
         self.needs_sign_in = True
         return SignInNeeded(f"{error}. Sign in again with /mcp login {self.config.name} "
                             f"(or arty mcp login {self.config.name})")
+
+    def take_notice(self) -> str:
+        return self.credentials.take_notice() if self.credentials is not None else ""
 
     def opened(self, request, seconds: float):
         if self.credentials is None:
@@ -287,20 +293,22 @@ class WebServer:
         request = urllib.request.Request(self.config.url, data=json.dumps(message).encode(), headers=headers,
                                          method="POST")
         try:
-            return self.opened(request, seconds)
+            response = self.opened(request, seconds)
         except urllib.error.HTTPError as error:
             if error.code == UNAUTHORISED and self.credentials is not None and not renewed:
                 self.renew(headers["Authorization"].removeprefix("Bearer "))
                 return self.post(message, seconds, renewed=True)
             raise McpError(f"the MCP server {self.config.name} answered {error.code} {error.reason}") from None
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as error:
             raise McpError(f"couldn't reach the MCP server {self.config.name} at {self.config.url}: {error}") from None
+        self.needs_sign_in = False
+        return response
 
     def renew(self, rejected: str) -> None:
         try:
             self.credentials.renew(rejected)
         except sign_ins.SignInError as error:
-            raise self.sign_in_needed(error) from None
+            raise self.sign_in_trouble(error) from None
 
     def request(self, method: str, params: dict, seconds: float) -> dict:
         with self.lock:
@@ -323,7 +331,7 @@ class WebServer:
                     continue
                 if message.get("id") == wanted:
                     return self.result_of(message, method)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, http.client.HTTPException) as error:
             raise McpError(f"the MCP server {self.config.name} sent an unreadable answer to {method}: {error}") from None
         raise McpError(f"the MCP server {self.config.name} didn't answer {method}")
 
@@ -341,10 +349,11 @@ class WebServer:
         if not self.session:
             return ""
         try:
-            request = urllib.request.Request(self.config.url, headers=self.headers(), method="DELETE")
+            request = urllib.request.Request(self.config.url, headers=self.headers(renewing=False), method="DELETE")
             self.session = ""
             self.opened(request, CLOSE_SECONDS).close()
-        except (McpError, urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+        except (McpError, urllib.error.URLError, TimeoutError, ConnectionError, OSError,
+                http.client.HTTPException) as error:
             self.session = ""
             return f"Couldn't end the session with the MCP server {self.config.name}: {error}"
         return ""
@@ -439,6 +448,9 @@ class Server:
     def call(self, tool: str, arguments: dict) -> str:
         return call_text(self.request("tools/call", {"name": tool, "arguments": arguments}, self.call_seconds))
 
+    def take_notice(self) -> str:
+        return ""
+
     def close(self) -> str:
         if self.process is None or self.process.poll() is not None:
             return ""
@@ -499,11 +511,12 @@ class Hub:
                 continue
             try:
                 listed = server.start()
-            except (McpError, OSError) as error:
+            except (McpError, OSError, http.client.HTTPException) as error:
                 server.close()
                 problems.append(self.troubled(config, f"MCP server {config.name} didn't start: {error}",
                                               isinstance(error, SignInNeeded)))
                 continue
+            problems += [notice for notice in (server.take_notice(),) if notice]
             self.servers[config.name] = server
             for tool in listed:
                 if tool.exposed in self.tools:
@@ -559,10 +572,13 @@ class Hub:
         tool = self.tools.get(name)
         if tool is None:
             return f"Error: there is no MCP tool called {name}"
+        server = self.servers[tool.server]
         try:
-            return self.servers[tool.server].call(tool.name, arguments)
-        except McpError as error:
-            return f"Error: {error}"
+            answer = server.call(tool.name, arguments)
+        except (McpError, OSError, http.client.HTTPException) as error:
+            answer = f"Error: {error}"
+        notice = server.take_notice()
+        return f"{answer}\n[{notice}]" if notice else answer
 
     def close(self) -> list[str]:
         return [problem for problem in (server.close() for server in self.servers.values()) if problem]

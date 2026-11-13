@@ -562,7 +562,7 @@ def session_extras(workspace, trusted: bool, terminal: Terminal, search, looks=N
         terminal.note(f"Starting MCP servers: {', '.join(config.name for config in wanted)}")
         problems += hub.start(wanted)
     for problem in problems:
-        terminal.note(problem, "error")
+        terminal.note(view.readable(problem), "error")
     return extras_module.Extras(hooks=found_hooks, skills=skills.find(personal, workspace, trusted), hub=hub,
                                 search=search, helpers=found_helpers, looks=looks)
 

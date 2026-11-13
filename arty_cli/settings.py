@@ -2,6 +2,7 @@ import json
 import os
 import secrets
 import sys
+import time
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
@@ -14,6 +15,8 @@ OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with", "fi
 SWITCHED_ON = ("on", "true", "yes", "1")
 SWITCHED_OFF = ("off", "false", "no", "0")
 TEMPORARY_NAME_BYTES = 8
+REPLACE_ATTEMPTS = 20
+REPLACE_PAUSE_SECONDS = 0.05
 ENVIRONMENT_NAMES = {
     "base_url": "ARTY_URL",
     "remote_url": "ARTY_REMOTE_URL",
@@ -110,6 +113,17 @@ def load(path: Path | None = None, environ=os.environ) -> Settings:
     return replace(loaded, **overrides)
 
 
+def replaced(source: Path, target: Path, platform: str = sys.platform) -> None:
+    for attempt in range(1, REPLACE_ATTEMPTS + 1):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if platform != "win32" or attempt == REPLACE_ATTEMPTS:
+                raise
+            time.sleep(REPLACE_PAUSE_SECONDS)
+
+
 def write_private_json(target: Path, data, indent: int | None = None) -> None:
     temporary = target.parent / f".{target.name}.{secrets.token_hex(TEMPORARY_NAME_BYTES)}.tmp"
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE)
@@ -120,7 +134,7 @@ def write_private_json(target: Path, data, indent: int | None = None) -> None:
             json.dump(data, handle, indent=indent)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, target)
+        replaced(temporary, target)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise

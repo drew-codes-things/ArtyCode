@@ -1,16 +1,19 @@
 import base64
 import hashlib
+import html
+import http.client
 import ipaddress
 import json
 import re
 import secrets
+import socket
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from arty_cli import __version__
 
@@ -32,6 +35,16 @@ UNAUTHORISED = 401
 AUTH_PARAMETER = re.compile(r'([A-Za-z_]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,]+))')
 SECRET_METHODS = ("client_secret_basic", "client_secret_post")
 LOOPBACK_NAMES = ("localhost",)
+PRIVATE_NAME_ENDINGS = (".localhost", ".local", ".internal", ".home.arpa")
+CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+MAX_ANSWER_BYTES = 1024 * 1024
+CALLBACK_REQUEST_SECONDS = 10
+TOO_MANY_REQUESTS = 429
+FIRST_SERVER_ERROR = 500
+LONGEST_LIFETIME_SECONDS = 10 * 365 * 24 * 60 * 60
+ACCOUNT_CLAIMS = ("email", "preferred_username", "name")
+MAX_ACCOUNT_CHARS = 120
+JWT_PARTS = 3
 SIGNED_IN_PAGE = ("<!doctype html><title>ArtyCode</title><body style=\"font-family:sans-serif\">"
                   "<h2>Signed in</h2><p>You can close this tab and go back to ArtyCode.</p>")
 REFUSED_PAGE = ("<!doctype html><title>ArtyCode</title><body style=\"font-family:sans-serif\">"
@@ -40,6 +53,22 @@ REFUSED_PAGE = ("<!doctype html><title>ArtyCode</title><body style=\"font-family
 
 class OAuthError(Exception):
     pass
+
+
+class Unavailable(OAuthError):
+    pass
+
+
+class WrongAnswer(OAuthError):
+    pass
+
+
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+NO_REDIRECTS = urllib.request.build_opener(NoRedirects)
 
 
 @dataclass(frozen=True)
@@ -51,6 +80,7 @@ class Discovery:
     token_endpoint: str
     registration_endpoint: str
     scope: str
+    revocation_endpoint: str = ""
 
 
 @dataclass(frozen=True)
@@ -66,6 +96,7 @@ class Tokens:
     refresh_token: str
     expires_at: float
     scope: str
+    account: str = ""
 
 
 @dataclass(frozen=True)
@@ -76,52 +107,125 @@ class Pending:
     redirect_uri: str
 
 
+def literal_address(host: str):
+    try:
+        return ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        pass
+    try:
+        return ipaddress.ip_address(socket.inet_aton(host))
+    except (OSError, ValueError):
+        return None
+
+
 def is_loopback_host(host: str) -> bool:
     if host in LOOPBACK_NAMES:
         return True
+    address = literal_address(host)
+    return address is not None and address.is_loopback
+
+
+def is_private_host(host: str) -> bool:
+    address = literal_address(host)
+    if address is not None:
+        return not address.is_global or address.is_multicast
+    name = host.lower().rstrip(".")
+    return "." not in name or name.endswith(PRIVATE_NAME_ENDINGS)
+
+
+def split_address(url: str) -> urllib.parse.SplitResult | None:
     try:
-        return ipaddress.ip_address(host.strip("[]")).is_loopback
+        parts = urllib.parse.urlsplit(url)
+        return parts if parts.port is None or parts.port >= 0 else None
     except ValueError:
+        return None
+
+
+def host_of(url: str) -> str:
+    parts = split_address(url)
+    return (parts.hostname or "") if parts else ""
+
+
+def is_safe_address(url) -> bool:
+    if not isinstance(url, str) or CONTROL_CHARACTERS.search(url):
         return False
-
-
-def is_safe_address(url: str) -> bool:
-    parts = urllib.parse.urlsplit(url)
-    if not parts.hostname:
+    parts = split_address(url)
+    if parts is None or not parts.hostname or "@" in parts.netloc:
         return False
     return parts.scheme == "https" or (parts.scheme == "http" and is_loopback_host(parts.hostname))
 
 
-def checked_address(url, what: str) -> str:
-    if not isinstance(url, str) or not is_safe_address(url):
+def is_safe_endpoint(url, server_url: str) -> bool:
+    if not is_safe_address(url):
+        return False
+    return is_loopback_host(host_of(server_url)) or not is_private_host(host_of(url))
+
+
+def checked_address(url, what: str, server_url: str = "") -> str:
+    if not is_safe_address(url):
         raise OAuthError(f"The {what} isn't a safe https address ({url!r}), so ArtyCode won't use it.")
+    if server_url and not is_safe_endpoint(url, server_url):
+        raise OAuthError(f"The {what} ({url!r}) is on this computer or a private network, but {server_url} isn't, "
+                         "so ArtyCode won't use it.")
     return url
 
 
 def comparable(url: str) -> str:
-    parts = urllib.parse.urlsplit(url)
+    parts = split_address(url)
+    if parts is None:
+        return ""
     return urllib.parse.urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
 
 
 def read_json(raw: bytes) -> dict:
     try:
         parsed = json.loads(raw or b"{}")
-    except ValueError:
+    except (ValueError, RecursionError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
 
+def text_field(found: dict, name: str, where: str) -> str:
+    value = found.get(name) or ""
+    if not isinstance(value, str):
+        raise OAuthError(f"{where} gave a {name} that isn't text, so ArtyCode won't use it.")
+    return value
+
+
+def text_list(found: dict, name: str, where: str) -> list[str]:
+    value = found.get(name) or []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise OAuthError(f"{where} gave a {name} that isn't a list of text, so ArtyCode won't use it.")
+    return value
+
+
+def capped(answer, url: str) -> bytes:
+    raw = answer.read(MAX_ANSWER_BYTES + 1)
+    if len(raw) > MAX_ANSWER_BYTES:
+        raise OAuthError(f"{url} sent more than {MAX_ANSWER_BYTES // 1024} KB, so ArtyCode stopped reading it.")
+    missing = getattr(answer, "length", None)
+    if isinstance(missing, int) and missing > 0:
+        raise http.client.IncompleteRead(raw, missing)
+    return raw
+
+
+def answer_to(request: urllib.request.Request) -> tuple[int, dict, bytes]:
+    try:
+        with NO_REDIRECTS.open(request, timeout=REQUEST_SECONDS) as response:
+            return response.status, dict(response.headers.items()), capped(response, request.full_url)
+    except urllib.error.HTTPError as error:
+        return error.code, dict(error.headers.items()) if error.headers else {}, capped(error, request.full_url)
+
+
 def fetched(url: str, data: bytes | None = None, headers: dict | None = None,
             method: str | None = None) -> tuple[int, dict, bytes]:
-    request = urllib.request.Request(url, data=data, method=method,
-                                     headers={"User-Agent": f"arty-cli/{__version__}", **(headers or {})})
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_SECONDS) as response:
-            return response.status, dict(response.headers.items()), response.read()
-    except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers.items()) if error.headers else {}, error.read()
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
-        raise OAuthError(f"Couldn't reach {url}: {error}") from None
+        return answer_to(urllib.request.Request(url, data=data, method=method,
+                                                headers={"User-Agent": f"arty-cli/{__version__}", **(headers or {})}))
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as error:
+        raise Unavailable(f"Couldn't reach {url}: {error}") from None
+    except ValueError as error:
+        raise OAuthError(f"ArtyCode can't use the address {url}: {error}") from None
 
 
 def header(headers: dict, name: str) -> str:
@@ -162,9 +266,9 @@ def first_json(urls: list[str], fetch) -> tuple[str, dict]:
 
 def protected_resource(server_url: str, hints: dict, fetch) -> dict:
     pointed = hints.get("resource_metadata", "")
-    urls = [checked_address(pointed, "resource metadata address")] if pointed else []
+    urls = [checked_address(pointed, "resource metadata address", server_url)] if pointed else []
     _url, found = first_json(urls + well_known_urls(server_url, (PROTECTED_RESOURCE,)), fetch)
-    if found and comparable(str(found.get("resource", ""))) != comparable(server_url):
+    if found and comparable(text_field(found, "resource", server_url)) != comparable(server_url):
         raise OAuthError(f"{server_url} says it is {found.get('resource')!r}, which isn't the address you gave, "
                          "so ArtyCode won't sign in to it.")
     return found
@@ -179,9 +283,9 @@ def authorization_server(issuer: str, fetch) -> dict:
     _url, found = first_json(well_known_urls(issuer, (AUTHORIZATION_SERVER, OPENID_CONFIGURATION), True), fetch)
     if not found:
         raise OAuthError(f"The sign-in server {issuer} doesn't publish its details, so ArtyCode can't sign in there.")
-    if comparable(str(found.get("issuer", ""))) != comparable(issuer):
+    if comparable(text_field(found, "issuer", issuer)) != comparable(issuer):
         raise OAuthError(f"The sign-in server {issuer} names itself {found.get('issuer')!r}; not trusting it.")
-    if PKCE_METHOD not in (found.get("code_challenge_methods_supported") or []):
+    if PKCE_METHOD not in text_list(found, "code_challenge_methods_supported", issuer):
         raise OAuthError(f"The sign-in server {issuer} doesn't offer PKCE ({PKCE_METHOD}), which ArtyCode needs.")
     if not found.get("registration_endpoint"):
         raise OAuthError(f"The sign-in server {issuer} doesn't let apps register themselves, so it needs a client "
@@ -189,19 +293,24 @@ def authorization_server(issuer: str, fetch) -> dict:
     return found
 
 
+def optional_endpoint(metadata: dict, name: str, server_url: str) -> str:
+    found = metadata.get(name)
+    return found if is_safe_endpoint(found, server_url) else ""
+
+
 def discover(server_url: str, fetch=fetched) -> Discovery:
     checked_address(server_url, "MCP server address")
     hints = unauthorised_hints(server_url, fetch)
     resource = protected_resource(server_url, hints, fetch)
-    servers = resource.get("authorization_servers") or [origin_of(server_url)]
-    issuer = checked_address(servers[0] if isinstance(servers, list) else "", "sign-in server address")
+    servers = text_list(resource, "authorization_servers", server_url) or [origin_of(server_url)]
+    issuer = checked_address(servers[0], "sign-in server address", server_url)
     metadata = authorization_server(issuer, fetch)
-    scopes = resource.get("scopes_supported")
-    scope = hints.get("scope") or (" ".join(scopes) if isinstance(scopes, list) else "")
-    return Discovery(server_url, str(resource.get("resource") or server_url), str(metadata["issuer"]),
-                     checked_address(metadata.get("authorization_endpoint"), "sign-in page address"),
-                     checked_address(metadata.get("token_endpoint"), "token address"),
-                     checked_address(metadata.get("registration_endpoint"), "registration address"), scope)
+    scope = hints.get("scope") or " ".join(text_list(resource, "scopes_supported", server_url))
+    return Discovery(server_url, text_field(resource, "resource", server_url) or server_url, metadata["issuer"],
+                     checked_address(metadata.get("authorization_endpoint"), "sign-in page address", server_url),
+                     checked_address(metadata.get("token_endpoint"), "token address", server_url),
+                     checked_address(metadata.get("registration_endpoint"), "registration address", server_url), scope,
+                     optional_endpoint(metadata, "revocation_endpoint", server_url))
 
 
 def register(discovery: Discovery, redirect_uri: str, fetch=fetched) -> Client:
@@ -246,21 +355,28 @@ def pending_sign_in(discovery: Discovery, client: Client, redirect_uri: str) -> 
     return Pending(urllib.parse.urlunsplit(parts._replace(query=query)), state, verifier, redirect_uri)
 
 
-def code_from(query: dict, state: str) -> str:
+def is_our_state(query: dict, state: str) -> bool:
     given = (query.get("state") or [""])[0]
-    if not secrets.compare_digest(given.encode(), state.encode()):
-        raise OAuthError("The answer from the browser doesn't match the sign-in ArtyCode started, so it was refused.")
+    return secrets.compare_digest(given.encode(), state.encode())
+
+
+def code_from(query: dict, state: str) -> str:
+    if not is_our_state(query, state):
+        raise WrongAnswer("The answer from the browser doesn't match the sign-in ArtyCode started, so it was refused.")
     if query.get("error"):
         reason = (query.get("error_description") or query["error"])[0]
         raise OAuthError(f"The sign-in was turned down: {reason}")
     code = (query.get("code") or [""])[0]
     if not code:
-        raise OAuthError("The browser came back without a sign-in code.")
+        raise WrongAnswer("The browser came back without a sign-in code.")
     return code
 
 
 def code_from_address(address: str, state: str) -> str:
-    return code_from(urllib.parse.parse_qs(urllib.parse.urlsplit(address.strip()).query), state)
+    parts = split_address(address.strip())
+    if parts is None:
+        raise WrongAnswer("That isn't an address ArtyCode can read.")
+    return code_from(urllib.parse.parse_qs(parts.query), state)
 
 
 def waited_text(seconds: float) -> str:
@@ -269,37 +385,51 @@ def waited_text(seconds: float) -> str:
     return f"{seconds / SECONDS_PER_MINUTE:g} minutes"
 
 
+def refused_page(reason: str) -> str:
+    return REFUSED_PAGE.format(reason=html.escape(reason))
+
+
 class Callback:
     def __init__(self, port: int = 0):
-        self.server = HTTPServer((LOOPBACK_HOST, port), self.handler())
+        self.server = ThreadingHTTPServer((LOOPBACK_HOST, port), self.handler())
+        self.server.daemon_threads = True
+        self.server.block_on_close = False
         self.port = self.server.server_address[1]
         self.redirect_uri = f"http://{LOOPBACK_HOST}:{self.port}{CALLBACK_PATH}"
         self.state = ""
         self.code = ""
         self.problem = ""
         self.done = threading.Event()
+        self.answering = threading.Lock()
         self.thread = threading.Thread(target=self.server.serve_forever, args=(POLL_SECONDS,), daemon=True)
 
     def handler(self):
         callback = self
 
         class Handler(BaseHTTPRequestHandler):
+            timeout = CALLBACK_REQUEST_SECONDS
+
             def log_message(self, *args):
                 return None
 
             def do_GET(self):
                 parts = urllib.parse.urlsplit(self.path)
-                if parts.path != CALLBACK_PATH or callback.done.is_set():
-                    self.answer(404, REFUSED_PAGE.format(reason="This address isn't waiting for a sign-in."))
-                    return
-                try:
-                    callback.code = code_from(urllib.parse.parse_qs(parts.query), callback.state)
-                except OAuthError as error:
-                    callback.problem = str(error)
-                    self.answer(400, REFUSED_PAGE.format(reason=str(error)))
-                else:
-                    self.answer(200, SIGNED_IN_PAGE)
-                callback.done.set()
+                query = urllib.parse.parse_qs(parts.query)
+                with callback.answering:
+                    if parts.path != CALLBACK_PATH or callback.done.is_set():
+                        self.answer(404, refused_page("This address isn't waiting for a sign-in."))
+                        return
+                    try:
+                        callback.code = code_from(query, callback.state)
+                    except WrongAnswer as error:
+                        self.answer(400, refused_page(str(error)))
+                        return
+                    except OAuthError as error:
+                        callback.problem = str(error)
+                        self.answer(400, refused_page(str(error)))
+                    else:
+                        self.answer(200, SIGNED_IN_PAGE)
+                    callback.done.set()
 
             def answer(self, status: int, page: str):
                 body = page.encode()
@@ -344,15 +474,45 @@ def form_post(url: str, fields: dict, client: Client, fetch) -> tuple[int, dict]
     return status, read_json(raw)
 
 
+def is_unavailable(status: int) -> bool:
+    return status == TOO_MANY_REQUESTS or status >= FIRST_SERVER_ERROR
+
+
+def id_token_claims(token) -> dict:
+    if not isinstance(token, str) or token.count(".") != JWT_PARTS - 1:
+        return {}
+    payload = token.split(".")[1]
+    try:
+        return read_json(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except ValueError:
+        return {}
+
+
+def account_in(answer: dict) -> str:
+    for source in (id_token_claims(answer.get("id_token")), answer):
+        for claim in ACCOUNT_CLAIMS:
+            value = source.get(claim)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:MAX_ACCOUNT_CHARS]
+    return ""
+
+
+def lifetime_end(answer: dict, clock) -> float:
+    lifetime = answer.get("expires_in")
+    if not isinstance(lifetime, (int, float)) or isinstance(lifetime, bool):
+        return 0.0
+    return clock() + float(min(lifetime, LONGEST_LIFETIME_SECONDS))
+
+
 def tokens_from(status: int, answer: dict, kept_refresh: str, clock) -> Tokens:
+    if is_unavailable(status):
+        raise Unavailable(f"the sign-in server answered {status}: {problem_in(answer)}")
     if status != 200 or not isinstance(answer.get("access_token"), str) or not answer["access_token"]:
         raise OAuthError(f"the sign-in server answered {status}: {problem_in(answer)}")
     if str(answer.get("token_type", "bearer")).lower() != "bearer":
         raise OAuthError(f"the sign-in server gave a {answer.get('token_type')} token, not a bearer token")
-    lifetime = answer.get("expires_in")
-    expires_at = clock() + float(lifetime) if isinstance(lifetime, (int, float)) and not isinstance(lifetime, bool) else 0.0
-    return Tokens(answer["access_token"], str(answer.get("refresh_token") or kept_refresh), expires_at,
-                  str(answer.get("scope") or ""))
+    return Tokens(answer["access_token"], str(answer.get("refresh_token") or kept_refresh), lifetime_end(answer, clock),
+                  str(answer.get("scope") or ""), account_in(answer))
 
 
 def exchange(discovery: Discovery, client: Client, pending: Pending, code: str, fetch=fetched,
@@ -370,3 +530,11 @@ def refreshed(token_endpoint: str, resource: str, client: Client, refresh_token:
     status, answer = form_post(token_endpoint, {"grant_type": "refresh_token", "refresh_token": refresh_token,
                                                 "resource": resource}, client, fetch)
     return tokens_from(status, answer, refresh_token, clock)
+
+
+def revoked(revocation_endpoint: str, server_url: str, client: Client, token: str, hint: str,
+            fetch=fetched) -> None:
+    checked_address(revocation_endpoint, "revocation address", server_url)
+    status, answer = form_post(revocation_endpoint, {"token": token, "token_type_hint": hint}, client, fetch)
+    if status != 200:
+        raise OAuthError(f"the sign-in server answered {status}: {problem_in(answer)}")
