@@ -3,7 +3,10 @@ import json
 import os
 import re
 import shlex
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1395,3 +1398,63 @@ def test_plain_mode_never_writes_terminal_sequences_from_a_command_or_the_model(
     written = out.getvalue() + err.getvalue()
     assert "\x1b]" not in written and "\x07" not in written
     assert "all good (exit code 0)" in written and "hello" in written
+
+
+ENDING_SIGNALS = [getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)]
+
+
+def test_while_arty_cli_runs_a_terminating_signal_ends_it_through_its_clean_up(ready, monkeypatch):
+    before = {number: signal.getsignal(number) for number in ENDING_SIGNALS}
+    seen = {}
+
+    def session_ended_by_a_signal(*_arguments):
+        seen.update({number: signal.getsignal(number) for number in ENDING_SIGNALS})
+        if seen[signal.SIGTERM] in (signal.SIG_DFL, signal.SIG_IGN, before[signal.SIGTERM]):
+            raise AssertionError("SIGTERM would end ArtyCode without its clean-up")
+        signal.raise_signal(signal.SIGTERM)
+        return 0
+
+    monkeypatch.setattr(cli, "run_session", session_ended_by_a_signal)
+    stopped = []
+    monkeypatch.setattr(cli.tools.Workspace, "stop_jobs", lambda workspace: stopped.append(True))
+    with pytest.raises(SystemExit) as ended:
+        cli.main(["-p", "hello"])
+    assert ended.value.code == cli.SIGNAL_EXIT_BASE + signal.SIGTERM and stopped == [True]
+    assert all(handler not in (signal.SIG_DFL, signal.SIG_IGN, before[number]) for number, handler in seen.items())
+    assert {number: signal.getsignal(number) for number in ENDING_SIGNALS} == before
+
+
+JOB_SCRIPT = """
+import sys, time
+from arty_cli import cli, tools
+workspace = tools.Workspace(sys.argv[1])
+with cli.signals_end_cleanly():
+    try:
+        tools.run("run_command", {"command": "sleep 97531", "background": True}, workspace)
+        print(workspace.jobs["1"].process.pid, flush=True)
+        time.sleep(60)
+    finally:
+        workspace.stop_jobs()
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_background_jobs_end_when_arty_cli_is_terminated(tmp_path):
+    source_root = str(Path(cli.__file__).resolve().parents[1])
+    running = subprocess.Popen([sys.executable, "-c", JOB_SCRIPT, str(tmp_path)], stdout=subprocess.PIPE, text=True,
+                               env={**os.environ, "PYTHONPATH": source_root})
+    job = int(running.stdout.readline())
+    running.send_signal(signal.SIGTERM)
+    assert running.wait(10) == cli.SIGNAL_EXIT_BASE + signal.SIGTERM
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and job_is_alive(job):
+        time.sleep(0.05)
+    assert not job_is_alive(job)
+
+
+def job_is_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z" if Path("/proc").is_dir() else True

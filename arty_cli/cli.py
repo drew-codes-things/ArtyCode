@@ -7,8 +7,10 @@ import io
 import json
 import os
 import shlex
+import signal
 import socket
 import sys
+import threading
 import time
 import webbrowser
 from dataclasses import dataclass, replace
@@ -29,6 +31,8 @@ from arty_cli import look, notify, view
 
 NOT_SET_UP = 2
 FAILED = 1
+SIGNAL_EXIT_BASE = 128
+ENDING_SIGNALS = ("SIGTERM", "SIGHUP")
 PROMPT = "› "
 CONTINUATION_PROMPT = "… "
 LINE_CONTINUES = "\\"
@@ -1826,11 +1830,37 @@ def saved_conversation(arguments, store: sessions.Store, project: Path, terminal
     return store.start(project)
 
 
+def leave_on_signal(number, _frame) -> None:
+    for name in ENDING_SIGNALS:
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+    raise SystemExit(SIGNAL_EXIT_BASE + number)
+
+
+@contextlib.contextmanager
+def signals_end_cleanly():
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for name in ENDING_SIGNALS:
+            number = getattr(signal, name, None)
+            if number is not None:
+                previous[number] = signal.signal(number, leave_on_signal)
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if upkeep.handles(argv):
         return upkeep.run(argv)
-    arguments = parse_arguments(argv)
+    with signals_end_cleanly():
+        return main_session(parse_arguments(argv))
+
+
+def main_session(arguments) -> int:
     terminal = Terminal()
     try:
         if arguments.words in (["login"], ["setup"]):
