@@ -334,3 +334,11 @@ def test_test_runs_with_no_file_change_between_them_are_not_called_worse(project
     session = session_with_finish_check(project, brain)
     session.ask("run the tests twice")
     assert not [result for result in brain.tool_results() if finish.WORSE_LEAD in result]
+
+
+def test_a_missed_deletion_is_not_reported_as_already_made(project):
+    (project / "calc.py").write_text("x = 1\ny = 2\n")
+    workspace = tools.Workspace(project)
+    tools.read_file(workspace, "calc.py")
+    found = tools.run("edit_file", {"path": "calc.py", "old_text": "x = 10\ny = 2", "new_text": "y = 2"}, workspace)
+    assert found.startswith("Error") and tools.ALREADY_MADE_LEAD not in found

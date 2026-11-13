@@ -517,7 +517,14 @@ def found_start(lines: list[str], pattern: list[str]) -> int | None:
     return next((start for start in range(len(lines) - size + 1) if stripped[start:start + size] == wanted), None)
 
 
-def already_made_message(lines: list[str], new_text: str) -> str:
+def adds_lines(old_text: str, new_text: str) -> bool:
+    kept = {line.strip() for line in pattern_lines(old_text)}
+    return any(line.strip() and line.strip() not in kept for line in pattern_lines(new_text))
+
+
+def already_made_message(lines: list[str], old_text: str, new_text: str) -> str:
+    if not adds_lines(old_text, new_text):
+        return ""
     pattern = pattern_lines(new_text)
     start = found_start(lines, pattern)
     if start is None:
@@ -528,7 +535,7 @@ def already_made_message(lines: list[str], new_text: str) -> str:
 
 def not_found_message(before: str, old_text: str, new_text: str = "") -> str:
     lines = before.splitlines()
-    already = already_made_message(lines, new_text) if new_text else ""
+    already = already_made_message(lines, old_text, new_text)
     if already:
         return already
     pattern = pattern_lines(old_text)
