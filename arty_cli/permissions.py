@@ -58,6 +58,7 @@ GROUPING = set("(){}")
 QUOTES = "'\""
 COMMENT_MARK = "#"
 LINE_CONTINUATION = "\\\n"
+CARRIAGE_RETURN = "\r"
 READING_TOOLS = ("read_file", "list_files", "search", eyes.VIEW_IMAGE)
 FREE_TOOLS = ("command_output", "stop_command", "todo_write")
 EDITS = "edits"
@@ -126,7 +127,7 @@ SUBCOMMAND_PROGRAMS = {"git", "npm", "yarn", "pnpm", "cargo", "go", "docker", "p
                        "dart", "swift"}
 ENVIRONMENT_SETTING = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SHELL_PROGRAMS = {"sh", "bash", "zsh", "dash", "ksh", "fish", "pwsh", "powershell", "cmd"}
-UNREADABLE_COMMAND_STARTS = re.compile(r"\$\(|[;&|()`{}\n]")
+UNREADABLE_COMMAND_STARTS = re.compile(r"\$\(|[;&|()`{}\n\r]")
 UNREADABLE_WORD_EDGES = "\"'\\$<>"
 MAX_INNER_RUN_WORDS = 64
 PIPES = ("|", "|&")
@@ -171,6 +172,8 @@ def separator_at(command: str, index: int) -> str:
 
 
 def command_pieces(command: str) -> list[tuple[str, str]]:
+    if CARRIAGE_RETURN in command:
+        return []
     pieces, text, joiner, quote, index = [], "", "", "", 0
     while index < len(command):
         character = command[index]

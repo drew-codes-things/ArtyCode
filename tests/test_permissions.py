@@ -930,7 +930,8 @@ RM_HIDDEN_FROM_TEXT_MATCHING = ["/bin/rm -rf build", "if true; then rm -rf build
                                 "X=1 rm -rf build", "echo $(rm -rf build)", "sudo rm -rf build", "(rm -rf build)",
                                 "{ rm -rf build; }", "ls | xargs -0 rm -f", "bash -c 'rm -rf build'",
                                 "\\rm -rf build", "eval 'rm -rf build'", "echo `rm -rf build`",
-                                "timeout 5 rm -rf build", "env A=1 rm -rf build", "sh -c \"cd src && rm -rf x\""]
+                                "timeout 5 rm -rf build", "env A=1 rm -rf build", "sh -c \"cd src && rm -rf x\"",
+                                "ls\rrm -rf build"]
 
 
 @pytest.mark.parametrize("deny", ["run_command(rm:*)", "run_command(rm *)"])
@@ -1161,3 +1162,16 @@ def test_a_remembered_git_prefix_still_covers_its_ordinary_options(workspace):
     gate = permissions.Gate(workspace, Asker())
     gate.always.add(permissions.SESSION_PREFIX_MARK + "git commit")
     assert gate.allows("run_command", {"command": "git commit -m 'fix the sum' --no-verify"})
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+@pytest.mark.parametrize("command", ["ls\rtouch x", "cat a.py\r", "git status\r\nrm a.py"])
+def test_a_carriage_return_makes_a_command_unreadable_so_it_asks(workspace, monkeypatch, platform, command):
+    monkeypatch.setattr(permissions.sys, "platform", platform)
+    assert permissions.command_pieces(command) == []
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "git status")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
