@@ -518,7 +518,9 @@ usual:
 - Linux: bubblewrap (`bwrap`, install it with your package manager). The system is read-only, the project folder is
   writable except the parts that make programs run later (`.git/config`, `.git/hooks`, `.git/info` and the `.arty`
   folder stay read-only, so change git settings or hooks outside the sandbox), `/tmp` is private, and secrets in your home folder (`~/.ssh`, `~/.gnupg`, cloud and `gh` logins,
-  `.netrc`, `.git-credentials`, ArtyCode's own config folder with your API key, and others) look empty. Your
+  `.netrc`, `.git-credentials`, ArtyCode's own config folder with your API key, shell histories, cargo, gradle, maven
+  and git credential files, browser profiles, keystores and key files at the top of your home folder, and others)
+  look empty. Your
   runtime folder (`/run/user/<uid>`, with the session bus and keyring and agent sockets) is empty too, the SSH agent
   socket is hidden wherever it lives, and environment variables that look secret (names with KEY, TOKEN, SECRET,
   PASSWORD, AUTH and the like) or point at the session bus or an agent are left out. The rest of your home folder
