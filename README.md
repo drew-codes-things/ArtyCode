@@ -237,8 +237,9 @@ match it to `..`, the folder above the project. Anything that reaches outside th
 in plan mode and in helpers too; so does a file with more than one hard link, since another of its names may be outside.
 Program names are matched letter for letter (`CAT` is not `cat`), except on Windows and for PowerShell commands. A command also asks when it uses an option that writes, runs a program or follows
 links out of the project (`rg --pre`, `find -fprint`, `find -L`, `grep -R`, `ls -L`, `du -L`, `tree -l`, `tree -o`,
-`file -C`, `diff -r`, `git log --output`, `git branch -D`), and look-only git asks when the repository's own git
-settings name a program git would run (an fsmonitor, an external diff, a textconv or filter driver, a gpg program).
+`file -C`, `diff -r`, `git log --output`, `git branch -D`), and look-only git asks when the git settings of the
+repository it runs in (the project, or a repository inside it reached through `cwd`) name a program git would run (an
+fsmonitor, an external diff, a textconv or filter driver, a gpg program).
 
 The GitHub CLI's look-only commands run without a question too: `gh pr view`, `gh pr list`, `gh pr diff`,
 `gh pr checks`, `gh pr status`, `gh issue view`, `gh issue list`, `gh issue status`, `gh run view` (with `--log` or

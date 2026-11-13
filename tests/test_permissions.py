@@ -1564,3 +1564,54 @@ def test_wildcards_that_cannot_match_the_parent_folder_stay_quiet(project_beside
     ask = Asker()
     assert permissions.Gate(project_beside_a_secret, ask).allows("run_command", {"command": command})
     assert ask.questions == []
+
+
+def nested_repo(workspace, *settings):
+    import subprocess
+    nested = workspace.root / "vendor" / "lib"
+    (nested / "src").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(nested)], check=True)
+    for key, value in settings:
+        subprocess.run(["git", "-C", str(nested), "config", key, value], check=True)
+    return nested
+
+
+@needs_git
+@pytest.mark.parametrize("key", ["core.fsmonitor", "core.sshCommand", "core.pager", "diff.external"])
+@pytest.mark.parametrize("command", ["git status", "gh pr status", "git log --oneline"])
+@pytest.mark.parametrize("cwd", ["vendor/lib", "vendor/lib/src"])
+def test_the_git_settings_guard_reads_the_nested_repository_the_command_runs_in(workspace, key, command, cwd):
+    git_repo(workspace)
+    nested_repo(workspace, (key, "./run.sh"))
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command, "cwd": cwd})
+    assert "program" in ask.questions[0][0]
+
+
+@needs_git
+def test_the_git_settings_guard_reads_a_nested_repository_inside_a_folder_that_is_not_a_repository(workspace):
+    nested_repo(workspace, ("core.fsmonitor", "./run.sh"))
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": "git status", "cwd": "vendor/lib"})
+    assert "program" in ask.questions[0][0]
+
+
+@needs_git
+def test_a_plain_nested_repository_inside_a_plain_project_stays_quiet(workspace):
+    git_repo(workspace, ("user.name", "x"))
+    nested_repo(workspace, ("core.fsmonitor", "false"))
+    ask = Asker()
+    for command in ("git status", "gh pr status"):
+        assert permissions.Gate(workspace, ask).allows("run_command", {"command": command, "cwd": "vendor/lib"})
+    assert ask.questions == []
+
+
+@needs_git
+@pytest.mark.parametrize("command", ["cd vendor/lib && git status", "git -C vendor/lib status",
+                                     "git --git-dir=vendor/lib/.git status"])
+def test_reaching_a_nested_repository_any_other_way_than_cwd_is_not_look_only(workspace, command):
+    git_repo(workspace)
+    nested_repo(workspace, ("core.fsmonitor", "./run.sh"))
+    assert not permissions.is_read_only_command(command)
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL

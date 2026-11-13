@@ -1168,7 +1168,7 @@ class Gate:
             return self.confirm(f"Look outside the project: {command}?", remember=command,
                                 rule=self.command_rule(command))
         runs_git = any(words_of(text)[0].lower() in PROGRAMS_RUNNING_GIT for text in pieces)
-        if runs_git and git_settings_run_programs(self.workspace.root):
+        if runs_git and git_settings_run_programs(folder):
             return self.confirm(f"This repository's git settings name a program that git would run. Run: {command}?",
                                 remember=command, rule=self.command_rule(command))
         return None
