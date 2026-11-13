@@ -17,6 +17,9 @@ LINUX_SHELL = "/bin/bash"
 SECRET_FOLDERS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".config/arty-cli", ".config/Arty",
                   ".config/gh", ".password-store", ".local/share/keyrings")
 SECRET_FILES = (".netrc", ".git-credentials", ".npmrc", ".pypirc", ".arty-android.properties")
+GIT_FOLDER = ".git"
+PROTECTED_GIT_PARTS = ("config", "config.worktree", "hooks", "info")
+ARTY_FOLDER = ".arty"
 LINUX_ISOLATION = ["--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session"]
 SESSION_VARIABLES = ("SSH_AUTH_SOCK", "SSH_AGENT_PID", "DBUS_SESSION_BUS_ADDRESS", "GPG_AGENT_INFO")
 SECRET_NAME = re.compile(r"(^|_)(KEYS?|TOKENS?|SECRETS?|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|AUTH|COOKIE)(_|$)"
@@ -77,9 +80,18 @@ def session_paths(environ) -> list[Path]:
     return [path for path in found if not any(path != other and path.is_relative_to(other) for other in found)]
 
 
+def protected_places(root: Path) -> list[Path]:
+    git = Path(root) / GIT_FOLDER
+    candidates = [git] if git.is_file() else [git / part for part in PROTECTED_GIT_PARTS]
+    candidates.append(Path(root) / ARTY_FOLDER)
+    return [path for path in candidates if path.exists() and not path.is_symlink()]
+
+
 def linux_arguments(bwrap: str, root: Path, command: str, network: bool, hidden: list[Path]) -> list[str]:
     arguments = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
     arguments += ["--bind", str(root), str(root)]
+    for place in protected_places(root):
+        arguments += ["--ro-bind", str(place), str(place)]
     for path in hidden:
         arguments += ["--tmpfs", str(path)] if Path(path).is_dir() else ["--ro-bind", "/dev/null", str(path)]
     arguments += LINUX_ISOLATION + ([] if network else ["--unshare-net"])
