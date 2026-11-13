@@ -218,3 +218,22 @@ def test_after_older_results_are_hidden_the_model_still_sees_the_file_it_is_edit
     assert pruned
     blind = [index for index in pruned if not calc_view_in(brain.prompts[index], seen[index])]
     assert not blind, f"{len(blind)} of {len(pruned)} prompts after a prune had no current view of calc.py"
+
+
+def test_the_footer_shows_real_room_right_after_older_results_are_dropped(project):
+    calc = project / "calc.py"
+    calc.write_text(calc_of())
+    (project / "fake_pytest.py").write_text(PYTEST_LIKE)
+    tests = ("run_command", {"command": "python3 fake_pytest.py"})
+    steps = [[("read_file", {"path": "calc.py"})], [tests]]
+    for number in range(1, 15):
+        steps += [[edit_of(number)], [edit_of(number + 20)], [tests]]
+    session = session_for(project, ScriptedBrain(steps + ["Done."]))
+    shown = []
+    session.terminal.measure = lambda: shown.append(
+        (session.terminal.err.getvalue().count(cli.PRUNED_NOTE), cli.context_left(session)))
+    session.ask("fix calc.py so the tests pass")
+    notes = session.terminal.err.getvalue().count(cli.PRUNED_NOTE)
+    assert notes
+    right_after = [next(left for count, left in shown if count >= note) for note in range(1, notes + 1)]
+    assert min(right_after) >= 40, right_after

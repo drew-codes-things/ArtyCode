@@ -1105,7 +1105,7 @@ class Session:
     def squeeze(self, messages: list[dict], overflowed: bool = False) -> None:
         limit = self.compact_limit()
         limit = prune.overflow_limit(messages, self.client, limit) if overflowed else limit
-        if context.estimated_tokens(messages, self.client) <= limit:
+        if not prune.needs_pruning(messages, limit, self.client):
             return
         pruned = self.pruned_enough(messages, limit)
         if not pruned:
@@ -1113,6 +1113,7 @@ class Session:
         if pruned or context.estimated_tokens(messages, self.client) <= limit:
             self.keep_edited_file_in_view(messages)
             self.terminal.note(PRUNED_NOTE)
+            self.measure_room()
             return
         instructions = self.compact_instructions(AUTOMATIC)
         if instructions is None:
@@ -1131,6 +1132,10 @@ class Session:
         self.turn_start, self.compacted_in_turn = len(messages) - 1, True
         self.remember()
         self.tell_remote(remote.compacted_event(carry_on, SUMMARY_LEADS))
+
+    def measure_room(self) -> None:
+        if self.terminal.measure:
+            self.terminal.measure()
 
     def compact(self, trigger: str = MANUAL) -> bool:
         instructions = self.compact_instructions(trigger)

@@ -10,7 +10,8 @@ KEPT_ROUNDS = 5
 MAX_OUTCOME_CHARS = 80
 EXIT_CODE = re.compile(r"\[(?:job \S+ finished with )?exit code (-?\d+)\]\s*$")
 NUMBERED_LINE = re.compile(r"^\d+\t", re.M)
-TARGET_SHARE = 0.6
+START_SHARE = 0.9
+TARGET_SHARE = 0.5
 OVERFLOW_SHARE = 0.7
 KEPT_ARGUMENT_CHARS = 200
 READ_TOOL, COMMAND_TOOL = "read_file", "run_command"
@@ -174,14 +175,19 @@ def hide_oldest(messages: list[dict], client, target: float, protected_from: int
             stubbed(messages, step)
 
 
+def needs_pruning(messages: list[dict], limit: int, client) -> bool:
+    return estimated(messages, client) > limit * START_SHARE
+
+
 def prune(messages: list[dict], limit: int, client) -> None:
-    if estimated(messages, client) <= limit:
+    if not needs_pruning(messages, limit, client):
         return
     stub_stale(messages)
     target = limit * TARGET_SHARE
-    hide_oldest(messages, client, target, rounds_start(messages, KEPT_ROUNDS))
-    if estimated(messages, client) > limit:
-        hide_oldest(messages, client, target, newest_round_start(messages))
+    for kept in range(KEPT_ROUNDS, 0, -1):
+        if estimated(messages, client) <= target:
+            return
+        hide_oldest(messages, client, target, rounds_start(messages, kept))
 
 
 def cut_newest(messages: list[dict], limit: int, client) -> None:

@@ -94,7 +94,7 @@ def test_a_hidden_result_keeps_its_outcome():
 
 
 def test_the_newest_rounds_are_kept_whole_when_hiding_older_ones_is_enough():
-    rounds = [round_of(number, "search", f"hit {number} " * 600, pattern=f"p{number}") for number in range(1, 10)]
+    rounds = [round_of(number, "search", f"hit {number} " * 600, pattern=f"p{number}") for number in range(1, 13)]
     messages = conversation(*rounds)
     limit = prune.estimated(messages, Client()) - 100
     prune.prune(messages, limit, Client())
@@ -113,3 +113,30 @@ def test_the_newest_result_for_a_file_being_edited_is_never_hidden():
     contents = tool_contents(messages)
     assert contents[1] == miss
     assert contents[2].startswith(prune.STUB_LEAD)
+
+
+def test_a_prune_leaves_half_the_room_even_when_the_recent_rounds_are_big():
+    limit = 8_000
+    small = [round_of(number, "search", f"hit {number} " * 200, pattern=f"p{number}") for number in range(1, 4)]
+    big = [round_of(number, "run_command", f"line {number}\n" * 1_400 + "[exit code 1]", command=f"check {number}")
+           for number in range(4, 9)]
+    messages = conversation(*small, *big)
+    assert prune.estimated(messages, Client()) > limit
+    prune.prune(messages, limit, Client())
+    assert prune.estimated(messages, Client()) <= limit * prune.TARGET_SHARE
+    assert prune.TARGET_SHARE == 0.5
+    assert not tool_contents(messages)[-1].startswith(prune.STUB_LEAD)
+
+
+def test_nothing_is_pruned_below_the_start_share_and_a_prune_starts_above_it():
+    limit = 10_000
+    below = conversation(round_of(1, "search", "hit " * int(limit * prune.START_SHARE * 0.8), pattern="p"),
+                         round_of(2, "search", "new", pattern="q"))
+    kept = json.dumps(below)
+    prune.prune(below, limit, Client())
+    assert json.dumps(below) == kept
+    above = conversation(*[round_of(number, "search", f"hit {number} " * 900, pattern=f"p{number}")
+                           for number in range(1, 7)])
+    assert limit * prune.START_SHARE < prune.estimated(above, Client()) <= limit
+    prune.prune(above, limit, Client())
+    assert prune.estimated(above, Client()) <= limit * prune.TARGET_SHARE
