@@ -644,6 +644,7 @@ RESUME_SAID = re.compile(r"Resume this chat: (arty .*)$", re.MULTILINE)
 
 
 def test_leaving_a_chat_prints_the_command_that_carries_it_on(ready, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["arty"])
     chat_with(monkeypatch, "remember the word teal", "/exit")
     said = RESUME_SAID.findall(capsys.readouterr().err)
     assert len(said) == 1 and said[0].startswith("arty --resume ")
@@ -659,6 +660,8 @@ def test_a_chat_where_nothing_was_asked_prints_no_resume_line(ready, monkeypatch
 
 
 def test_the_resume_line_is_printed_even_when_the_chat_crashes(ready, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["arty"])
+
     def crashing(session, share=False, plain=False):
         cli.handle(session, "hello")
         raise RuntimeError("boom")
@@ -670,6 +673,8 @@ def test_the_resume_line_is_printed_even_when_the_chat_crashes(ready, monkeypatc
 
 
 def test_the_resume_line_is_one_line_even_on_a_narrow_terminal(ready, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["/home/someone/.local/bin/arty"])
+
     class Tty(io.StringIO):
         def isatty(self):
             return True
@@ -683,12 +688,34 @@ def test_the_resume_line_is_one_line_even_on_a_narrow_terminal(ready, monkeypatc
     assert session.terminal.err.getvalue() == f"Resume this chat: arty --resume {session.saved.id}\n"
 
 
-def test_the_resume_command_names_the_project_only_when_it_is_not_the_current_folder(tmp_path):
+def test_the_resume_command_names_the_project_only_when_it_is_not_the_current_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["arty"])
     assert cli.resume_command("20261113-1", tmp_path, tmp_path) == "arty --resume 20261113-1"
     elsewhere = tmp_path / "my project"
     elsewhere.mkdir()
     assert cli.resume_command("20261113-1", elsewhere, tmp_path) == f"arty --project '{elsewhere}' --resume 20261113-1"
 
+
+@pytest.mark.parametrize("started_as, said", [("/home/someone/.local/bin/arty-cli", "arty-cli"),
+                                              ("/usr/local/bin/arty", "arty"), ("C:\\Tools\\arty-cli.exe", "arty-cli"),
+                                              ("/home/someone/arty_cli/__main__.py", "arty-cli")])
+def test_the_resume_command_uses_the_name_it_was_started_as(tmp_path, monkeypatch, started_as, said):
+    monkeypatch.setattr(sys, "argv", [started_as])
+    assert cli.resume_command("20261113-1", tmp_path, tmp_path) == f"{said} --resume 20261113-1"
+
+
+def test_the_header_drawn_again_after_a_resize_shows_the_mode_and_model_now(ready):
+    workspace = cli.tools.Workspace(ready)
+    session = cli.Session(FakeBrain(settings.Settings(base_url="http://b/v1", api_key="k", model="arty/first")),
+                          workspace, cli.permissions.Gate(workspace, lambda *asked: "n"),
+                          cli.Terminal(io.StringIO(), io.StringIO()), cli.sessions.Store(ready / "kept").start(ready))
+    blocks = []
+    cli.welcome_header(session, cli.look.theme_for(False), blocks.append)
+    session.gate.mode = cli.permissions.PLAN
+    session.client.model = "arty/second"
+    drawn = "\n".join(blocks[0](100))
+    assert "arty/second" in drawn and "plan:" in drawn
+    assert "arty/first" not in drawn
 
 @pytest.mark.parametrize("folder, shown", [("Projects/demo", "~{sep}Projects{sep}demo"), ("", "~")])
 def test_a_folder_in_the_home_folder_is_shown_from_the_tilde(tmp_path, folder, shown):

@@ -14,7 +14,7 @@ import threading
 import time
 import webbrowser
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import urlparse
 
 from arty_cli import extras as extras_module
@@ -141,7 +141,9 @@ ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
 WORDMARK = "◆ ArtyCode"
 PRODUCT_NAME = "ArtyCode"
-COMMAND_NAME = "arty"
+COMMAND_NAMES = ("arty", "arty-cli")
+OWN_COMMAND_NAME = "arty-cli"
+WINDOWS_PROGRAM_ENDING = ".exe"
 RESUME_LINE = "Resume this chat: {}"
 STEP_MARK = "●"
 THOUGHT_MARK = "✻"
@@ -1602,20 +1604,31 @@ def context_window(session: Session) -> int | None:
         return None
 
 
-def header_details(session: Session) -> list[tuple[str, str]]:
+def header_details(session: Session, window: int | None) -> list[tuple[str, str]]:
     mode = session.gate.mode
     details = [("model", session.client.model), ("folder", shown_folder(session.workspace.root, Path.home()))]
-    window = context_window(session)
     if window:
         details.append(("context", f"{window:,} tokens"))
     return details + [("mode", f"{mode}: {MODE_MEANINGS.get(mode, '')}"),
                       ("rules", rules_summary(rules_level(session.workspace)))]
 
 
+def details_now(session: Session):
+    windows = {}
+
+    def current() -> list[tuple[str, str]]:
+        model = session.client.model
+        if model not in windows:
+            windows[model] = context_window(session)
+        return header_details(session, windows[model])
+
+    return current
+
+
 def welcome_header(session: Session, theme: look.Theme, show_block) -> None:
     terminal = session.terminal
-    details = header_details(session)
-    show_block(lambda width: look.header(PRODUCT_NAME, __version__, details, width, theme))
+    details = details_now(session)
+    show_block(lambda width: look.header(PRODUCT_NAME, __version__, details(), width, theme))
     terminal.note("")
     if session.gate.mode == permissions.ALLOW_ALL:
         terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
@@ -1625,8 +1638,13 @@ def welcome_header(session: Session, theme: look.Theme, show_block) -> None:
         terminal.note(f"  {NO_NOTES_TIP}")
 
 
+def started_as() -> str:
+    name = PureWindowsPath(sys.argv[0] if sys.argv else "").name.lower().removesuffix(WINDOWS_PROGRAM_ENDING)
+    return name if name in COMMAND_NAMES else OWN_COMMAND_NAME
+
+
 def resume_command(session_id: str, project: Path, here: Path) -> str:
-    words = [COMMAND_NAME]
+    words = [started_as()]
     if Path(project).resolve() != Path(here).resolve():
         words += ["--project", str(project)]
     return shlex.join(words + ["--resume", session_id])

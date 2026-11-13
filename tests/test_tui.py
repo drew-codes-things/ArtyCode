@@ -619,6 +619,17 @@ def test_a_block_is_drawn_again_for_the_new_width_and_long_lines_wrap_to_it():
     assert rows_text(transcript.rows_for(12)) == ["logo at 12", "x" * 12, "x" * 12, "x" * 6]
 
 
+def test_a_row_keeps_runs_of_one_style_together_not_one_piece_per_character():
+    rows = tui.screen_rows("x" * 78 + "\033[31mred\033[0m", 200)
+    assert len(rows[0]) == 2 and plain(rows[0]) == "x" * 78 + "red"
+
+
+def test_the_conversation_keeps_only_the_newest_lines_once_it_is_very_long():
+    transcript = transcript_of(tui.MAX_KEPT_ENTRIES + 500)
+    assert len(transcript.entries) == tui.MAX_KEPT_ENTRIES
+    assert rows_text(transcript.rows_for(40))[-1] == f"line {tui.MAX_KEPT_ENTRIES + 500}"
+    assert len(transcript.rows_for(40)) == tui.MAX_KEPT_ENTRIES
+
 def test_colours_and_wide_characters_and_tabs_are_kept_when_a_line_is_cut():
     rows = tui.screen_rows("\033[31mred\033[0m\tend", 40)
     assert plain(rows[0]) == "red     end" and rows[0][0][0] != ""
