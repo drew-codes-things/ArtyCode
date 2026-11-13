@@ -88,14 +88,25 @@ def shown_by(transcript, width=40, height=5):
                      for number in range(min(height, len(transcript.rows_for(width)))))
 
 
+class Clock:
+    def __init__(self):
+        self.ahead = 0.0
+
+    def __call__(self):
+        return time.monotonic() + self.ahead
+
+    def advance(self, seconds):
+        self.ahead += seconds
+
+
 @contextmanager
 def running(root, history_file=None):
-    committed, interrupted = [], []
+    committed, interrupted, clock = [], [], Clock()
     with create_pipe_input() as typed, create_app_session(input=typed, output=DummyOutput()):
         interface = tui.Interface(Host(root), history_file, commit=committed.append,
-                                  interrupt=lambda: interrupted.append(True))
+                                  interrupt=lambda: interrupted.append(True), clock=clock)
         interface.start()
-        interface.sent, interface.interrupted = committed, interrupted
+        interface.sent, interface.interrupted, interface.test_clock = committed, interrupted, clock
         try:
             yield interface, typed
         finally:
@@ -302,6 +313,7 @@ def test_a_question_is_answered_with_its_letter_then_enter_and_typing_stays_out_
     interface.open_question("Edit greet.py?", CHOICES)
     assert plain(interface.bar_text()) == tui.CHOICE_HINT
     assert interface.wait_answer(0.05) is None
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
     typed.send_text("a")
     assert until(lambda: interface.question.selected == 1)
     assert f"{tui.POINTER} a  Yes, and don't ask again" in plain(interface.question_text())
@@ -314,8 +326,9 @@ def test_a_question_is_answered_with_its_letter_then_enter_and_typing_stays_out_
 def test_arrows_choose_too_and_escape_refuses(started):
     interface, typed = started
     interface.open_question("Run: pytest -q", CHOICES)
-    typed.send_text(DOWN + DOWN + UP + "\r")
-    assert interface.wait_answer() == "a"
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
+    typed.send_text(DOWN + DOWN + DOWN + UP + "\r")
+    assert interface.wait_answer(3) == "a"
     interface.close_question()
     interface.open_question("Run: pytest -q", CHOICES)
     typed.send_text(ESCAPE)
@@ -354,6 +367,7 @@ def test_answers_for_a_shared_chat_are_polled_from_the_question(started):
     lines = interface.answer_lines()
     interface.open_question("Edit a.py?", CHOICES)
     assert lines.line(0.05) is None
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
     typed.send_text("y\r")
     assert until(lambda: interface.question.answered.is_set())
     assert lines.line(0.05) == "y"
@@ -489,8 +503,10 @@ def test_a_permission_question_is_a_bordered_panel_with_its_choices(started):
     rows = plain(interface.question_text()).split("\n")
     assert rows[0].startswith("╭─ Arty asks ") and rows[-1].startswith("╰") and rows[-1].endswith("╯")
     assert rows[1].startswith("│ Run: pytest -q?") and rows[1].endswith("│")
-    assert any(f"{tui.POINTER} y  Yes" in row for row in rows)
+    assert any("  y  Yes" in row for row in rows) and tui.POINTER not in plain(interface.question_text())
     assert len({len(row) for row in rows}) == 1
+    interface.pick_choice("y")
+    assert f"{tui.POINTER} y  Yes" in plain(interface.question_text())
 
 
 def test_a_long_question_wraps_inside_the_panel_at_phone_width(started, monkeypatch):
@@ -650,3 +666,75 @@ def test_a_stuck_interface_still_leaves_the_alternate_screen(tmp_path, monkeypat
         assert {"disable_mouse_support", "quit_alternate_screen", "show_cursor", "flush"} <= set(calls)
         interface.app.loop.call_soon_threadsafe(interface.app.exit)
         interface.thread.join(2)
+
+
+KEYS_LAND_SECONDS = 0.15
+GIT_PUSH_CHOICES = [("y", "Yes"), ("a", "Yes, and don't ask again for `git push`"),
+                    ("s", "Yes, and save a rule for `git push`"), ("n", "No")]
+
+
+def opened_while_typing(interface, typed, text="Run: git push --force origin main"):
+    typed.send_text("and al")
+    assert until(lambda: typed_text(interface) == "and al")
+    interface.open_question(text, GIT_PUSH_CHOICES)
+
+
+def keys_land(interface, typed, keys):
+    typed.send_text(keys)
+    time.sleep(KEYS_LAND_SECONDS)
+
+
+@pytest.mark.parametrize("typed_ahead", ["\r", "and also fix the tests\r", "thanks\r", "no wait\r", "y\r", "a\r"])
+def test_keys_typed_straight_after_a_question_opens_never_answer_it(started, typed_ahead):
+    interface, typed = started
+    with interface.working():
+        opened_while_typing(interface, typed)
+        keys_land(interface, typed, typed_ahead)
+        assert interface.wait_answer(0.2) is None
+        assert interface.question.selected is None
+    interface.close_question()
+
+
+def test_keys_typed_without_a_pause_after_the_question_settles_still_do_not_answer_it(started):
+    interface, typed = started
+    opened_while_typing(interface, typed)
+    keys_land(interface, typed, "and also")
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
+    keys_land(interface, typed, " fix it")
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS / 4)
+    keys_land(interface, typed, "s\r")
+    assert interface.wait_answer(0.2) is None and interface.question.selected is None
+
+
+def test_enter_alone_never_picks_a_choice_even_after_a_pause(started):
+    interface, typed = started
+    interface.open_question("Run: git push --force origin main", GIT_PUSH_CHOICES)
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
+    keys_land(interface, typed, "\r")
+    assert interface.wait_answer(0.2) is None
+    assert f"{tui.POINTER} y" not in plain(interface.question_text())
+
+
+def test_a_letter_that_is_not_a_choice_drops_the_selection_so_typing_yes_does_not_save(started):
+    interface, typed = started
+    interface.open_question("Run: git push --force origin main", GIT_PUSH_CHOICES)
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
+    keys_land(interface, typed, "yes\r")
+    assert interface.wait_answer(0.2) is None and interface.question.selected is None
+
+
+def test_after_a_pause_a_letter_then_enter_answers_and_escape_always_refuses(started):
+    interface, typed = started
+    opened_while_typing(interface, typed)
+    keys_land(interface, typed, "thanks")
+    interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
+    keys_land(interface, typed, "n")
+    assert until(lambda: interface.question.selected == 3)
+    typed.send_text("\r")
+    assert interface.wait_answer(3) == "n"
+    interface.close_question()
+    interface.open_question("Run: git push --force origin main", GIT_PUSH_CHOICES)
+    typed.send_text(ESCAPE)
+    assert interface.wait_answer(3) == "n"
+    interface.close_question()
+    assert typed_text(interface) == "and al"

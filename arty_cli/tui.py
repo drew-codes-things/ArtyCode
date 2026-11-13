@@ -52,6 +52,7 @@ KEY_PREFIX_SECONDS = 0.15
 ESCAPE_SECONDS = 0.05
 FRAMES_PER_SECOND = 8
 REFUSAL_KEY = "n"
+ANSWER_PAUSE_SECONDS = 0.5
 LINE_CONTINUES = "\\"
 QUEUED_LEAD = "  queued: "
 POINTER = "❯"
@@ -173,7 +174,9 @@ class Suggestions(Completer):
 class Question:
     text: str
     choices: list
-    selected: int = 0
+    opened_at: float = 0.0
+    selected: int | None = None
+    heeding: bool = False
     answer: str | None = None
     answered: threading.Event = field(default_factory=threading.Event)
 
@@ -424,6 +427,7 @@ class Interface:
         self.wants_line = False
         self.draft = ""
         self.quit_armed_at = None
+        self.last_key_at = None
         self.failure = None
         self.started = threading.Event()
         self.commit_line = commit
@@ -484,6 +488,10 @@ class Interface:
                                enable_page_navigation_bindings=False, refresh_interval=REFRESH_SECONDS)
         self.app.timeoutlen = KEY_PREFIX_SECONDS
         self.app.ttimeoutlen = ESCAPE_SECONDS
+        self.app.key_processor.after_key_press += self.note_key_press
+
+    def note_key_press(self, _processor) -> None:
+        self.last_key_at = self.clock()
 
     def input_box(self, typed):
         side = look.BOX["side"]
@@ -532,10 +540,10 @@ class Interface:
         keys.add(SHORTCUTS_MARK, filter=typing & shortcuts_open)(lambda event: self.close_shortcuts())
         keys.add("escape", filter=typing & shortcuts_open)(lambda event: self.close_shortcuts())
         keys.add("enter", filter=typing & shortcuts_open)(lambda event: self.ask_for_help())
-        keys.add("up", filter=asking)(lambda event: self.move_choice(-1))
-        keys.add("down", filter=asking)(lambda event: self.move_choice(1))
-        keys.add("enter", filter=asking)(lambda event: self.confirm_choice())
-        keys.add(Keys.Any, filter=asking)(lambda event: self.pick_choice(event.data))
+        keys.add("up", filter=asking)(lambda event: self.heeds_key() and self.move_choice(-1))
+        keys.add("down", filter=asking)(lambda event: self.heeds_key() and self.move_choice(1))
+        keys.add("enter", filter=asking)(lambda event: self.heeds_key() and self.confirm_choice())
+        keys.add(Keys.Any, filter=asking)(lambda event: self.heeds_key() and self.pick_choice(event.data))
         return keys
 
     def start(self) -> None:
@@ -700,19 +708,34 @@ class Interface:
         if question is not None:
             question.settle(REFUSAL_KEY if REFUSAL_KEY in question.keys() else "")
 
+    def heeds_key(self) -> bool:
+        question, now = self.question, self.clock()
+        if question is None:
+            return False
+        settled = now - question.opened_at >= ANSWER_PAUSE_SECONDS
+        paused = self.last_key_at is None or now - self.last_key_at >= ANSWER_PAUSE_SECONDS
+        question.heeding = settled and (question.heeding or paused)
+        return question.heeding
+
     def move_choice(self, step: int) -> None:
         question = self.question
-        if question is not None and question.choices:
-            question.selected = (question.selected + step) % len(question.choices)
+        if question is None or not question.choices:
+            return
+        start = -1 if step > 0 else 0
+        question.selected = ((start if question.selected is None else question.selected) + step) % len(question.choices)
 
     def pick_choice(self, typed: str) -> None:
         question = self.question
-        if question is not None and typed.lower() in question.keys():
+        if question is None:
+            return
+        if typed.lower() in question.keys():
             question.selected = question.keys().index(typed.lower())
+            return
+        question.selected, question.heeding = None, False
 
     def confirm_choice(self) -> None:
         question = self.question
-        if question is not None and question.choices:
+        if question is not None and question.choices and question.selected is not None:
             question.settle(question.keys()[question.selected])
 
     def answer_line(self, text: str) -> None:
@@ -724,9 +747,14 @@ class Interface:
             question.settle(text)
 
     def open_question(self, text: str, choices) -> None:
-        self.question = Question(text, list(choices))
+        self.question = Question(text, list(choices), opened_at=self.clock())
+        self.in_loop(self.drop_typed_ahead)
         self.transcript.follow()
         self.redraw()
+
+    def drop_typed_ahead(self) -> None:
+        self.app.input.flush_keys()
+        self.app.key_processor.reset()
 
     def wait_answer(self, seconds: float | None = None) -> str | None:
         question = self.question
@@ -863,7 +891,7 @@ class Interface:
         inner = max(width - 2 - 2 * PANEL_PADDING, 1)
         body = [[("class:question", line)] for line in wrap.wrapped_line(question.text, inner)]
         body.append([])
-        for index in window_around(question.selected, len(question.choices), CHOICE_ROWS):
+        for index in window_around(question.selected or 0, len(question.choices), CHOICE_ROWS):
             key, meaning = question.choices[index]
             chosen = index == question.selected
             choice = f"{POINTER if chosen else ' '} {key}  {meaning}"

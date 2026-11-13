@@ -204,7 +204,9 @@ Worked for 12s · 6 steps · ↓ 2.1k tokens
   stays one message.
 - **Questions.** Permission questions, plan approval and the model list from `/model` are asked in a bordered panel
   that takes the box's place: move with Up and Down or press the answer's letter or number, Enter confirms, Esc
-  refuses. The answer is then noted in the conversation (`Edit greet.py? → Yes`). "What should Arty do instead?" and
+  refuses. Nothing is chosen until you pick, so Enter on its own does nothing. Keys that arrive in the first half
+  second, or while you are still typing without a pause, are ignored, and a letter that is not one of the answers
+  clears the choice: a sentence typed ahead while Arty works can never answer a question. The answer is then noted in the conversation (`Edit greet.py? → Yes`). "What should Arty do instead?" and
   plan feedback are typed in the box (what you were writing is put back afterwards). With remote control on, an answer
   from another device still wins or loses the same way as before.
 - **Notices.** When a permission question is waiting, or a request finishes after more than 30 seconds, the terminal
