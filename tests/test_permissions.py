@@ -793,6 +793,36 @@ def test_commands_that_could_hide_anything_are_only_ever_allowed_exactly(workspa
     assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
 
 
+POWERSHELL_CHANGING_OR_LAUNCHING = [
+    "Remove-Item -Recurse build", "del build.txt", "erase build.txt", "ri build", "rd build", "New-Item -ItemType File a",
+    "ni a", "Move-Item a b", "move a b", "Copy-Item a b", "copy a b", "Rename-Item a b", "ren a b",
+    "Set-Content a.txt x", "Add-Content a.txt x", "Clear-Content a.txt", "Out-File a.txt", "Set-Item Env:X 1",
+    "Set-ItemProperty HKCU:/x -Name y -Value 1", "New-ItemProperty HKCU:/x -Name y", "Remove-ItemProperty HKCU:/x y",
+    "Invoke-WebRequest https://example.com -OutFile x", "iwr https://example.com", "Invoke-RestMethod https://x",
+    "irm https://example.com", "Stop-Process -Name python", "spps -Id 4", "Start-Process notepad", "saps notepad",
+    "start notepad", "Invoke-Expression x", "iex x", "Invoke-Item x.bat", "ii x.bat", "Start-Job -FilePath x.ps1",
+    "Invoke-Command -FilePath x.ps1", "icm -FilePath x.ps1",
+]
+
+
+@pytest.mark.parametrize("command", POWERSHELL_CHANGING_OR_LAUNCHING)
+def test_powershell_commands_that_change_fetch_stop_or_launch_are_only_ever_allowed_exactly(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+@pytest.mark.parametrize("prefix, command", [("Start-Process", "Start-Process powershell -ArgumentList x"),
+                                             ("Invoke-Expression", "Invoke-Expression x"), ("iex", "iex x")])
+def test_an_older_powershell_launcher_prefix_no_longer_covers_anything(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+
 def test_always_for_a_command_covers_its_variants_and_the_question_says_which(workspace):
     ask = Asker("a")
     gate = permissions.Gate(workspace, ask)
@@ -1294,6 +1324,7 @@ def test_a_remembered_prefix_never_covers_an_option_that_runs_a_program_or_write
     assert len(ask.questions) == 2
 
 
+@needs_git
 @pytest.mark.parametrize("prefix, command", [
     ("gh pr view", "gh pr view 12 --comments"), ("gh pr view", "gh pr view 12 -R cli/cli --json title --jq .title"),
     ("gh pr create", "gh pr create --title 'environment import fix' --body done"),
@@ -1522,9 +1553,10 @@ def test_a_remembered_gh_prefix_is_offered_for_a_changing_gh_command(workspace):
 def expansion_bait(workspace):
     (workspace.root / "env").write_text("x\n")
     (workspace.root / "env.HOME").write_text("x\n")
-    address_folder = workspace.root / "git@127.0.0.1:o"
-    address_folder.mkdir()
-    (address_folder / "r").write_text("x\n")
+    if sys.platform != "win32":
+        address_folder = workspace.root / "git@127.0.0.1:o"
+        address_folder.mkdir()
+        (address_folder / "r").write_text("x\n")
     return workspace
 
 

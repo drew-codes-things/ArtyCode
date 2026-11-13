@@ -143,8 +143,15 @@ LAUNCHING_SUBCOMMANDS = {"run", "x", "dlx"}
 SCRIPT_RUNNING_PROGRAMS = {"make", "gmake", "bmake", "cmake", "ninja", "tar", "zip", "vim", "vi", "nvim", "view",
                            "vimdiff", "gvim", "emacs", "nano", "ex", "ed", "less", "more", "most", "pager", "man",
                            "tmux", "screen"}
-NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS
-EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
+POWERSHELL_LAUNCHERS = {"start-process", "saps", "start", "invoke-expression", "iex", "invoke-command", "icm",
+                        "invoke-item", "ii", "start-job", "sajb"}
+POWERSHELL_CHANGING = {"remove-item", "ri", "del", "erase", "rd", "new-item", "ni", "move-item", "mi", "move",
+                       "copy-item", "cpi", "copy", "rename-item", "rni", "ren", "set-content", "sc", "add-content", "ac",
+                       "clear-content", "clc", "out-file", "set-item", "si", "clear-item", "new-itemproperty",
+                       "set-itemproperty", "sp", "remove-itemproperty", "rp", "invoke-webrequest", "iwr",
+                       "invoke-restmethod", "irm", "stop-process", "spps"}
+NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS | POWERSHELL_LAUNCHERS
+EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | POWERSHELL_CHANGING | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
                                           "ssh", "curl", "wget", "kill", "pkill", "killall", "find", "sed", "awk",
                                           "gawk", "trap", "alias", "export", "unset", "set", "crontab"}
