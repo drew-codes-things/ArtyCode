@@ -1,6 +1,8 @@
 import io
 import json
 import os
+import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -633,6 +635,56 @@ def test_the_welcome_suggests_init_only_where_there_are_no_notes_yet(ready, monk
     (ready / "ARTY.md").write_text("- tests run with pytest\n")
     chat_with(monkeypatch, "/exit")
     assert "/init" not in capsys.readouterr().err
+
+
+RESUME_SAID = re.compile(r"Resume this chat: (arty .*)$", re.MULTILINE)
+
+
+def test_leaving_a_chat_prints_the_command_that_carries_it_on(ready, monkeypatch, capsys):
+    chat_with(monkeypatch, "remember the word teal", "/exit")
+    said = RESUME_SAID.findall(capsys.readouterr().err)
+    assert len(said) == 1 and said[0].startswith("arty --resume ")
+    words = shlex.split(said[0])[1:]
+    monkeypatch.setattr("sys.stdin", io.StringIO("what was the word?\n/exit\n"))
+    assert cli.main(words) == 0
+    assert user_texts(FakeBrain.made[-1].calls[-1])[-2:] == ["remember the word teal", "what was the word?"]
+
+
+def test_a_chat_where_nothing_was_asked_prints_no_resume_line(ready, monkeypatch, capsys):
+    chat_with(monkeypatch, "/exit")
+    assert "Resume this chat" not in capsys.readouterr().err
+
+
+def test_the_resume_line_is_printed_even_when_the_chat_crashes(ready, monkeypatch, capsys):
+    def crashing(session, share=False, plain=False):
+        cli.handle(session, "hello")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "chat", crashing)
+    with pytest.raises(RuntimeError, match="boom"):
+        cli.main([])
+    assert RESUME_SAID.search(capsys.readouterr().err)
+
+
+def test_the_resume_line_is_one_line_even_on_a_narrow_terminal(ready, monkeypatch):
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(cli.wrap, "room", lambda: 20)
+    session = cli.Session(FakeBrain(settings.Settings(base_url="http://b/v1", api_key="k")), cli.tools.Workspace(ready),
+                          None, cli.Terminal(io.StringIO(), Tty()),
+                          cli.sessions.Store(ready / "kept").start(ready))
+    session.saved.save([{"role": "user", "content": "hi"}], "m")
+    cli.say_how_to_resume(session)
+    assert session.terminal.err.getvalue() == f"Resume this chat: arty --resume {session.saved.id}\n"
+
+
+def test_the_resume_command_names_the_project_only_when_it_is_not_the_current_folder(tmp_path):
+    assert cli.resume_command("20261113-1", tmp_path, tmp_path) == "arty --resume 20261113-1"
+    elsewhere = tmp_path / "my project"
+    elsewhere.mkdir()
+    assert cli.resume_command("20261113-1", elsewhere, tmp_path) == f"arty --project '{elsewhere}' --resume 20261113-1"
 
 
 @pytest.mark.parametrize("folder, shown", [("Projects/demo", "~{sep}Projects{sep}demo"), ("", "~")])

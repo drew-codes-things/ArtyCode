@@ -6,6 +6,7 @@ import importlib
 import io
 import json
 import os
+import shlex
 import socket
 import sys
 import time
@@ -135,6 +136,8 @@ ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
 WORDMARK = "◆ ArtyCode"
 PRODUCT_NAME = "ArtyCode"
+COMMAND_NAME = "arty"
+RESUME_LINE = "Resume this chat: {}"
 STEP_MARK = "●"
 THOUGHT_MARK = "✻"
 ANSWER_ARROW = "→"
@@ -1575,6 +1578,23 @@ def welcome_header(session: Session, theme: look.Theme, show_block) -> None:
         terminal.note(f"  {NO_NOTES_TIP}")
 
 
+def resume_command(session_id: str, project: Path, here: Path) -> str:
+    words = [COMMAND_NAME]
+    if Path(project).resolve() != Path(here).resolve():
+        words += ["--project", str(project)]
+    return shlex.join(words + ["--resume", session_id])
+
+
+def say_how_to_resume(session: Session) -> None:
+    if not session.saved.path.is_file():
+        return
+    command = resume_command(session.saved.id, session.workspace.root, Path.cwd())
+    terminal = session.terminal
+    terminal.end_line()
+    terminal.err.write(RESUME_LINE.format(command) + "\n")
+    terminal.err.flush()
+
+
 def nothing_written(_text: str) -> None:
     return None
 
@@ -1842,7 +1862,10 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
             return answered_as_stream(session, once)
         if once:
             return 0 if handle(session, once) is not False and session.messages[-1]["role"] == "assistant" else FAILED
-        chat(session, share=arguments.remote, plain=arguments.plain)
+        try:
+            chat(session, share=arguments.remote, plain=arguments.plain)
+        finally:
+            say_how_to_resume(session)
         return 0
     finally:
         for problem in loaded.close():
