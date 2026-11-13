@@ -49,7 +49,8 @@ fsmonitor, an external diff, a textconv or filter driver, a gpg program).
 On Windows, PowerShell also reads the curly quotes (U+2018 to U+201E) as quote marks, the en dash, em dash and
 horizontal bar as a parameter's dash, and the non-breaking space and other Unicode spaces as spaces. A command with one
 of these outside quotes, or with a curly quote that would end the quoted text it sits in, can't be read: it asks (in
-allow-all too) and is only ever remembered exactly.
+allow-all too) and is only ever remembered exactly. A backslash is not an escape there either: `ca\t` or `.\cat` names a
+program file in a folder (which auto-edit could have written), not `cat`, so it is never look-only.
 
 The GitHub CLI's look-only commands run without a question too: `gh pr view`, `gh pr list`, `gh pr diff`,
 `gh pr checks`, `gh pr status`, `gh issue view`, `gh issue list`, `gh issue status`, `gh run view` (with `--log` or

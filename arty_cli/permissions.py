@@ -350,6 +350,8 @@ def has_flag_letters(arguments: list[str], letters: set[str]) -> bool:
 
 
 def words_of(command: str) -> list[str]:
+    if not backslash_escapes():
+        return literal_words_of(command)
     try:
         return shlex.split(command)
     except ValueError:

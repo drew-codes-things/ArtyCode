@@ -1738,3 +1738,39 @@ def test_on_windows_a_commit_message_with_a_curly_apostrophe_is_still_offered_it
 def test_off_windows_lookalike_quotes_dashes_and_spaces_are_ordinary_letters(monkeypatch, command):
     monkeypatch.setattr(sys, "platform", "linux")
     assert permissions.command_pieces(command) == [("", command)]
+
+
+BACKSLASHED_PROGRAM_NAMES = ["ca\\t a.py", "gi\\t status", "l\\s", "Get-Conten\\t a.py", ".\\cat a.py",
+                             "bin\\grep -n x a.py", "bin/cat a.py", "C:\\tools\\cat.exe a.py", "g\\h pr view 1"]
+
+
+@pytest.mark.parametrize("command", BACKSLASHED_PROGRAM_NAMES)
+def test_on_windows_a_backslash_in_the_program_name_names_a_file_so_it_is_not_look_only(workspace, monkeypatch,
+                                                                                         command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@pytest.mark.parametrize("command", ["npm test | gre\\p x", "npm test | .\\tail -5"])
+def test_on_windows_a_backslashed_filter_after_a_pipe_is_not_a_quiet_filter(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "npm test")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+
+
+def test_on_windows_words_keep_their_backslashes(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.words_of(r'ca\t "src\app.py" "a\"') == ["ca\\t", "src\\app.py", "a\\"]
+
+
+def test_off_windows_a_backslash_still_escapes_the_next_letter(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert permissions.words_of(r"ca\t a\ b") == ["cat", "a b"]
