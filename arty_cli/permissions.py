@@ -141,6 +141,10 @@ def discards_output(command: str, index: int) -> int:
     return found.end()
 
 
+def backslash_escapes() -> bool:
+    return sys.platform != "win32"
+
+
 def starts_a_word(text: str) -> bool:
     return not text or text[-1].isspace()
 
@@ -157,7 +161,7 @@ def command_pieces(command: str) -> list[tuple[str, str]]:
             quote = "" if character == "'" else quote
             text, index = text + character, index + 1
             continue
-        if character == "\\":
+        if character == "\\" and backslash_escapes():
             text, index = text + command[index:index + 2], index + 2
             continue
         if character in EXPANSIONS:

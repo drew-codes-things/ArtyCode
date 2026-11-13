@@ -905,3 +905,39 @@ def test_a_deny_prefix_rule_for_a_launcher_still_forbids_it(workspace):
     gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
     gate.rules = rules(deny=["run_command(sudo:*)"])
     assert gate.check("run_command", {"command": "sudo make install"}) == permissions.RULE_DENIED
+
+
+POWERSHELL_HIDDEN = [r"ls .\; rm -r src", 'dir "a\\" ; Remove-Item -Recurse src ; echo "', "dir a\\\nrm a.py",
+                     "Get-Content a.py\\| Remove-Item a.py"]
+
+
+@pytest.mark.parametrize("command", POWERSHELL_HIDDEN)
+def test_on_windows_a_backslash_is_not_an_escape_so_a_separator_after_it_still_splits(workspace, monkeypatch,
+                                                                                    command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+def test_on_windows_a_prefix_never_covers_a_command_hidden_behind_a_backslash(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "python3 -m pytest")
+    assert not gate.allows("run_command", {"command": r"python3 -m pytest .\; Remove-Item -Recurse src"})
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("command", ["Get-Content src\\app.py", "dir .\\src", "type a.py"])
+def test_on_windows_ordinary_backslash_paths_are_still_look_only(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.is_read_only_command(command)
+
+
+def test_off_windows_an_escaped_separator_is_still_one_harmless_argument(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert permissions.command_pieces(r"ls .\; rm -r src") == [("", r"ls .\; rm -r src")]
