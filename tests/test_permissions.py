@@ -1,11 +1,12 @@
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
-from arty_cli import finish, permissions, tools
+from arty_cli import eyes, finish, permissions, tools
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git isn't installed")
 LOOK_ONLY_COMMANDS = [pytest.param("git status", marks=needs_git), "ls -la"]
@@ -216,6 +217,56 @@ def test_looking_outside_with_a_command_asks_even_in_plan_mode(workspace):
     gate = permissions.Gate(workspace, ask, mode=permissions.PLAN)
     assert gate.allows("run_command", {"command": "cat /etc/hostname"})
     assert len(ask.questions) == 1
+
+
+@pytest.fixture
+def hard_linked(workspace, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("elsewhere") / "secret.conf"
+    outside.write_text("not a real secret\n")
+    outside.with_name("page.html").write_text("<p>not a real secret</p>\n")
+    try:
+        os.link(outside, workspace.root / "shared.conf")
+        os.link(outside.with_name("page.html"), workspace.root / "page.html")
+    except OSError as error:
+        pytest.skip(f"hard links aren't possible here: {error}")
+    return workspace.root / "shared.conf"
+
+
+def test_a_hard_linked_file_asks_before_it_is_read(workspace, hard_linked):
+    ask = Asker("n", "n", "n")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.check("read_file", {"path": "shared.conf"}) == permissions.REFUSED
+    assert gate.check("run_command", {"command": "cat shared.conf"}) == permissions.REFUSED
+    assert gate.check("search", {"pattern": "secret", "path": "shared.conf"}) == permissions.REFUSED
+    assert [question for question, _preview in ask.questions] == [
+        "Read outside the project: shared.conf?", "Look outside the project: cat shared.conf?",
+        "Read outside the project: shared.conf?"]
+    assert not gate.shows_quietly("shared.conf")
+
+
+def test_a_hard_linked_page_asks_before_it_is_opened(workspace, hard_linked):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.check(eyes.SCREENSHOT, {"url": "page.html"}) == permissions.REFUSED
+    assert ask.questions[0][0].startswith("Open a file outside the project")
+
+
+def test_a_hard_linked_file_still_reads_quietly_in_allow_all_and_writes_like_any_project_file(workspace,
+                                                                                            hard_linked):
+    ask = Asker()
+    allow_all = permissions.Gate(workspace, ask, mode=permissions.ALLOW_ALL)
+    assert allow_all.check("read_file", {"path": "shared.conf"}) is None
+    auto = permissions.Gate(workspace, ask, mode=permissions.AUTO_EDIT)
+    assert auto.check("write_file", {"path": "shared.conf", "content": "x\n", "overwrite": True}) is None
+    assert ask.questions == []
+
+
+def test_a_file_with_one_name_inside_still_reads_quietly(workspace, hard_linked):
+    ask = Asker()
+    gate = permissions.Gate(workspace, ask)
+    assert gate.check("read_file", {"path": "a.py"}) is None
+    assert gate.check("run_command", {"command": "cat a.py"}) is None
+    assert ask.questions == []
 
 
 def test_a_symlink_out_of_the_project_counts_as_outside(workspace, tmp_path_factory):

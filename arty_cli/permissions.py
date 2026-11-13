@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -163,6 +164,14 @@ def program_name(word: str) -> str:
 def looked_up_name(word: str) -> str:
     lowered = word.lower()
     return lowered if sys.platform == "win32" or lowered in POWERSHELL_READ_ONLY else word
+
+
+def has_other_names(path: Path) -> bool:
+    try:
+        details = path.stat()
+    except OSError:
+        return False
+    return stat.S_ISREG(details.st_mode) and details.st_nlink > 1
 
 
 def discards_output(command: str, index: int) -> int:
@@ -773,6 +782,19 @@ class Gate:
         except tools.ToolError:
             return False
 
+    def holds_only_here(self, path: str) -> bool:
+        place = self.workspace.resolve(path)
+        return place.is_relative_to(self.workspace.root) and not has_other_names(place)
+
+    def reads_outside(self, arguments: dict) -> bool:
+        path = arguments.get("path")
+        if not path:
+            return False
+        try:
+            return not self.holds_only_here(str(path))
+        except tools.ToolError:
+            return False
+
     def has_read(self, path: str) -> bool:
         try:
             return self.workspace.resolve(path) in self.workspace.seen
@@ -783,7 +805,7 @@ class Gate:
         arguments = {"path": path}
         if self.rule_refusal("read_file", arguments):
             return False
-        if self.mode == ALLOW_ALL or not self.outside(arguments) or self.rule_allows("read_file", arguments):
+        if self.mode == ALLOW_ALL or not self.reads_outside(arguments) or self.rule_allows("read_file", arguments):
             return True
         return self.has_read(path)
 
@@ -805,7 +827,7 @@ class Gate:
             return True
         expanded = with_tilde_expanded(path, folder)
         try:
-            return not all(self.workspace.contains(found) for found in shell_matches(expanded, folder))
+            return not all(self.holds_only_here(found) for found in shell_matches(expanded, folder))
         except (tools.ToolError, OSError, ValueError):
             return True
 
@@ -931,7 +953,7 @@ class Gate:
         if name in READING_TOOLS:
             if name == "list_files" and self.lists_outside(arguments):
                 return self.confirm(f"List files outside the project: {arguments.get('pattern')}?")
-            if not self.outside(arguments):
+            if not self.reads_outside(arguments):
                 return None
             return self.confirm(f"Read outside the project: {arguments.get('path')}?")
         if name == "web_fetch":
@@ -1000,7 +1022,7 @@ class Gate:
         parts = urlparse(address)
         if parts.scheme == eyes.FILE_SCHEME:
             place = eyes.file_of(address)
-            inside = self.workspace.contains(str(place))
+            inside = self.holds_only_here(str(place))
             return None if inside else self.confirm(OUTSIDE_PAGE_QUESTION.format(path=place))
         if eyes.is_this_computer(parts.hostname or ""):
             return None
