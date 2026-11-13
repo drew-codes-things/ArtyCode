@@ -239,3 +239,37 @@ def test_a_once_request_is_not_held_up_when_nothing_changed(ready, monkeypatch, 
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert cli.main(["-p", "what does this do?"]) == 0
     assert len(FakeBrain.made[0].calls) == 1
+
+
+OUTSIDE_TEXT = "[account]\nuser = demo\ntoken = FAKE-TOKEN-NOT-REAL\n"
+RECORD = rules.Record("fix it", ["app.py"], ["run_command pytest"], True, "Outcome: DONE", "")
+
+
+def outside_file(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside" / "secret.conf"
+    outside.parent.mkdir()
+    outside.write_text(OUTSIDE_TEXT)
+    return outside
+
+
+def test_a_history_file_that_links_outside_the_project_is_refused_and_both_files_are_left_alone(workspace, tmp_path):
+    outside = outside_file(tmp_path)
+    (tmp_path / ".arty").mkdir()
+    (tmp_path / ".arty" / "history.md").symlink_to(outside)
+    with pytest.raises(tools.ToolError, match="link"):
+        rules.append_history(workspace, RECORD)
+    assert (tmp_path / ".arty" / "history.md").is_symlink() and outside.read_text() == OUTSIDE_TEXT
+
+
+def test_an_arty_folder_that_links_outside_the_project_gets_no_history(workspace, tmp_path):
+    outside = outside_file(tmp_path)
+    (tmp_path / ".arty").symlink_to(outside.parent, target_is_directory=True)
+    with pytest.raises(tools.ToolError, match="link"):
+        rules.append_history(workspace, RECORD)
+    assert sorted(path.name for path in outside.parent.iterdir()) == ["secret.conf"]
+
+
+def test_a_plain_history_file_still_grows(workspace, tmp_path):
+    rules.append_history(workspace, RECORD, "2026-11-13")
+    rules.append_history(workspace, RECORD, "2026-11-14")
+    assert (tmp_path / ".arty" / "history.md").read_text().count("## 2026-11-1") == 2

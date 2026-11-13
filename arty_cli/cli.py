@@ -1931,7 +1931,7 @@ class TrustKeepingRuleFile:
     def __init__(self, workspace, terminal: Terminal):
         self.workspace = workspace
         self.tell = terminal.note
-        self.rules = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, terminal.note)
+        self.rules = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, terminal.note, workspace.root)
 
     def setup_still_trusted(self) -> bool:
         state = memory.trust_state(settings.config_dir(), self.workspace.root, setup_fingerprint(self.workspace))

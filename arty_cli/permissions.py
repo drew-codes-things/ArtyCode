@@ -530,9 +530,12 @@ def saved_settings(path: Path) -> dict:
 class RuleFile:
     path: Path
     tell: Callable[[str], None]
+    root: Path | None = None
 
     def add_allow(self, rule: str) -> bool:
         try:
+            if self.root is not None:
+                tools.refuse_linked_place(self.root, self.path)
             table = saved_settings(self.path)
             rules = table.setdefault("permissions", {})
             allowed = rules.setdefault("allow", [])
@@ -542,7 +545,7 @@ class RuleFile:
                 allowed.append(rule)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(table, indent=2) + "\n", encoding="utf-8")
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, tools.ToolError) as error:
             self.tell(f"Couldn't save the rule {rule} to {self.path} ({error}); allowed for this session only.")
             return False
         self.tell(f"Saved the rule {rule} to {self.path}.")

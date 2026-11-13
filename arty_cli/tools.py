@@ -69,6 +69,7 @@ ECHO_CONTEXT_LINES = 3
 MAX_ECHO_LINES = 30
 NOT_FOUND = "old_text was not found"
 BARE_MISS = f"{NOT_FOUND}; read the file again and copy the text exactly"
+LINKED_PLACE = "{place} is a link (to {target}), so ArtyCode doesn't write through it"
 ALREADY_MADE_LEAD = "new_text is already in the file"
 ALREADY_MADE = (f"{NOT_FOUND}, but {ALREADY_MADE_LEAD} at lines {{first}}-{{last}}, so this change is already made. "
                 "Don't send it again: run the tests or make the next change. Those lines now:\n{numbered}\n")
@@ -236,6 +237,17 @@ def created_beside(path: Path) -> Path:
     temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.arty-tmp"
     os.close(os.open(temporary, TEMPORARY_FILE_FLAGS, NEW_FILE_MODE))
     return temporary
+
+
+def is_unlinked_place(root: Path, place: Path) -> bool:
+    root = Path(root)
+    return Path(place).resolve() == root.resolve() / Path(place).relative_to(root)
+
+
+def refuse_linked_place(root: Path, place: Path) -> None:
+    if not is_unlinked_place(root, place):
+        raise ToolError(LINKED_PLACE.format(place=Path(place).relative_to(root).as_posix(),
+                                            target=Path(place).resolve()))
 
 
 def write_text(path: Path, text: str) -> None:

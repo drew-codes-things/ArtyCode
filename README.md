@@ -543,6 +543,8 @@ that changed files gets an entry at the end of `.arty/history.md`, written by Ar
 date and the request, Status (the report's Outcome; otherwise DONE if a command ran after the last change and
 UNVERIFIED if not; PARTIAL for a request stopped part way), the files changed, What (the report's Changed), Why (its
 Assumptions), Verified by (each command run, with what it showed), Not verified and Left open (its Open items).
+When `.arty/history.md` or the `.arty` folder is a link (a project could ship one pointing at a file of yours),
+ArtyCode says so and writes nothing; the same goes for saving a rule to `.arty/settings.json` and for screenshots.
 
 They are also checked, not only told:
 

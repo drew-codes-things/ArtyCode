@@ -963,3 +963,14 @@ def test_a_prefix_never_covers_output_written_to_a_file_through_a_descriptor_for
 @pytest.mark.parametrize("command", ["ls 2>&1", "ls >&2", "ls 2>&-", "ls 2>&1 | wc -l", "ls 2>&1;pwd", "ls >&2 && pwd"])
 def test_descriptor_redirections_that_end_the_word_are_still_look_only(command):
     assert permissions.is_read_only_command(command)
+
+
+def test_a_project_settings_file_that_links_outside_the_project_is_not_written_through(workspace, tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.json"
+    outside.write_text('{"permissions": {"allow": []}, "kept": true}\n')
+    (workspace.root / ".arty").mkdir()
+    (workspace.root / permissions.PROJECT_SETTINGS).symlink_to(outside)
+    told = []
+    rule_file = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, told.append, workspace.root)
+    assert not rule_file.add_allow("run_command(pytest:*)")
+    assert outside.read_text() == '{"permissions": {"allow": []}, "kept": true}\n' and "link" in told[0]

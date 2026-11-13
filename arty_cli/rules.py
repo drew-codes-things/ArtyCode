@@ -185,6 +185,7 @@ def history_entry(record: Record, today: str) -> str:
 
 def append_history(workspace, record: Record, today: str = "") -> Path:
     path = workspace.root / HISTORY
+    tools.refuse_linked_place(workspace.root, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     earlier = tools.read_text(path) if path.is_file() else ""
     entry = history_entry(record, today or today_text())
