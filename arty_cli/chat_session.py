@@ -1,7 +1,7 @@
 import socket
 
-from arty_cli import (commands, context, helpers, hooks, mcp, memory, models, permissions, providers, remote, rules,
-                      screen, sessions, settings, skills, suggest, tools)
+from arty_cli import (commands, context, helpers, hooks, mcp, mcp_sign_in, memory, models, permissions, providers,
+                      remote, rules, screen, sessions, settings, sign_ins, skills, suggest, tools)
 from arty_cli.conversation import NOTE_ACK, RESUME, SUMMARY_ACK, SUMMARY_LEADS, TODO_MARKS, Conversation
 
 SESSIONS_FOLDER = "sessions"
@@ -39,6 +39,8 @@ HELP_GROUPS = (
         "/last": "everything the last step gave back (only a few lines are shown)",
         "/memory": "which ARTY.md notes are loaded",
         "/mcp, /skills": "MCP servers and skills",
+        "/mcp add [service]": "pick an online service and sign in to it in the browser",
+        "/mcp login|remove <name>": "sign in to a service again, or remove it",
         "/helpers, /hooks": "your own helpers and hooks",
     }),
     ("Keys", {
@@ -66,6 +68,8 @@ REMOTE_USAGE = "Use /remote to share this session, /remote name <new name> to re
 REMOTE_NAME_USAGE = "Give the new name: /remote name <new name>."
 REMOTE_NAME_NEEDS_SHARING = "Turn remote control on with /remote first, then rename it."
 REMOTE_NAME = "name"
+MCP_USAGE = "Use /mcp, /mcp add [service or https address] [name], /mcp login <name> or /mcp remove <name>."
+SIGN_IN_AGAIN_CHOICES = (("y", "Yes, open the sign-in page"), ("n", "Not now"))
 
 
 class Session(Conversation):
@@ -156,15 +160,101 @@ class Session(Conversation):
 
     def show_mcp(self) -> None:
         hub = self.extras.hub
-        if hub is None or not hub.servers:
-            self.terminal.note(f"No MCP servers. Add them under \"mcpServers\" in {self.personal / mcp.SETTINGS_FILE} "
-                               f"or {mcp.PROJECT_FILE} in a trusted project.")
+        states = hub.states() if hub is not None else []
+        if not states:
+            self.terminal.note(f"No MCP servers. /mcp add signs in to an online one; or add them under "
+                               f"\"mcpServers\" in {self.personal / mcp.SETTINGS_FILE} or {mcp.PROJECT_FILE} in a "
+                               "trusted project.")
             return
-        for name, server in hub.servers.items():
-            listed = [tool.exposed for tool in hub.tools.values() if tool.server == name]
-            self.terminal.note(f"{name} ({server.config.source}): {len(listed)} tools")
-            for exposed in listed:
+        for state in states:
+            self.show_mcp_state(state)
+        self.offer_sign_in_again([state.name for state in states if state.status == mcp.NEEDS_SIGN_IN])
+
+    def show_mcp_state(self, state: mcp.State) -> None:
+        if state.status == mcp.CONNECTED:
+            count = len(state.tools)
+            self.terminal.note(f"{state.name} ({state.source}): connected with {count} tool{'' if count == 1 else 's'}")
+            for exposed in state.tools:
                 self.terminal.note(f"  {exposed}")
+            return
+        hint = f" (/mcp login {state.name})" if state.status == mcp.NEEDS_SIGN_IN else ""
+        self.terminal.note(f"{state.name} ({state.source}): {state.status}{hint}", "error")
+        if state.problem and state.status != mcp.NEEDS_SIGN_IN:
+            self.terminal.note(f"  {state.problem}")
+
+    def offer_sign_in_again(self, names: list[str]) -> None:
+        if not names or self.remote or not screen.is_interactive():
+            return
+        prompt = self.terminal.show_choices(f"Sign in to {names[0]} again now?", SIGN_IN_AGAIN_CHOICES)
+        answers = {"y": permissions.YES, "yes": permissions.YES, "n": permissions.NO, "no": permissions.NO}
+        choice = self.terminal.answer(prompt, answers, f"Sign in to {names[0]} again now?")[0]
+        if choice == permissions.YES:
+            self.sign_in_again(names[0])
+
+    def mcp_command(self, rest: str) -> None:
+        action, _, wanted = rest.partition(" ")
+        wanted = wanted.strip()
+        if not action:
+            self.show_mcp()
+        elif action == mcp_sign_in.ADD:
+            self.add_mcp_service(wanted)
+        elif action == mcp_sign_in.LOGIN and wanted:
+            self.sign_in_again(wanted)
+        elif action == mcp_sign_in.REMOVE and wanted:
+            self.remove_mcp_service(wanted)
+        else:
+            self.terminal.note(MCP_USAGE, "error")
+
+    def sign_in_world(self) -> mcp_sign_in.World:
+        return mcp_sign_in.World()
+
+    def add_mcp_service(self, wanted: str) -> None:
+        asked, _, name = wanted.partition(" ")
+        service = mcp_sign_in.wanted_service(asked) if asked else mcp_sign_in.picked_service(self.terminal)
+        if service is None:
+            if asked:
+                self.terminal.note(f"No service called {asked}. Pick one with /mcp add, or give an https address.",
+                                   "error")
+            return
+        name = name.strip() or service.key
+        if not mcp_sign_in.is_good_name(name):
+            self.terminal.note(MCP_USAGE, "error")
+            return
+        self.connect_signed_in(lambda store: mcp_sign_in.added(self.terminal, self.personal, service, name, store,
+                                                               self.sign_in_world()))
+
+    def sign_in_again(self, name: str) -> None:
+        self.connect_signed_in(lambda store: mcp_sign_in.signed_in_again(self.terminal, self.personal, name, store,
+                                                                         self.sign_in_world()))
+
+    def connect_signed_in(self, sign_in) -> None:
+        store = sign_ins.Store(self.personal)
+        try:
+            config = sign_in(store)
+        except (mcp_sign_in.SignInStopped, sign_ins.SignInError) as error:
+            self.terminal.note(f"{error} Nothing was saved.", "error")
+            return
+        hub = self.extras.hub
+        if hub is None:
+            self.terminal.note("Start a new session to use it.")
+            return
+        hub.sign_ins = hub.sign_ins or store
+        for problem in hub.restart(config):
+            self.terminal.note(problem, "error")
+        for state in hub.states():
+            if state.name == config.name:
+                self.show_mcp_state(state)
+
+    def remove_mcp_service(self, name: str) -> None:
+        try:
+            gone = mcp_sign_in.removed(self.terminal, self.personal, name, sign_ins.Store(self.personal))
+        except (mcp_sign_in.SignInStopped, sign_ins.SignInError) as error:
+            self.terminal.note(str(error), "error")
+            return
+        hub = self.extras.hub
+        config = hub.config_of(name) if hub is not None and gone else None
+        if config is not None and config.source == "yours":
+            hub.drop(name)
 
     def show_skills(self) -> None:
         if not self.extras.skills:
@@ -311,7 +401,7 @@ class Session(Conversation):
             "/resume": lambda: self.resume(rest.strip()),
             "/remote": lambda: self.switch_remote(rest.strip()),
             "/rules": lambda: self.set_rules(rest.strip()),
-            "/mcp": self.show_mcp,
+            "/mcp": lambda: self.mcp_command(rest.strip()),
             "/skills": self.show_skills,
             "/helpers": self.show_helpers,
             "/hooks": self.show_hooks,

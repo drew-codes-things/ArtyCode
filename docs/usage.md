@@ -49,7 +49,8 @@ Notes and questions still go to standard error, so standard output is only the J
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |
 | `/review` | Review the uncommitted changes |
 | `/compact` | Swap the conversation for a summary (also done automatically when it gets long) |
-| `/mcp`, `/skills`, `/helpers`, `/hooks` | What's set up of each ([MCP servers](mcp-servers.md), [skills](skills.md), [helpers](helpers.md), [hooks](hooks.md)) |
+| `/mcp`, `/skills`, `/helpers`, `/hooks` | What's set up of each ([MCP servers](mcp-servers.md), [skills](skills.md), [helpers](helpers.md), [hooks](hooks.md)); `/mcp` also shows whether each server is connected and how many tools it has, or needs you to sign in again |
+| `/mcp add [service]`, `/mcp login <name>`, `/mcp remove <name>` | Pick an online service from a lettered list and sign in to it in the browser; sign in again; or remove it ([MCP servers](mcp-servers.md#online-services-you-sign-in-to)) |
 | `/remote`, `/remote name <new name>`, `/remote off` | Share this chat with the Arty apps and starfire.ai, rename it there, or stop sharing ([Remote control](remote.md)) |
 | `/rules`, `/rules on`, `/rules tell-only`, `/rules off` | Show or change the built-in working rules for this session ([Built-in working rules](working-rules.md)) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |

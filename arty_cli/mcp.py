@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from arty_cli import __version__
+from arty_cli import __version__, sign_ins
 
 PROTOCOL_VERSION = "2025-06-18"
 SETTINGS_FILE = "settings.json"
@@ -34,10 +34,26 @@ SESSION_HEADER = "Mcp-Session-Id"
 VERSION_HEADER = "Mcp-Protocol-Version"
 DATA_PREFIX = "data:"
 EVENT_STREAM = "text/event-stream"
+SIGN_IN_KEY = "signIn"
+SIGN_IN_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+UNAUTHORISED = 401
+CONNECTED, NEEDS_SIGN_IN, NOT_STARTED = "connected", "needs sign-in again", "didn't start"
 
 
 class McpError(Exception):
     pass
+
+
+class SignInNeeded(McpError):
+    pass
+
+
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+SIGNED_IN_OPENER = urllib.request.build_opener(NoRedirects)
 
 
 @dataclass(frozen=True)
@@ -49,6 +65,7 @@ class ServerConfig:
     source: str
     url: str = ""
     headers: dict = field(default_factory=dict)
+    sign_in: str = ""
 
 
 @dataclass(frozen=True)
@@ -88,18 +105,20 @@ def with_environment(text: str) -> tuple[str, list[str]]:
 
 
 def web_config_from(name: str, entry: dict, source: str, path: Path) -> tuple[ServerConfig | None, str]:
-    url, headers = entry.get("url"), entry.get("headers") or {}
+    url, headers, sign_in = entry.get("url"), entry.get("headers") or {}, entry.get(SIGN_IN_KEY, "")
     if not isinstance(url, str) or urlparse(url).scheme not in WEB_SCHEMES or not urlparse(url).netloc:
         return None, f"MCP server {name} in {path}: url should be an http:// or https:// address"
     if not isinstance(headers, dict):
         return None, f"MCP server {name} in {path}: headers should be an object"
+    if sign_in and (not isinstance(sign_in, str) or not SIGN_IN_NAME.match(sign_in)):
+        return None, f"MCP server {name} in {path}: {SIGN_IN_KEY} should be the name of a saved sign-in"
     filled = {}
     for header, value in headers.items():
         filled[str(header)], missing = with_environment(str(value))
         if missing:
             return None, (f"MCP server {name} in {path}: the header {header} uses "
                           f"{', '.join('${' + variable + '}' for variable in missing)}, which isn't set")
-    return ServerConfig(name, "", [], {}, source, url=url, headers=filled), ""
+    return ServerConfig(name, "", [], {}, source, url=url, headers=filled, sign_in=sign_in), ""
 
 
 def config_from(name: str, entry, source: str, path: Path) -> tuple[ServerConfig | None, str]:
@@ -222,13 +241,16 @@ def streamed_messages(response):
 
 
 class WebServer:
-    def __init__(self, config: ServerConfig, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS):
+    def __init__(self, config: ServerConfig, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS,
+                 credentials=None):
         self.config = config
         self.start_seconds = start_seconds
         self.call_seconds = call_seconds
+        self.credentials = credentials
         self.lock = threading.Lock()
         self.session = ""
         self.next_id = 0
+        self.needs_sign_in = False
 
     def start(self) -> list[Tool]:
         self.request("initialize", initialize_params(), self.start_seconds)
@@ -238,19 +260,47 @@ class WebServer:
     def headers(self) -> dict:
         found = {"Content-Type": "application/json", "Accept": f"application/json, {EVENT_STREAM}",
                  "User-Agent": f"arty-cli/{__version__}", **self.config.headers}
+        if self.credentials is not None:
+            found["Authorization"] = f"Bearer {self.bearer()}"
         if self.session:
             found.update({SESSION_HEADER: self.session, VERSION_HEADER: PROTOCOL_VERSION})
         return found
 
-    def post(self, message: dict, seconds: float):
-        request = urllib.request.Request(self.config.url, data=json.dumps(message).encode(), headers=self.headers(),
+    def bearer(self) -> str:
+        try:
+            return self.credentials.bearer()
+        except sign_ins.SignInError as error:
+            raise self.sign_in_needed(error) from None
+
+    def sign_in_needed(self, error: sign_ins.SignInError) -> SignInNeeded:
+        self.needs_sign_in = True
+        return SignInNeeded(f"{error}. Sign in again with /mcp login {self.config.name} "
+                            f"(or arty mcp login {self.config.name})")
+
+    def opened(self, request, seconds: float):
+        if self.credentials is None:
+            return urllib.request.urlopen(request, timeout=seconds)
+        return SIGNED_IN_OPENER.open(request, timeout=seconds)
+
+    def post(self, message: dict, seconds: float, renewed: bool = False):
+        headers = self.headers()
+        request = urllib.request.Request(self.config.url, data=json.dumps(message).encode(), headers=headers,
                                          method="POST")
         try:
-            return urllib.request.urlopen(request, timeout=seconds)
+            return self.opened(request, seconds)
         except urllib.error.HTTPError as error:
+            if error.code == UNAUTHORISED and self.credentials is not None and not renewed:
+                self.renew(headers["Authorization"].removeprefix("Bearer "))
+                return self.post(message, seconds, renewed=True)
             raise McpError(f"the MCP server {self.config.name} answered {error.code} {error.reason}") from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
             raise McpError(f"couldn't reach the MCP server {self.config.name} at {self.config.url}: {error}") from None
+
+    def renew(self, rejected: str) -> None:
+        try:
+            self.credentials.renew(rejected)
+        except sign_ins.SignInError as error:
+            raise self.sign_in_needed(error) from None
 
     def request(self, method: str, params: dict, seconds: float) -> dict:
         with self.lock:
@@ -290,11 +340,12 @@ class WebServer:
     def close(self) -> str:
         if not self.session:
             return ""
-        request = urllib.request.Request(self.config.url, headers=self.headers(), method="DELETE")
-        self.session = ""
         try:
-            urllib.request.urlopen(request, timeout=CLOSE_SECONDS).close()
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            request = urllib.request.Request(self.config.url, headers=self.headers(), method="DELETE")
+            self.session = ""
+            self.opened(request, CLOSE_SECONDS).close()
+        except (McpError, urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            self.session = ""
             return f"Couldn't end the session with the MCP server {self.config.name}: {error}"
         return ""
 
@@ -400,24 +451,58 @@ class Server:
         return ""
 
 
+@dataclass(frozen=True)
+class Trouble:
+    config: ServerConfig
+    problem: str
+    needs_sign_in: bool
+
+
+@dataclass(frozen=True)
+class State:
+    name: str
+    source: str
+    status: str
+    tools: list
+    problem: str = ""
+
+
 class Hub:
-    def __init__(self, workspace, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS):
+    def __init__(self, workspace, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS, sign_ins_store=None):
         self.workspace = workspace
         self.start_seconds = start_seconds
         self.call_seconds = call_seconds
+        self.sign_ins = sign_ins_store
         self.servers = {}
         self.tools = {}
+        self.trouble = {}
+
+    def made(self, config: ServerConfig):
+        if not config.url:
+            return Server(config, self.workspace, self.start_seconds, self.call_seconds)
+        if not config.sign_in:
+            return WebServer(config, self.start_seconds, self.call_seconds)
+        if self.sign_ins is None:
+            raise sign_ins.SignInError(f"there is no saved sign-in called {config.sign_in}")
+        credentials = self.sign_ins.credentials(config.sign_in, config.url)
+        return WebServer(config, self.start_seconds, self.call_seconds, credentials)
 
     def start(self, wanted: list[ServerConfig]) -> list[str]:
         problems = []
         for config in wanted:
-            server = (WebServer(config, self.start_seconds, self.call_seconds) if config.url
-                      else Server(config, self.workspace, self.start_seconds, self.call_seconds))
+            self.trouble.pop(config.name, None)
+            try:
+                server = self.made(config)
+            except sign_ins.SignInError as error:
+                problems.append(self.troubled(config, f"MCP server {config.name} wasn't started: {error}",
+                                              error.needs_sign_in))
+                continue
             try:
                 listed = server.start()
             except (McpError, OSError) as error:
                 server.close()
-                problems.append(f"MCP server {config.name} didn't start: {error}")
+                problems.append(self.troubled(config, f"MCP server {config.name} didn't start: {error}",
+                                              isinstance(error, SignInNeeded)))
                 continue
             self.servers[config.name] = server
             for tool in listed:
@@ -426,6 +511,41 @@ class Hub:
                     continue
                 self.tools[tool.exposed] = tool
         return problems
+
+    def troubled(self, config: ServerConfig, problem: str, needs_sign_in: bool) -> str:
+        self.trouble[config.name] = Trouble(config, problem, needs_sign_in)
+        if needs_sign_in and f"/mcp login {config.name}" not in problem:
+            problem += f". Sign in again with /mcp login {config.name}"
+        return problem
+
+    def drop(self, name: str) -> list[str]:
+        server = self.servers.pop(name, None)
+        self.trouble.pop(name, None)
+        self.tools = {exposed: tool for exposed, tool in self.tools.items() if tool.server != name}
+        problem = server.close() if server is not None else ""
+        return [problem] if problem else []
+
+    def restart(self, config: ServerConfig) -> list[str]:
+        return self.drop(config.name) + self.start([config])
+
+    def states(self) -> list[State]:
+        found = []
+        for name, server in self.servers.items():
+            listed = [tool.exposed for tool in self.tools.values() if tool.server == name]
+            status = NEEDS_SIGN_IN if getattr(server, "needs_sign_in", False) else CONNECTED
+            found.append(State(name, server.config.source, status, listed))
+        for name, trouble in self.trouble.items():
+            if name not in self.servers:
+                found.append(State(name, trouble.config.source, NEEDS_SIGN_IN if trouble.needs_sign_in
+                                   else NOT_STARTED, [], trouble.problem))
+        return found
+
+    def config_of(self, name: str) -> ServerConfig | None:
+        server = self.servers.get(name)
+        if server is not None:
+            return server.config
+        trouble = self.trouble.get(name)
+        return trouble.config if trouble else None
 
     def definitions(self) -> list[dict]:
         return [{"type": "function", "function": {

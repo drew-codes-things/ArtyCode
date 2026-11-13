@@ -468,7 +468,7 @@ def test_mcp_servers_from_settings_are_started_offered_listed_and_stopped(ready,
     assert cli.main([]) == 0
     assert "mcp__fake__echo" in ToolSeeingBrain.offered[0]
     shown = capsys.readouterr().err
-    assert "fake (yours): 4 tools" in shown and "mcp__fake__echo" in shown
+    assert "fake (yours): connected with 4 tools" in shown and "mcp__fake__echo" in shown
     assert started[0].process.poll() is not None
 
 

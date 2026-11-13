@@ -15,9 +15,9 @@ from arty_cli import eyes
 from arty_cli import finish
 from arty_cli import rules
 
-from arty_cli import (__version__, brain, commands, context, helpers, hooks, lint, mcp, memory, permissions,
-                      prompt_line, providers, remote, repomap, sandbox, screen, sessions, settings, skills, tools,
-                      websearch, wrap)
+from arty_cli import (__version__, brain, commands, context, helpers, hooks, lint, mcp, mcp_sign_in, memory,
+                      permissions, prompt_line, providers, remote, repomap, sandbox, screen, sessions, settings,
+                      sign_ins, skills, tools, websearch, wrap)
 from arty_cli import upkeep
 from arty_cli import look, notify, view
 from arty_cli.chat_session import SESSIONS_FOLDER, Session
@@ -379,6 +379,8 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if upkeep.handles(argv):
         return upkeep.run(argv)
+    if mcp_sign_in.handles(argv):
+        return mcp_sign_in.run(argv)
     with signals_end_cleanly():
         return main_session(parse_arguments(argv))
 
@@ -555,7 +557,7 @@ def session_extras(workspace, trusted: bool, terminal: Terminal, search, looks=N
     problems += trouble
     found_helpers, trouble = helpers.find(personal, workspace, trusted)
     problems += trouble
-    hub = mcp.Hub(workspace)
+    hub = mcp.Hub(workspace, sign_ins_store=sign_ins.Store(personal))
     if wanted:
         terminal.note(f"Starting MCP servers: {', '.join(config.name for config in wanted)}")
         problems += hub.start(wanted)
