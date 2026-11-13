@@ -479,8 +479,10 @@ not for a request you stopped. Set `finish_check` to `off` in the config file (o
 turn it off.
 
 Test runs are also compared within a request. When files were changed since the best run of the same test command so
-far and the new run is worse (fewer tests pass, or as many pass and more fail, so a test file that no longer imports
-counts as worse), the run's result tells the model so plainly, with both counts and the tests that newly fail, and a dim
+far and the new run is worse (it fails where that run passed, by its exit code, so runners without counts such as
+`go test` are understood; or, both failing, tests no longer run at all, as when a test file stops importing, or fewer
+tests pass, or as many pass and more fail; a run that passes is never worse, so removing an obsolete test is fine),
+the run's result tells the model so plainly, with both counts and the tests that newly fail, and a dim
 `Tests check:` line shows it. From then on the model is also offered `undo_edits`, which puts the files back as they
 were at that better run using `/undo`'s snapshots; it asks you first in default mode, is refused in plan mode, and
 nothing is put back unless the model calls it.

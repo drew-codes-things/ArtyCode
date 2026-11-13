@@ -18,6 +18,7 @@ FOLLOW_UP = ("Before you finish: the last test run still fails ({summary}), from
              "clearly why, naming the tests that still fail.")
 SHOWN_NOTE = "Finish check: the last test run still fails ({summary}), so Arty was asked to keep going"
 PASSED_COUNT = re.compile(r"\b(\d+) passed\b", re.I)
+TESTS_RAN = re.compile(r"\b\d+ (?:passed|failed)\b|\bRan \d+ tests?\b|^--- (?:PASS|FAIL):|^ok\s", re.I | re.M)
 FAILED_NAMES = (re.compile(r"^(?:FAILED|ERROR) ([^\s(]\S*)"), re.compile(r"^(?:FAIL|ERROR): (\S+)"),
                 re.compile(r"^\s*[\u2715\u00d7] (.+?)(?: \(\d+ m?s\))?$"))
 MAX_NAMED_TESTS = 8
@@ -44,14 +45,15 @@ class TestRun:
     failures: int | None
     passed: int | None = None
     failed_names: tuple = ()
+    ran_tests: bool = False
 
     def counts(self) -> str:
         if self.failures is None and self.passed is None:
             return self.summary or f"exit code {self.exit_code}"
         return f"{self.failures or 0} failed, {self.passed or 0} passed"
 
-    def standing(self) -> tuple[int, int]:
-        return (self.passed if self.passed is not None else -1), -(self.failures or 0)
+    def standing(self) -> tuple[bool, bool, int, int]:
+        return not self.failed, self.ran_tests, (self.passed if self.passed is not None else -1), -(self.failures or 0)
 
 
 @dataclass(frozen=True)
@@ -123,7 +125,7 @@ def test_run_of(command: str, result: str) -> TestRun | None:
     if failed and not summary:
         summary = lines[-1].strip() if lines else f"exit code {exit_code}"
     return TestRun(command, exit_code, failed, summary, output_tail(lines), failures, passed_count(lines),
-                   failed_names(lines))
+                   failed_names(lines), bool(TESTS_RAN.search("\n".join(lines))))
 
 
 def has_fewer_failures(run: TestRun, before: int | None) -> bool:
@@ -156,7 +158,7 @@ class FinishCheck:
 
     def compared(self, run: TestRun, last_change: object) -> str:
         best = self.best.get(command_key(run.command))
-        if best is None or run.standing() >= best.run.standing():
+        if best is None or not run.failed or run.standing() >= best.run.standing():
             self.best[command_key(run.command)], self.went_worse_from = GoodRun(run, last_change), None
             return ""
         if last_change is best.last_change:

@@ -129,3 +129,30 @@ def test_each_test_command_is_compared_with_its_own_best_run():
     check.record("pytest test_other.py", PYTEST_PASSING, second)
     note = check.record("pytest", "=== 20 failed, 10 passed in 0.1s ===\n[exit code 1]", third)
     assert note.startswith(finish.WORSE_LEAD) and "13 failed, 17 passed" in note
+
+
+def test_a_passing_run_with_one_test_fewer_is_not_worse():
+    check = finish.FinishCheck()
+    assert check.record("pytest -q", "5 passed in 0.1s\n[exit code 0]", object()) == ""
+    assert check.record("pytest -q", "4 passed, 0 failed in 0.1s\n[exit code 0]", object()) == ""
+    assert check.undo_target() is None
+
+
+def test_tests_that_import_again_and_fail_are_better_than_a_collection_error():
+    check = finish.FinishCheck()
+    assert check.record("pytest -q", "ERROR tests/test_a.py\n1 error in 0.1s\n[exit code 2]", object()) == ""
+    assert check.record("pytest -q", "FAILED tests/test_a.py::test_x\n5 failed in 0.1s\n[exit code 1]",
+                        object()) == ""
+
+
+GO_PASSING = "ok  \texample/pkg\t0.01s\n[exit code 0]"
+GO_FAILING = "--- FAIL: TestAdd (0.00s)\nFAIL\texample/pkg\t0.01s\nFAIL\n[exit code 1]"
+
+
+def test_a_failing_run_after_a_passing_one_is_worse_even_without_counts():
+    check = finish.FinishCheck()
+    first = object()
+    assert check.record("go test ./...", GO_PASSING, first) == ""
+    note = check.record("go test ./...", GO_FAILING, object())
+    assert note.startswith(finish.WORSE_LEAD) and check.undo_target().last_change is first
+    assert "gave exit code 0" in note and "now it gives FAIL" in note
