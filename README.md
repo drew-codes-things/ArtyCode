@@ -13,7 +13,7 @@
 
 </div>
 
-![ArtyCode in its own terminal interface: the Arty logo and the session details at the top, a request, steps with their results, a numbered diff and a permission panel above the input box at the bottom](screenshot.png)
+![ArtyCode in its own terminal interface: the Arty logo and the session details at the top, a request, steps with their results, a numbered diff with the edit approved, a short summary, and the footer under the input box showing the model, tokens used against the summarising point and the context left](screenshot.png)
 
 ---
 
