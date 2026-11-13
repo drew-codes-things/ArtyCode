@@ -429,6 +429,13 @@ sent at most twice per request, the second time only if fewer tests fail than th
 not for a request you stopped. Set `finish_check` to `off` in the config file (or `ARTY_CLI_FINISH_CHECK=off`) to
 turn it off.
 
+Test runs are also compared within a request. When files were changed since the best run of the same test command so
+far and the new run is worse (fewer tests pass, or as many pass and more fail, so a test file that no longer imports
+counts as worse), the run's result tells the model so plainly, with both counts and the tests that newly fail, and a dim
+`Tests check:` line shows it. From then on the model is also offered `undo_edits`, which puts the files back as they
+were at that better run using `/undo`'s snapshots; it asks you first in default mode, is refused in plan mode, and
+nothing is put back unless the model calls it.
+
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
 long as the brain keeps the reply alive (Arty's brain sends a `: working` line every 15 seconds while a model loads or
 writes), so a long task that keeps sending that line is never cut off. If nothing at all arrives for 120 seconds,

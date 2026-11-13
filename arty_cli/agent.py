@@ -54,6 +54,10 @@ STUCK_FAILING_NOTE = ("You have made the same tool calls several times and they 
                       "Don't make that call again: do it another way (for an edit that keeps missing, replace the "
                       "whole function or rewrite the file), or say what is blocking you.")
 EDITING_TOOLS = ("edit_file", "multi_edit")
+UNDO_DEFINITION = tools.function(
+    finish.UNDO_TOOL,
+    "Put the files you changed back to how they were at the earlier test run that went better. Use it only after "
+    "ArtyCode tells you your edits made the tests worse.", {}, [])
 SMALL_FILE_LINES = 200
 REPEATED_MISS = ("\nThat is miss {count} on {path}. Stop copying small pieces from memory: copy old_text from the "
                  "lines below exactly, without the line numbers, and replace the whole function or block in one "
@@ -409,6 +413,10 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
         if extras.may_change_things(name):
             done.append(activity_line(name, arguments))
         return result
+    if name == finish.UNDO_TOOL:
+        result = finish.undo_edits(workspace)
+        done.append(f"{name}: {one_line(result)}")
+        return result
     recorded = name in RECORDED_TOOLS
     watched = checks.watch(workspace, name, arguments)
     try:
@@ -417,10 +425,11 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
         if recorded:
             done.append(f"{activity_line(name, arguments)} (stopped part way)")
         raise
-    finish.record(workspace, name, arguments, result)
+    worse = finish.record(workspace, name, arguments, result)
     if recorded and (name == "run_command" or not result.startswith("Error")):
         done.append(done_line(name, arguments, result))
-    return checks.checked_result(workspace, watched, result)
+    checked = checks.checked_result(workspace, watched, result)
+    return f"{checked}\n\n{worse}" if worse else checked
 
 
 def call_parts(call: dict) -> tuple[str, dict | None, str]:
@@ -457,6 +466,9 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
     tell(helpers.screen, "show_outcome", *outcome_line(name, result))
     if name == "todo_write" and not result.startswith(ERROR_LEAD):
         tell(helpers.screen, "show_todos", helpers.workspace.todos)
+    notice = finish.take_notice(helpers.workspace)
+    if notice:
+        tell(helpers.screen, "show_activity", notice)
     result = tools.clipped(result, helpers.workspace.result_chars)
     if before.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {before.context}"
@@ -690,6 +702,12 @@ def replied(brain, messages: list[dict], offered: list[dict], screen, squeeze) -
         raise still_too_long(error, brain) from None
 
 
+def with_undo_offered(offered: list[dict], workspace) -> list[dict]:
+    if not finish.offers_undo(workspace) or UNDO_DEFINITION in offered:
+        return offered
+    return offered + [UNDO_DEFINITION]
+
+
 def stopped_as_stuck(messages: list[dict], screen) -> str:
     messages.append({"role": "assistant", "content": STUCK_STOPPED})
     tell(screen, "note", STUCK_STOPPED, "error")
@@ -755,6 +773,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
             tell(screen, "show_tool_result", call, result)
             if is_approval(call, result):
                 approved_with = len(done)
+        offered = with_undo_offered(offered, workspace)
         if squeeze:
             squeeze(messages)
         if on_round:

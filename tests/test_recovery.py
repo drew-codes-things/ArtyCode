@@ -1,6 +1,7 @@
 import json
+import sys
 
-from arty_cli import agent, cli, prune, tools
+from arty_cli import agent, cli, finish, prune, tools
 from tests.scripted import ScriptedBrain, project, session_for
 
 assert project
@@ -237,3 +238,99 @@ def test_the_footer_shows_real_room_right_after_older_results_are_dropped(projec
     assert notes
     right_after = [next(left for count, left in shown if count >= note) for note in range(1, notes + 1)]
     assert min(right_after) >= 40, right_after
+
+
+SMALL_CALC = '''def add(a, b):
+    return a + b
+
+
+def multiply(a, b):
+    return a + b
+
+
+def subtract(a, b):
+    return a - b
+'''
+SMALL_TESTS = '''from calc import add, multiply, subtract
+
+
+def test_add():
+    assert add(2, 3) == 5
+
+
+def test_multiply():
+    assert multiply(2, 3) == 6
+
+
+def test_subtract():
+    assert subtract(5, 3) == 2
+
+
+def test_add_negative():
+    assert add(-1, -1) == -2
+'''
+RUN_TESTS = ("run_command", {"command": f"{sys.executable} -B -m pytest -q -p no:cacheprovider"})
+BREAKING_EDIT = ("edit_file", {"path": "calc.py", "old_text": "def add(a, b):\n    return a + b",
+                               "new_text": "def add(a, b):\n    return a * b"})
+
+
+class ToolRecordingBrain(ScriptedBrain):
+    def __init__(self, steps):
+        super().__init__(steps)
+        self.offered = []
+
+    def reply(self, messages, tools, on_text):
+        self.offered.append([definition["function"]["name"] for definition in tools or []])
+        return super().reply(messages, tools, on_text)
+
+
+def session_with_finish_check(project, brain):
+    (project / "calc.py").write_text(SMALL_CALC)
+    (project / "test_calc.py").write_text(SMALL_TESTS)
+    session = session_for(project, brain)
+    session.workspace.finish_check = finish.FinishCheck()
+    return session
+
+
+def test_edits_that_make_the_tests_worse_are_named_plainly_with_the_newly_failing_tests(project):
+    brain = ToolRecordingBrain([[("read_file", {"path": "calc.py"})], [RUN_TESTS], [BREAKING_EDIT], [RUN_TESTS],
+                                "I made add worse."])
+    session = session_with_finish_check(project, brain)
+    session.ask("fix multiply")
+    assert finish.WORSE_LEAD not in brain.tool_results()[1]
+    worse = brain.tool_results()[-1]
+    assert finish.WORSE_LEAD in worse
+    assert "1 failed, 3 passed" in worse and "3 failed, 1 passed" in worse
+    assert "test_calc.py::test_add" in worse and "test_calc.py::test_add_negative" in worse
+    assert "test_calc.py::test_multiply" not in worse.split(finish.NEWLY_FAILING_LEAD)[1]
+    assert finish.UNDO_TOOL in worse
+    assert finish.UNDO_TOOL not in brain.offered[0] and finish.UNDO_TOOL in brain.offered[-1]
+    assert "made the tests worse" in shown_on_screen(session)
+    assert "return a * b" in (project / "calc.py").read_text()
+
+
+def test_undo_edits_puts_the_files_back_to_the_better_run_only_when_the_model_calls_it(project):
+    second_break = ("edit_file", {"path": "calc.py", "old_text": "    return a - b", "new_text": "    return a + a"})
+    brain = ToolRecordingBrain([[("read_file", {"path": "calc.py"})], [RUN_TESTS], [BREAKING_EDIT], [second_break],
+                                [RUN_TESTS], [(finish.UNDO_TOOL, {})], [RUN_TESTS], "Back where it was."])
+    session = session_with_finish_check(project, brain)
+    session.ask("fix multiply")
+    undone, rerun = brain.tool_results()[-2:]
+    assert undone.startswith("Undid") and "2 changes" in undone
+    assert (project / "calc.py").read_text() == SMALL_CALC
+    assert "1 failed, 3 passed" in rerun and finish.WORSE_LEAD not in rerun
+
+
+def test_a_test_file_that_no_longer_imports_counts_as_worse_not_as_fewer_failures(project):
+    broken = ("edit_file", {"path": "calc.py", "old_text": "def subtract(a, b):", "new_text": "def subtract(a, b)"})
+    brain = ScriptedBrain([[("read_file", {"path": "calc.py"})], [RUN_TESTS], [broken], [RUN_TESTS], "Broke it."])
+    session = session_with_finish_check(project, brain)
+    session.ask("fix multiply")
+    assert finish.WORSE_LEAD in brain.tool_results()[-1]
+
+
+def test_test_runs_with_no_file_change_between_them_are_not_called_worse(project):
+    brain = ScriptedBrain([[RUN_TESTS], [RUN_TESTS], "Same."])
+    session = session_with_finish_check(project, brain)
+    session.ask("run the tests twice")
+    assert not [result for result in brain.tool_results() if finish.WORSE_LEAD in result]
