@@ -5,12 +5,13 @@ from dataclasses import dataclass
 
 from arty_cli import context, tools
 
-STUB_LEAD = "[Hidden to save room"
+STUB_LEAD = tools.HIDDEN_MARK
 KEPT_ROUNDS = 5
 MAX_OUTCOME_CHARS = 80
 EXIT_CODE = re.compile(r"\[(?:job \S+ finished with )?exit code (-?\d+)\]\s*$")
 NUMBERED_LINE = re.compile(r"^\d+\t", re.M)
-TARGET_SHARE = 0.6
+START_SHARE = 0.9
+TARGET_SHARE = 0.5
 OVERFLOW_SHARE = 0.7
 KEPT_ARGUMENT_CHARS = 200
 READ_TOOL, COMMAND_TOOL = "read_file", "run_command"
@@ -112,9 +113,9 @@ def is_stale(step: Step, later: list[Step]) -> bool:
 
 def shortened(value, key: str = ""):
     if isinstance(value, str):
-        if key in KEPT_WHOLE or len(value) <= KEPT_ARGUMENT_CHARS:
+        if key in KEPT_WHOLE or len(value) <= KEPT_ARGUMENT_CHARS or tools.PLACEHOLDERS.search(value):
             return value
-        return f"{value[:KEPT_ARGUMENT_CHARS]}... ({len(value) - KEPT_ARGUMENT_CHARS} characters dropped to save room)"
+        return f"{value[:KEPT_ARGUMENT_CHARS]}... ({len(value) - KEPT_ARGUMENT_CHARS} {tools.DROPPED_MARK})"
     if isinstance(value, dict):
         return {inner_key: shortened(inner, inner_key) for inner_key, inner in value.items()}
     if isinstance(value, list):
@@ -136,11 +137,19 @@ def shorten_past_changes(messages: list[dict], protected_from: int) -> None:
             messages[index] = {**messages[index], "tool_calls": [with_short_arguments(call) for call in calls]}
 
 
+def newest_views_of_edited_files(steps: list[Step]) -> set[int]:
+    edited = {step.path() for step in steps if step.name in CHANGING_TOOLS and step.path()}
+    newest = {step.path(): step.index for step in steps
+              if step.path() in edited and (step.name == READ_TOOL or step.name in CHANGING_TOOLS)}
+    return set(newest.values())
+
+
 def stub_stale(messages: list[dict]) -> None:
     protected_from = newest_round_start(messages)
     steps = steps_of(messages)
+    kept_in_view = newest_views_of_edited_files(steps)
     for position, step in enumerate(steps):
-        if step.index >= protected_from or is_stub(messages[step.index].get("content")):
+        if step.index >= protected_from or step.index in kept_in_view or is_stub(messages[step.index].get("content")):
             continue
         if is_stale(step, steps[position + 1:]):
             stubbed(messages, step)
@@ -157,21 +166,28 @@ def rounds_start(messages: list[dict], kept: int) -> int:
 
 
 def hide_oldest(messages: list[dict], client, target: float, protected_from: int) -> None:
-    for step in steps_of(messages):
+    steps = steps_of(messages)
+    kept_in_view = newest_views_of_edited_files(steps)
+    for step in steps:
         if estimated(messages, client) <= target or step.index >= protected_from:
             return
-        if not is_stub(messages[step.index].get("content")):
+        if step.index not in kept_in_view and not is_stub(messages[step.index].get("content")):
             stubbed(messages, step)
 
 
+def needs_pruning(messages: list[dict], limit: int, client) -> bool:
+    return estimated(messages, client) > limit * START_SHARE
+
+
 def prune(messages: list[dict], limit: int, client) -> None:
-    if estimated(messages, client) <= limit:
+    if not needs_pruning(messages, limit, client):
         return
     stub_stale(messages)
     target = limit * TARGET_SHARE
-    hide_oldest(messages, client, target, rounds_start(messages, KEPT_ROUNDS))
-    if estimated(messages, client) > limit:
-        hide_oldest(messages, client, target, newest_round_start(messages))
+    for kept in range(KEPT_ROUNDS, 0, -1):
+        if estimated(messages, client) <= target:
+            return
+        hide_oldest(messages, client, target, rounds_start(messages, kept))
 
 
 def cut_newest(messages: list[dict], limit: int, client) -> None:

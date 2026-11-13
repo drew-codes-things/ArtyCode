@@ -68,6 +68,14 @@ MIN_CLOSENESS = 0.5
 ECHO_CONTEXT_LINES = 3
 MAX_ECHO_LINES = 30
 NOT_FOUND = "old_text was not found"
+ALREADY_MADE_LEAD = "new_text is already in the file"
+ALREADY_MADE = (f"{NOT_FOUND}, but {ALREADY_MADE_LEAD} at lines {{first}}-{{last}}, so this change is already made. "
+                "Don't send it again: run the tests or make the next change. Those lines now:\n{numbered}\n")
+DROPPED_MARK = "characters dropped to save room"
+HIDDEN_MARK = "[Hidden to save room"
+PLACEHOLDERS = re.compile(rf"\(\d+ {DROPPED_MARK}\)|^\.\.\. \d+ characters cut \.\.\.$|{re.escape(HIDDEN_MARK)}", re.M)
+PLACEHOLDER_REFUSAL = ("the new text has ArtyCode's placeholder \"{placeholder}\" in it. That marks text hidden from "
+                       "an earlier step, not code, so nothing was changed: write the real lines out in full")
 KEY_ALIASES = {"file_path": "path", "filepath": "path", "file": "path", "filename": "path", "file_name": "path",
                "old_string": "old_text", "old_str": "old_text", "new_string": "new_text", "new_str": "new_text",
                "cmd": "command", "todos": "items", "content": "text", "task": "text", "title": "text",
@@ -500,8 +508,36 @@ def numbered_lines(lines: list[str], first: int, last: int) -> str:
     return "\n".join(f"{number + 1}\t{lines[number][:MAX_LINE_CHARS]}" for number in range(first, last))
 
 
-def not_found_message(before: str, old_text: str) -> str:
+def found_start(lines: list[str], pattern: list[str]) -> int | None:
+    wanted = [line.strip() for line in pattern]
+    if not any(wanted):
+        return None
+    stripped = [line.strip() for line in lines]
+    size = len(wanted)
+    return next((start for start in range(len(lines) - size + 1) if stripped[start:start + size] == wanted), None)
+
+
+def adds_lines(old_text: str, new_text: str) -> bool:
+    kept = {line.strip() for line in pattern_lines(old_text)}
+    return any(line.strip() and line.strip() not in kept for line in pattern_lines(new_text))
+
+
+def already_made_message(lines: list[str], old_text: str, new_text: str) -> str:
+    if not adds_lines(old_text, new_text):
+        return ""
+    pattern = pattern_lines(new_text)
+    start = found_start(lines, pattern)
+    if start is None:
+        return ""
+    last = start + len(pattern)
+    return ALREADY_MADE.format(first=start + 1, last=last, numbered=numbered_lines(lines, start, last))
+
+
+def not_found_message(before: str, old_text: str, new_text: str = "") -> str:
     lines = before.splitlines()
+    already = already_made_message(lines, old_text, new_text)
+    if already:
+        return already
     pattern = pattern_lines(old_text)
     start = closest_start(lines, pattern)
     if start is None:
@@ -510,6 +546,24 @@ def not_found_message(before: str, old_text: str) -> str:
     last = min(start + len(pattern) + CLOSEST_CONTEXT_LINES, len(lines))
     return (f"{NOT_FOUND}. The closest lines in the file are these; copy old_text from them exactly, without the "
             f"line numbers:\n{numbered_lines(lines, first, last)}\n")
+
+
+def definition_bounds(lines: list[str], around: int) -> tuple[int, int]:
+    first = next((index for index in range(around, -1, -1) if DEFINITION_LINE.match(lines[index])), 0)
+    indent = len(leading_space(lines[first]))
+    following = (index for index in range(first + 1, len(lines))
+                 if DEFINITION_LINE.match(lines[index]) and len(leading_space(lines[index])) <= indent)
+    return first, next(following, len(lines))
+
+
+def current_view(text: str, old_text: str, budget: int) -> tuple[str, str]:
+    lines = text.splitlines()
+    numbered = numbered_window(lines, 1, len(lines), budget)
+    if len(numbered) == len(lines):
+        return "whole", "\n".join(numbered)
+    closest = closest_start(lines, pattern_lines(old_text))
+    first, last = definition_bounds(lines, closest) if closest is not None else (0, len(lines))
+    return "part", "\n".join(numbered_window(lines, first + 1, last - first, budget))
 
 
 def changed_region(before: str, after: str) -> str:
@@ -536,7 +590,7 @@ def applied_edit(before: str, old_text: str, new_text: str, replace_all: bool) -
     if found == 0:
         loose = loosely_edited(before, old_text, new_text)
         if loose is None:
-            raise ToolError(not_found_message(before, old_text))
+            raise ToolError(not_found_message(before, old_text, new_text))
         return loose
     if found > 1 and not replace_all:
         raise ToolError(f"old_text is in {found} places; add more surrounding text or set replace_all")
@@ -625,7 +679,19 @@ def notebook_json(notebook: dict) -> str:
     return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
 
 
+def refuse_placeholders(before: str, after: str) -> None:
+    added = [found.group(0) for found in PLACEHOLDERS.finditer(after)]
+    if len(added) > len(PLACEHOLDERS.findall(before)):
+        raise ToolError(PLACEHOLDER_REFUSAL.format(placeholder=added[-1]))
+
+
 def planned_change(name: str, arguments: dict, workspace) -> tuple[Path, str, str]:
+    target, before, after = planned_text(name, arguments, workspace)
+    refuse_placeholders(before, after)
+    return target, before, after
+
+
+def planned_text(name: str, arguments: dict, workspace) -> tuple[Path, str, str]:
     target = workspace.resolve(arguments.get("path", ""))
     if name == "write_file":
         if target.exists() and not arguments.get("overwrite"):

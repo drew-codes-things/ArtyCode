@@ -54,10 +54,18 @@ STUCK_FAILING_NOTE = ("You have made the same tool calls several times and they 
                       "Don't make that call again: do it another way (for an edit that keeps missing, replace the "
                       "whole function or rewrite the file), or say what is blocking you.")
 EDITING_TOOLS = ("edit_file", "multi_edit")
+UNDO_DEFINITION = tools.function(
+    finish.UNDO_TOOL,
+    "Put the files you changed back to how they were at the earlier test run that went better. Use it only after "
+    "ArtyCode tells you your edits made the tests worse.", {}, [])
 SMALL_FILE_LINES = 200
-REPEATED_MISS = ("\nThat is miss {count} on {path}. Stop copying small pieces: read it again and replace the whole "
-                 "function or block in one edit_file, with old_text copied from that read")
+REPEATED_MISS = ("\nThat is miss {count} on {path}. Stop copying small pieces from memory: copy old_text from the "
+                 "lines below exactly, without the line numbers, and replace the whole function or block in one "
+                 "edit_file")
 SMALL_FILE_WAY = ", or, as {path} is short ({lines} lines), rewrite it with write_file and overwrite: true"
+WHOLE_FILE_LEAD = "The whole of {path} as it is now ({lines} lines):"
+PART_LEAD = "The part of {path} around the closest match, as it is now ({lines} lines in the whole file):"
+VIEW_LEADS = {"whole": WHOLE_FILE_LEAD, "part": PART_LEAD}
 HOOK_BLOCKED = "A hook stopped this call:"
 HOOK_FEEDBACK = "Hook feedback:"
 HOOK_CONTEXT = "Note from a hook:"
@@ -405,6 +413,10 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
         if extras.may_change_things(name):
             done.append(activity_line(name, arguments))
         return result
+    if name == finish.UNDO_TOOL:
+        result = finish.undo_edits(workspace)
+        done.append(f"{name}: {one_line(result)}")
+        return result
     recorded = name in RECORDED_TOOLS
     watched = checks.watch(workspace, name, arguments)
     try:
@@ -413,10 +425,11 @@ def performed(name: str, arguments: dict, workspace, gate, extras, done: list, d
         if recorded:
             done.append(f"{activity_line(name, arguments)} (stopped part way)")
         raise
-    finish.record(workspace, name, arguments, result)
+    worse = finish.record(workspace, name, arguments, result)
     if recorded and (name == "run_command" or not result.startswith("Error")):
         done.append(done_line(name, arguments, result))
-    return checks.checked_result(workspace, watched, result)
+    checked = checks.checked_result(workspace, watched, result)
+    return f"{checked}\n\n{worse}" if worse else checked
 
 
 def call_parts(call: dict) -> tuple[str, dict | None, str]:
@@ -453,6 +466,9 @@ def result_of(call: dict, helpers: Helpers, can_explore: bool, done: list, extra
     tell(helpers.screen, "show_outcome", *outcome_line(name, result))
     if name == "todo_write" and not result.startswith(ERROR_LEAD):
         tell(helpers.screen, "show_todos", helpers.workspace.todos)
+    notice = finish.take_notice(helpers.workspace)
+    if notice:
+        tell(helpers.screen, "show_activity", notice)
     result = tools.clipped(result, helpers.workspace.result_chars)
     if before.context:
         result = f"{result}\n\n{HOOK_CONTEXT} {before.context}"
@@ -550,17 +566,44 @@ def repeated_failure(window: list[set]) -> str | None:
     return next((signature for signature, count in counted.items() if count >= STUCK_REPEATS), None)
 
 
-def file_lines_of(workspace, path: str) -> int:
+def current_text(workspace, path: str) -> str | None:
     try:
-        return len(tools.read_text(workspace.resolve(path)).splitlines())
+        target = workspace.resolve(path)
+        return tools.read_text(target)
     except (tools.ToolError, OSError, ValueError):
-        return 0
+        return None
 
 
-def miss_advice(workspace, path: str, count: int) -> str:
-    lines = file_lines_of(workspace, path)
+def mark_read_after_miss(workspace, path: str, text: str) -> None:
+    workspace.note_seen(workspace.resolve(path), text)
+
+
+def missed_old_text(arguments: dict) -> str:
+    edits = arguments.get("edits")
+    first = edits[0] if isinstance(edits, list) and edits and isinstance(edits[0], dict) else {}
+    return str(arguments.get("old_text") or first.get("old_text") or "")
+
+
+def miss_advice(path: str, count: int, text: str, old_text: str, room: int) -> str:
+    lines = len(text.splitlines())
     small = SMALL_FILE_WAY.format(path=path, lines=lines) if 0 < lines <= SMALL_FILE_LINES else ""
-    return REPEATED_MISS.format(count=count, path=path) + small + "."
+    advice = REPEATED_MISS.format(count=count, path=path) + small + "."
+    longest_lead = f"\n{PART_LEAD.format(path=path, lines=lines)}\n"
+    kind, view = tools.current_view(text, old_text, room - len(advice) - len(longest_lead))
+    return f"{advice}\n{VIEW_LEADS[kind].format(path=path, lines=lines)}\n{view}" if view else advice
+
+
+def advised_result(result: str, arguments: dict, misses: dict, workspace) -> str:
+    path = str(arguments.get("path") or "")
+    text = current_text(workspace, path)
+    if text is None:
+        return result
+    mark_read_after_miss(workspace, path, text)
+    misses[path] = misses.get(path, 0) + 1
+    if misses[path] < 2:
+        return result
+    return result + miss_advice(path, misses[path], text, missed_old_text(arguments),
+                                workspace.result_chars - len(result))
 
 
 def advised_results(calls: list[dict], results: list[str], misses: dict, workspace) -> list[str]:
@@ -568,12 +611,7 @@ def advised_results(calls: list[dict], results: list[str], misses: dict, workspa
     for call, result in zip(calls, results):
         name, arguments, _problem = call_parts(call)
         is_miss = name in EDITING_TOOLS and result.startswith(ERROR_LEAD) and tools.NOT_FOUND in result
-        if not is_miss or arguments is None:
-            advised.append(result)
-            continue
-        path = str(arguments.get("path") or "")
-        misses[path] = misses.get(path, 0) + 1
-        advised.append(result + miss_advice(workspace, path, misses[path]) if misses[path] >= 2 else result)
+        advised.append(advised_result(result, arguments, misses, workspace) if is_miss and arguments else result)
     return advised
 
 
@@ -664,6 +702,18 @@ def replied(brain, messages: list[dict], offered: list[dict], screen, squeeze) -
         raise still_too_long(error, brain) from None
 
 
+def with_undo_offered(offered: list[dict], workspace) -> list[dict]:
+    if not finish.offers_undo(workspace) or UNDO_DEFINITION in offered:
+        return offered
+    return offered + [UNDO_DEFINITION]
+
+
+def stopped_as_stuck(messages: list[dict], screen) -> str:
+    messages.append({"role": "assistant", "content": STUCK_STOPPED})
+    tell(screen, "note", STUCK_STOPPED, "error")
+    return STUCK_STOPPED
+
+
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
              squeeze=None, extras=None, stop_hooks=True, stopped=None, steer=None, on_round=None) -> str:
     extras = extras or extra_tools.NONE
@@ -723,6 +773,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
             tell(screen, "show_tool_result", call, result)
             if is_approval(call, result):
                 approved_with = len(done)
+        offered = with_undo_offered(offered, workspace)
         if squeeze:
             squeeze(messages)
         if on_round:
@@ -736,14 +787,15 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         if waits_on_running_jobs(calls, results):
             continue
         signature = signature_of(calls, raw_results)
-        failures = (failures + [failing_signatures(calls, raw_results)])[-STUCK_WINDOW:]
+        failing_now = failing_signatures(calls, raw_results)
+        if signature == steered_from or failing_now & steered_failures:
+            return stopped_as_stuck(messages, screen)
+        failures = (failures + [failing_now])[-STUCK_WINDOW:]
         failing = repeated_failure(failures)
-        if signature == steered_from or (failing is not None and failing in steered_failures):
-            messages.append({"role": "assistant", "content": STUCK_STOPPED})
-            return STUCK_STOPPED
         if failing is not None:
             messages.append({"role": "user", "content": STUCK_FAILING_NOTE})
             steered_failures.add(failing)
+            failures = []
             continue
         recent = (recent + [signature])[-STUCK_REPEATS:]
         if len(recent) == STUCK_REPEATS and len(set(recent)) == 1:

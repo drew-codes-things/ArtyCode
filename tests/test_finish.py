@@ -98,3 +98,34 @@ def test_switched_off_it_never_follows_up():
     check = finish.FinishCheck(enabled=False)
     check.record("pytest", PYTEST_FAILING)
     assert check.follow_up() == ""
+
+
+@pytest.mark.parametrize("output, passed, names", [
+    ("FAILED test_calc.py::test_add - assert 1 == 2\nERROR test_io.py - SyntaxError\n"
+     "=== 1 failed, 4 passed, 1 error in 0.1s ===\n[exit code 1]", 4, ("test_calc.py::test_add", "test_io.py")),
+    ("FAIL: test_add (test_calc.CalcTest)\nRan 3 tests in 0.01s\n\nFAILED (failures=1)\n[exit code 1]", None,
+     ("test_add",)),
+    ("  ✕ adds numbers (3 ms)\nTests:       1 failed, 5 passed, 6 total\n[exit code 1]", 5, ("adds numbers",)),
+])
+def test_passed_counts_and_failing_test_names_are_read(output, passed, names):
+    run = finish.test_run_of("pytest", output)
+    assert run.passed == passed and run.failed_names == names
+
+
+def test_a_run_with_fewer_passing_tests_after_a_change_is_worse_and_offers_undo():
+    check = finish.FinishCheck()
+    first, second = object(), object()
+    assert check.record("pytest", PYTEST_FAILING, first) == ""
+    note = check.record("pytest", "=== 2 errors in 0.1s ===\n[exit code 2]", second)
+    assert note.startswith(finish.WORSE_LEAD) and "13 failed, 17 passed" in note
+    assert check.undo_target().last_change is first
+    assert check.record("pytest", PYTEST_FAILING, second) == "" and check.undo_target() is None
+
+
+def test_each_test_command_is_compared_with_its_own_best_run():
+    check = finish.FinishCheck()
+    first, second, third = object(), object(), object()
+    check.record("pytest", PYTEST_FAILING, first)
+    check.record("pytest test_other.py", PYTEST_PASSING, second)
+    note = check.record("pytest", "=== 20 failed, 10 passed in 0.1s ===\n[exit code 1]", third)
+    assert note.startswith(finish.WORSE_LEAD) and "13 failed, 17 passed" in note
