@@ -61,6 +61,7 @@ SHELL_DIRECTORY_STACK = ("~+", "~-")
 WINDOWS_ABSOLUTE = re.compile(r"^([A-Za-z]:|\\\\|//)")
 POWERSHELL_DRIVES = {"alias", "cert", "env", "function", "hkcu", "hklm", "variable", "wsman", "temp"}
 PROVIDER_QUALIFIER = "::"
+POWERSHELL_LIST_MARK = ","
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
@@ -552,11 +553,20 @@ def flag_values(word: str) -> list[str]:
     return values
 
 
+def parameter_dashes() -> tuple[str, ...]:
+    return ("-", *POWERSHELL_DASHES) if sys.platform == "win32" else ("-",)
+
+
+def list_items(path: str) -> list[str]:
+    return path.split(POWERSHELL_LIST_MARK) if sys.platform == "win32" else [path]
+
+
 def paths_among(words: list[str]) -> list[str]:
     found = []
     for word in words[1:]:
-        found += flag_values(word) if word.startswith("-") else [word]
-    return [path for path in dict.fromkeys(found) if path]
+        found += flag_values(word) if word.startswith(parameter_dashes()) else [word]
+    items = [item for path in found for item in list_items(path)]
+    return [path for path in dict.fromkeys(items) if path]
 
 
 def names_a_provider_drive(path: str) -> bool:

@@ -1774,3 +1774,42 @@ def test_on_windows_words_keep_their_backslashes(monkeypatch):
 def test_off_windows_a_backslash_still_escapes_the_next_letter(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     assert permissions.words_of(r"ca\t a\ b") == ["cat", "a b"]
+
+
+POWERSHELL_LISTS_REACHING_OUT = [
+    "Get-Content a.py,..\\secret.txt", "Get-Content a.py,C:\\Users\\me\\secret.txt", "Get-Content a.py,Env:ARTY_API_KEY",
+    "Get-Content \u2013Path:Env:ARTY_API_KEY", "Get-Content \u2013LiteralPath:C:\\Users\\me\\secret.txt",
+    "Get-Content -Path:a.py,..\\secret.txt", "Get-Content -Path a.py,..\\..\\secret.txt",
+    "Select-String -Pattern x -Path a.py,..\\secret.txt", "Get-ChildItem a.py,HKCU:\\Software",
+    "Get-Content src\\..\\..\\secret.txt", "Get-Content a.py, ..\\secret.txt",
+]
+
+
+@pytest.mark.parametrize("command", POWERSHELL_LISTS_REACHING_OUT)
+def test_on_windows_every_item_of_a_powershell_list_or_dashed_parameter_is_checked(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) in (permissions.PLAN_REFUSAL, permissions.REFUSED)
+
+
+@pytest.mark.parametrize("word, path", [("\u2013Path:Env:ARTY_API_KEY", "Env:ARTY_API_KEY"),
+                                        ("\u2014LiteralPath:C:\\x", "C:\\x"), ("-Path:a.py,Env:X", "Env:X"),
+                                        ("a.py,..\\secret.txt", "..\\secret.txt")])
+def test_on_windows_paths_are_found_behind_any_dash_and_in_comma_lists(monkeypatch, word, path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert path in permissions.paths_among(["Get-Content", word])
+
+
+@pytest.mark.parametrize("command", ["Get-Content a.py,b.py", "Get-Content -Path a.py,src\\b.py",
+                                     "Select-String -Pattern x -Path a.py,b.py"])
+def test_on_windows_a_powershell_list_inside_the_project_is_still_look_only(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert asked_about(workspace, command) == []
+
+
+def test_off_windows_a_comma_is_part_of_the_file_name(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert permissions.paths_among(["cat", "a.py,b.py"]) == ["a.py,b.py"]
