@@ -4,6 +4,7 @@
 
 **A coding assistant in your terminal: it reads, edits and runs code in the folder you start it in, and asks before it changes anything. It runs on your own Arty.**
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/drew-codes-things/ArtyCode/tests.yml?branch=main&style=flat-square&label=tests)](https://github.com/drew-codes-things/ArtyCode/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-prompt__toolkit%20%7C%20pygments-success?style=flat-square)
 [![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](LICENSE)
