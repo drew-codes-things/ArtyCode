@@ -1426,6 +1426,7 @@ ASKING_GH = [
     "gh pr view {1,--web}", "gh pr view 1 #'\ntouch made.txt\n#'", "GH_PAGER=sh gh pr diff 1", "env gh pr view 1",
     "sudo gh pr view 1", "gh pr view -[w]", "gh pr view 1 \"--web\"", "gh pr view 1 '-w'",
     "g\\h pr view 1 --web", "gh pr view 1\rtouch x",
+    "gh pr list -R evil.example:443/r", "gh repo view evil.example:443/r", "gh pr list --repo=evil.example:8080/r",
 ]
 
 
@@ -1499,3 +1500,41 @@ def test_on_windows_look_only_gh_needs_no_ok(monkeypatch):
 
 def test_a_remembered_gh_prefix_is_offered_for_a_changing_gh_command(workspace):
     assert permissions.Gate(workspace, Asker()).prefixes_for("gh pr merge 12 --squash") == ["gh pr merge"]
+
+
+@pytest.fixture
+def expansion_bait(workspace):
+    (workspace.root / "env").write_text("x\n")
+    (workspace.root / "env.HOME").write_text("x\n")
+    address_folder = workspace.root / "git@127.0.0.1:o"
+    address_folder.mkdir()
+    (address_folder / "r").write_text("x\n")
+    return workspace
+
+
+GH_WITH_SHELL_EXPANSION = [
+    "gh pr view 1 -R cli/cli --json n -q en?", "gh pr view 1 -R cli/cli --json n --jq=en?.HOME",
+    "gh pr view 1 -R cli/cli --json n -qen?", "gh pr view 1 --json n -q e*.HOME", "gh pr view 1 -q en[v]",
+    "gh pr list -R gi*/r", "gh pr list --repo=gi*/r", "gh repo view gi*/r", "gh pr list -R g*/*", "gh pr list -R */o/r",
+    "gh pr view 1 -q .title?", "gh pr list -L 5 *", "gh pr view ~", "gh pr list -R ~+/r", "gh pr list -R ~octo/demo",
+    "gh pr list | grep x && gh pr view 1 -q en?",
+]
+
+
+@pytest.mark.parametrize("command", GH_WITH_SHELL_EXPANSION)
+def test_a_shell_wildcard_or_tilde_in_a_gh_command_asks_and_is_refused_in_plan_mode(expansion_bait, command):
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(expansion_bait, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(expansion_bait, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@needs_git
+@pytest.mark.parametrize("command", ["gh pr view 1 -q '.title?'", "gh pr list --jq \".[] | .title?\"",
+                                     "gh pr list --json title --jq '.[0]'", "gh pr list --search 'fix*'"])
+def test_quoted_wildcards_in_a_gh_command_stay_quiet(expansion_bait, command):
+    ask = Asker()
+    assert permissions.Gate(expansion_bait, ask, mode=permissions.PLAN).check("run_command", {"command": command}) is None
+    assert ask.questions == []
