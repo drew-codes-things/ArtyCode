@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from arty_cli import eyes, rules, tools
+from arty_cli import eyes, finish, rules, tools
 
 YES, NO, ALWAYS, SAVE = "y", "n", "a", "s"
 AGREEING = (YES, ALWAYS, SAVE)
@@ -684,6 +684,9 @@ class Gate:
     def saved_as_rules(self, rules_to_save: list[str]) -> bool:
         return all([self.saved_as_rule(rule) for rule in rules_to_save or [""]])
 
+    def confirm_once(self, question: str) -> str | None:
+        return None if self.ask(question, "") in AGREEING else self.refused()
+
     def confirm(self, question: str, preview: str = "", remember: str = "", rule: str = "") -> str | None:
         return self.confirm_scoped(question, preview, [remember] if remember else [], [rule])
 
@@ -756,6 +759,8 @@ class Gate:
             return None
         if name in tools.CHANGING_TOOLS and self.mode != PLAN and self.protects(arguments):
             return self.confirm_protected_change(name, arguments)
+        if name == finish.UNDO_TOOL:
+            return PLAN_REFUSAL if self.mode == PLAN else self.confirm_once(finish.undo_question(self.workspace))
         if self.rule_allows(name, arguments) and (self.mode != PLAN or not self.changes_things(name, arguments)):
             return None
         if name in READING_TOOLS:

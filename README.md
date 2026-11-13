@@ -484,7 +484,8 @@ far and the new run is worse (it fails where that run passed, by its exit code, 
 tests pass, or as many pass and more fail; a run that passes is never worse, so removing an obsolete test is fine),
 the run's result tells the model so plainly, with both counts and the tests that newly fail, and a dim
 `Tests check:` line shows it. From then on the model is also offered `undo_edits`, which puts the files back as they
-were at that better run using `/undo`'s snapshots; it asks you first in default mode, is refused in plan mode, and
+were at that better run using `/undo`'s snapshots; it asks you first, every time, naming how many changes and which
+files it would put back (**a** and **s** count as yes for that once and save nothing), is refused in plan mode, and
 nothing is put back unless the model calls it.
 
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as

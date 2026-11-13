@@ -33,6 +33,9 @@ NOTHING_TO_GO_BACK_TO = "Error: there is no better test run in this request to g
 TOO_FAR_BACK = "Error: too many changes were made since the better test run for ArtyCode to undo them all"
 UNDONE = "Undid {count} change{plural} since the better test run ({before}). Run the tests again to check."
 UNDO_STOPPED = "Undid {count} of the changes since the better test run, then stopped: {reason}"
+UNDO_QUESTION = ("Use undo_edits: put back {count} change{plural} ({files}) to how the files were at the test run "
+                 "that gave {before}?")
+UNDO_QUESTION_UNKNOWN = "Use undo_edits? (there is no better test run to go back to, so nothing would change)"
 
 
 @dataclass(frozen=True)
@@ -232,6 +235,23 @@ def take_notice(workspace) -> str:
 def offers_undo(workspace) -> bool:
     found = check_of(workspace)
     return found is not None and found.undo_target() is not None
+
+
+def changes_since(workspace, target: GoodRun) -> list:
+    kept = list(workspace.checkpoints)
+    start = next((index + 1 for index, change in enumerate(kept) if change is target.last_change), 0)
+    return kept[start:]
+
+
+def undo_question(workspace) -> str:
+    found = check_of(workspace)
+    target = found.undo_target() if found is not None else None
+    if target is None:
+        return UNDO_QUESTION_UNKNOWN
+    changes = changes_since(workspace, target)
+    files = ", ".join(dict.fromkeys(workspace.shown(change.path) for change in changes)) or "no files"
+    return UNDO_QUESTION.format(count=len(changes), plural="" if len(changes) == 1 else "s", files=files,
+                                before=target.run.counts())
 
 
 def undo_edits(workspace) -> str:

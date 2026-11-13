@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from arty_cli import permissions, tools
+from arty_cli import finish, permissions, tools
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git isn't installed")
 LOOK_ONLY_COMMANDS = [pytest.param("git status", marks=needs_git), "ls -la"]
@@ -974,3 +974,36 @@ def test_a_project_settings_file_that_links_outside_the_project_is_not_written_t
     rule_file = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, told.append, workspace.root)
     assert not rule_file.add_allow("run_command(pytest:*)")
     assert outside.read_text() == '{"permissions": {"allow": []}, "kept": true}\n' and "link" in told[0]
+
+
+def workspace_that_got_worse(workspace):
+    workspace.finish_check = finish.FinishCheck()
+    workspace.finish_check.record("pytest -q", "5 passed in 0.1s\n[exit code 0]", None)
+    for name in ("a.py", "b.py", "a.py"):
+        workspace.record_change(workspace.root / name, "x = 1\n", "x = 2\n")
+    workspace.finish_check.record("pytest -q", "2 failed, 3 passed in 0.1s\n[exit code 1]", workspace.checkpoints[-1])
+    return workspace
+
+
+def test_the_undo_question_says_what_would_be_put_back(workspace):
+    ask = Asker("n")
+    permissions.Gate(workspace_that_got_worse(workspace), ask).check(finish.UNDO_TOOL, {})
+    question = ask.questions[0][0]
+    assert "3 changes" in question and "a.py" in question and "b.py" in question and "5 passed" in question
+
+
+@pytest.mark.parametrize("answer", [permissions.ALWAYS, permissions.SAVE])
+def test_undo_edits_is_never_remembered_or_saved_as_a_rule(workspace, answer):
+    gate, _told = saving_gate(workspace_that_got_worse(workspace), answer, "n")
+    assert gate.check(finish.UNDO_TOOL, {}) is None
+    assert not (workspace.root / permissions.PROJECT_SETTINGS).exists()
+    assert gate.check(finish.UNDO_TOOL, {}) is not None
+    assert len(gate.ask.questions) == 2
+
+
+def test_an_older_saved_undo_rule_no_longer_skips_the_question(workspace):
+    gate = permissions.Gate(workspace_that_got_worse(workspace), Asker("n"))
+    gate.rules = rules(allow=[finish.UNDO_TOOL])
+    assert gate.check(finish.UNDO_TOOL, {}) is not None and len(gate.ask.questions) == 1
+    assert permissions.Gate(workspace, Asker(), mode=permissions.PLAN).check(finish.UNDO_TOOL, {}) == \
+        permissions.PLAN_REFUSAL
