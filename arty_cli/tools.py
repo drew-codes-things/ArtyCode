@@ -59,6 +59,7 @@ NOTHING_TO_UNDO = "There is nothing to undo."
 MAX_CHECKPOINTS = 100
 NEW_FILE_MODE = 0o666
 POWERSHELL_EXIT_CODE = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }"
+OWN_HIDDEN_CONSOLE = 0x08000000
 POWERSHELL_UTF8_OUTPUT = "try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch { }; "
 TEMPORARY_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL
 TRUE_WORDS = ("true", "yes", "1")
@@ -913,7 +914,7 @@ def powershell_arguments(script: str) -> list[str]:
 
 def shell_command(command: str) -> tuple[list[str] | str, dict]:
     if sys.platform == "win32":
-        return powershell_arguments(command), {}
+        return powershell_arguments(command), {"creationflags": OWN_HIDDEN_CONSOLE}
     bash = "/bin/bash" if Path("/bin/bash").exists() else None
     return command, {"shell": True, "executable": bash, "start_new_session": True}
 
