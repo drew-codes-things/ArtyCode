@@ -1278,6 +1278,10 @@ def test_a_quoted_or_escaped_bracket_class_is_a_pattern_not_a_wildcard(workspace
     ("git grep", "git grep -Osh x"), ("git diff", "git diff --output=made.txt"),
     ("git fetch", "git fetch --upload-pack=sh origin"), ("git grep", "git grep --open-files-in-pager=sh x"),
     ("rg", "rg --pre cat x a.py"), ("grep", "grep -R token ."), ("find", "find . -delete"),
+    ("gh pr view", "gh pr view 1 --web"), ("gh pr view", "gh pr view 1 -w"), ("gh pr create", "gh pr create --web"),
+    ("gh run view", "gh run view 5 --watch"), ("gh release view", "gh release view v1 --output=x.txt"),
+    ("gh pr view", "gh pr view 1 -R evil.example:443/r"), ("gh pr view", "gh pr view 1 --repo https://evil.example/o/r"),
+    ("gh pr view", "gh pr view 1 --json title --jq env"), ("gh pr view", "gh pr view 1 --json title -q '$ENV'"),
 ])
 def test_a_remembered_prefix_never_covers_an_option_that_runs_a_program_or_writes(workspace, prefix, command):
     ask = Asker("n", "n")
@@ -1288,6 +1292,16 @@ def test_a_remembered_prefix_never_covers_an_option_that_runs_a_program_or_write
     saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
     assert not saved.allows("run_command", {"command": command})
     assert len(ask.questions) == 2
+
+
+@pytest.mark.parametrize("prefix, command", [
+    ("gh pr view", "gh pr view 12 --comments"), ("gh pr view", "gh pr view 12 -R cli/cli --json title --jq .title"),
+    ("gh pr create", "gh pr create --title 'environment import fix' --body done"),
+])
+def test_a_remembered_gh_prefix_still_covers_its_ordinary_options(workspace, prefix, command):
+    gate = permissions.Gate(workspace, Asker())
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert gate.allows("run_command", {"command": command})
 
 
 def test_a_remembered_git_prefix_still_covers_its_ordinary_options(workspace):
