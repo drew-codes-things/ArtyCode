@@ -796,3 +796,9 @@ def test_powershell_output_beyond_ascii_comes_back_unchanged(workspace):
 def test_a_program_writing_utf8_through_powershell_comes_back_unchanged(workspace):
     script = f"import sys; sys.stdout.buffer.write({BEYOND_ASCII!r}.encode('utf-8'))"
     assert BEYOND_ASCII in tools.run_command(workspace, f"{python_call('-c', script)} | Write-Output")
+
+
+def test_powershell_is_told_to_write_utf8_on_the_command_line_itself():
+    script = tools.powershell_arguments("Get-Date")[-1]
+    assert script.startswith(tools.POWERSHELL_UTF8_OUTPUT) and "Get-Date" in script
+    assert "\n" not in tools.POWERSHELL_UTF8_OUTPUT and "UTF8Encoding" in tools.POWERSHELL_UTF8_OUTPUT
