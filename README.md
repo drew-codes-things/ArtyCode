@@ -25,6 +25,10 @@ runs the tests. The file tools and the shell always run on your computer. The th
 [Arty](https://github.com/drew-codes-things/Arty) brain (its own coding model unless you pick another: the first `arty/` model it marks for coding, or
 `arty/qwen3:14b` when it marks none or can't be asked quickly; this is never saved as your choice), so your
 code only ever goes to your own server. You need an Arty API key, or to approve this computer in Arty from your browser.
+The brain runs its models on [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine), Arty's own
+Ollama-compatible server built on llama.cpp, or on Ollama itself. ArtyCode sends its model requests only to the
+brain, so it works the same on either. ArtyEngine is a separate project under its own licence, PolyForm Strict 1.0.0, not ArtyCode's
+Apache 2.0.
 
 It reads, edits and runs code with a set of [tools](docs/tools.md), and asks before it changes or runs anything
 (see [Safety and permissions](#safety-and-permissions)).
@@ -199,8 +203,8 @@ The details live in [`docs/`](docs):
 
 ## Limits
 
-- On Arty, the brain runs one model on the GPU at a time, so the first coding request after chatting with Arty (and
-  the first chat after coding) waits while the other model loads.
+- On Arty, the brain runs one model on the GPU at a time, so when its coding model is not its main model, the first
+  coding request after chatting with Arty (and the first chat after coding) waits while the other model loads.
 - Where it has been run: Debian, the full test suite and daily use. Windows 10 22H2 in a virtual machine (Windows
   PowerShell 5.1, Python 3.12): the full test suite, `install.ps1` (a fresh install and an install over an older
   one), `arty --version`, `arty doctor`, and against a real Arty brain one-off jobs (`arty -p`) that read a file,
