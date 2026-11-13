@@ -323,14 +323,32 @@ def test_a_question_is_answered_with_its_letter_then_enter_and_typing_stays_out_
     assert typed_text(interface) == "" and interface.messages.empty()
 
 
+def watch_the_drop(interface) -> threading.Event:
+    dropped = threading.Event()
+    drop_typed_ahead = interface.drop_typed_ahead
+
+    def drop_and_tell():
+        drop_typed_ahead()
+        dropped.set()
+
+    interface.drop_typed_ahead = drop_and_tell
+    return dropped
+
+
+def settled_question(interface, text, choices):
+    dropped = watch_the_drop(interface)
+    interface.open_question(text, choices)
+    assert dropped.wait(3)
+
+
 def test_arrows_choose_too_and_escape_refuses(started):
     interface, typed = started
-    interface.open_question("Run: pytest -q", CHOICES)
+    settled_question(interface, "Run: pytest -q", CHOICES)
     interface.test_clock.advance(tui.ANSWER_PAUSE_SECONDS)
     typed.send_text(DOWN + DOWN + DOWN + UP + "\r")
     assert interface.wait_answer(3) == "a"
     interface.close_question()
-    interface.open_question("Run: pytest -q", CHOICES)
+    settled_question(interface, "Run: pytest -q", CHOICES)
     typed.send_text(ESCAPE)
     assert interface.wait_answer() == "n"
     assert interface.interrupted == []
@@ -338,10 +356,10 @@ def test_arrows_choose_too_and_escape_refuses(started):
 
 def test_choosing_from_a_list_with_no_refusal_gives_nothing_on_escape(started):
     interface, typed = started
-    answers = []
+    answers, dropped = [], watch_the_drop(interface)
     asker = threading.Thread(target=lambda: answers.append(interface.choose("Which model?", [("1", "a"), ("2", "b")])))
     asker.start()
-    assert until(interface.is_choosing)
+    assert until(interface.is_choosing) and dropped.wait(3)
     typed.send_text(ESCAPE)
     asker.join(3)
     assert answers == [None] and interface.question is None
@@ -744,7 +762,7 @@ def test_after_a_pause_a_letter_then_enter_answers_and_escape_always_refuses(sta
     typed.send_text("\r")
     assert interface.wait_answer(3) == "n"
     interface.close_question()
-    interface.open_question("Run: git push --force origin main", GIT_PUSH_CHOICES)
+    settled_question(interface, "Run: git push --force origin main", GIT_PUSH_CHOICES)
     typed.send_text(ESCAPE)
     assert interface.wait_answer(3) == "n"
     interface.close_question()

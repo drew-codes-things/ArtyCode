@@ -113,8 +113,19 @@ def test_history_stays_append_only_even_when_nothing_is_asked(workspace):
     assert gate.check("write_file", {"path": ".arty/history.md", "content": "", "overwrite": True}) == rules.APPEND_ONLY
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows paths ignore case")
+def test_on_windows_the_history_record_is_append_only_whatever_its_case(workspace):
+    history = workspace.root / ".arty" / "history.md"
+    history.parent.mkdir()
+    history.write_text("## one\n")
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    assert gate.check("write_file", {"path": ".ARTY/History.md", "content": "", "overwrite": True}) == rules.APPEND_ONLY
+
+
 @pytest.mark.parametrize("path", [".arty/settings.json", ".arty/mcp.json", ".arty/notes.md", ".arty/commands/x.md",
-                                  "sub/.arty/history.md", ".arty/history.md.bak", ".ARTY/history.md"])
+                                  "sub/.arty/history.md", ".arty/history.md.bak",
+                                  pytest.param(".ARTY/history.md", marks=pytest.mark.skipif(
+                                      sys.platform == "win32", reason="Windows paths ignore case, so this is the record"))])
 def test_everything_else_under_arty_is_still_asked_about(workspace, path):
     ask = Asker("n")
     gate = permissions.Gate(workspace, ask, mode=permissions.AUTO_EDIT)

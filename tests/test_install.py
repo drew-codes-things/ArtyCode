@@ -12,7 +12,7 @@ debian_installer = pytest.mark.skipif(sys.platform == "win32", reason="install.s
 
 
 def test_typing_arty_or_arty_cli_starts_the_same_program():
-    scripts = tomllib.loads((PROJECT / "pyproject.toml").read_text())["project"]["scripts"]
+    scripts = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["scripts"]
     assert scripts["arty"] == scripts["arty-cli"] == "arty_cli.cli:main"
     module, function = scripts["arty"].split(":")
     assert module == cli.__name__ and callable(getattr(cli, function))
@@ -32,7 +32,7 @@ def test_the_debian_installer_refuses_unknown_options():
 
 
 def test_the_windows_installer_makes_both_commands_and_can_uninstall():
-    script = (PROJECT / "install.ps1").read_text()
+    script = (PROJECT / "install.ps1").read_text(encoding="utf-8")
     assert "$CommandNames = @('arty', 'arty-cli')" in script
     assert "[switch]$Uninstall" in script
     assert "DoNotExpandEnvironmentNames" in script
@@ -80,7 +80,7 @@ def test_the_debian_installer_refuses_plain_http_sources(tmp_path):
 
 
 def test_the_windows_installer_refuses_plain_http_sources():
-    script = (PROJECT / "install.ps1").read_text()
+    script = (PROJECT / "install.ps1").read_text(encoding="utf-8")
     assert "'^http://'" in script and "'^git\\+http://'" in script
 
 
@@ -107,7 +107,7 @@ def test_piped_from_the_web_the_installer_fetches_the_project_itself(tmp_path):
     log = tmp_path / "python.log"
     environment = {"PATH": f"{tools}:/usr/bin:/bin", "HOME": str(tmp_path / "home"), "FAKE_PYTHON_LOG": str(log),
                    "ARTY_CLI_HOME": str(tmp_path / "app"), "ARTY_CLI_BIN": str(tmp_path / "bin")}
-    script = (PROJECT / "install.sh").read_text()
+    script = (PROJECT / "install.sh").read_text(encoding="utf-8")
     ran = subprocess.run(["bash"], input=script, capture_output=True, text=True, env=environment, cwd=tmp_path)
     assert ran.returncode == 0, ran.stderr
     installed = [line for line in log.read_text().splitlines() if "pip install" in line and "arty-cli @" in line]
@@ -117,8 +117,8 @@ def test_piped_from_the_web_the_installer_fetches_the_project_itself(tmp_path):
 
 
 def test_the_readme_gives_a_one_line_install_that_matches_the_installer():
-    readme = (PROJECT / "README.md").read_text()
-    script = (PROJECT / "install.sh").read_text()
+    readme = (PROJECT / "README.md").read_text(encoding="utf-8")
+    script = (PROJECT / "install.sh").read_text(encoding="utf-8")
     one_liner = "curl -fsSL https://raw.githubusercontent.com/drew-codes-things/ArtyCode/main/install.sh | bash"
     assert one_liner in readme
     assert "sudo" not in one_liner
@@ -127,5 +127,5 @@ def test_the_readme_gives_a_one_line_install_that_matches_the_installer():
 
 
 def test_the_interface_library_is_installed_with_it():
-    project = tomllib.loads((PROJECT / "pyproject.toml").read_text())["project"]
+    project = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     assert [name.split(">")[0] for name in project["dependencies"]] == ["prompt_toolkit", "pygments"]

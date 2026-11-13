@@ -782,3 +782,17 @@ def test_a_later_window_has_a_header_but_no_outline(tmp_path):
     shown = tools.read_file(tools.Workspace(tmp_path), "steps.py", offset=301, limit=50).splitlines()
     assert shown[0] == "[steps.py: lines 301-350 of 464; 300 above, 114 below]"
     assert shown[1].startswith("301\t") and not any("Outline" in line for line in shown)
+
+
+BEYOND_ASCII = "café ✓ → ü"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell's output encoding is a Windows matter")
+def test_powershell_output_beyond_ascii_comes_back_unchanged(workspace):
+    assert BEYOND_ASCII in tools.run_command(workspace, f"Write-Output '{BEYOND_ASCII}'")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell's output encoding is a Windows matter")
+def test_a_program_writing_utf8_through_powershell_comes_back_unchanged(workspace):
+    script = f"import sys; sys.stdout.buffer.write({BEYOND_ASCII!r}.encode('utf-8'))"
+    assert BEYOND_ASCII in tools.run_command(workspace, f"{python_call('-c', script)} | Write-Output")

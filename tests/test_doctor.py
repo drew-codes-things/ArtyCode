@@ -1,5 +1,6 @@
 import io
 import os
+import sys
 import urllib.error
 from dataclasses import replace
 from pathlib import Path
@@ -80,7 +81,7 @@ def world(tmp_path, monkeypatch):
     settings.save(settings.Settings(base_url=HOME, remote_url=AWAY, api_key=KEY, access_client_secret=ACCESS_SECRET,
                                     access_client_id="access-id"), config)
     return doctor.World(environ={"XDG_CONFIG_HOME": str(tmp_path / "config"), "APPDATA": str(tmp_path / "config")},
-                        platform="linux", make_client=FakeClient, open_url=accepts,
+                        platform=sys.platform, make_client=FakeClient, open_url=accepts,
                         which=lambda name: f"/usr/bin/{name}", find_browser=lambda: "/usr/bin/chromium",
                         sandbox_problem=lambda root: "", terminal_size=lambda: os.terminal_size((120, 40)),
                         is_terminal=lambda: True)
@@ -120,6 +121,7 @@ def test_no_secret_is_ever_printed(world):
     assert "from anywhere" in line_about(shown, "answered")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
 def test_a_settings_file_others_can_read_is_a_cross_with_the_fix(world):
     path = settings.config_path(world.environ)
     path.chmod(0o644)

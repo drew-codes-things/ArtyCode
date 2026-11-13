@@ -4,6 +4,7 @@ import json
 import pytest
 
 from arty_cli import agent, checks, cli, context, conversation, prune, rules, sessions, tools
+from tests.portable import python_call
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
 
@@ -138,10 +139,10 @@ def test_a_long_job_is_pruned_without_a_summary_call_when_that_makes_room(projec
 
 
 def test_commands_are_recorded_with_what_they_showed(project):
-    brain = ScriptedBrain([[("run_command", {"command": "echo 3 passed"})], "Done."])
+    brain = ScriptedBrain([[("run_command", {"command": "echo '3 passed'"})], "Done."])
     session = session_for(project, brain)
     session.ask("run it")
-    assert session.done == ["run_command echo 3 passed: 3 passed (exit code 0)"]
+    assert session.done == ["run_command echo '3 passed': 3 passed (exit code 0)"]
 
 
 def forced_summary(project, monkeypatch):
@@ -152,7 +153,7 @@ def forced_summary(project, monkeypatch):
     monkeypatch.setattr(conversation.prune, "prune", lambda *given: None)
     brain = ScriptedBrain([
         [("write_file", {"path": "calc.py", "content": "def add(a, b):\n    return a + b\n"})],
-        [("run_command", {"command": "echo 1 failed, 2 passed; exit 1"})],
+        [("run_command", {"command": "echo '1 failed, 2 passed'; exit 1"})],
         [("read_file", {"path": "big.py"})],
         [("read_file", {"path": "big2.py"})],
         "Done.",
@@ -168,7 +169,7 @@ def test_after_a_summary_the_last_check_output_and_the_last_edited_file_are_carr
     session, brain, carried = forced_summary(project, monkeypatch)
     assert SUMMARY_MARK in brain.log
     assert "Made calc.py; tests run." in carried
-    assert "run_command echo 1 failed, 2 passed; exit 1: 1 failed, 2 passed (exit code 1)" in carried
+    assert "run_command echo '1 failed, 2 passed'; exit 1: 1 failed, 2 passed (exit code 1)" in carried
     assert "1 failed, 2 passed\n\n[exit code 1]" in carried
     assert "calc.py" in carried and "1\tdef add(a, b):\n2\t    return a + b" in carried
 
@@ -289,7 +290,7 @@ def saved_with_old_prompt(project) -> sessions.Saved:
 
 
 def test_a_resumed_conversation_gets_todays_system_prompt_checklist_and_undo(project):
-    (project / "calc.py").write_text("x = 1\n")
+    (project / "calc.py").write_bytes(b"x = 1\n")
     saved = saved_with_old_prompt(project)
     loaded = sessions.Store(project.parent / "sessions").load(project, saved.id)
     session = session_for(project, ScriptedBrain([]), saved=loaded)
@@ -337,13 +338,14 @@ def test_real_token_counts_from_the_brain_calibrate_the_estimate_and_warn_near_t
     assert "near the end of the model's context window" in session.terminal.err.getvalue()
 
 
+RUN_CALC = python_call("calc.py")
 REPORT = ("Outcome: DONE\nChanged: calc.py adds two numbers.\nVerification: python3 calc.py printed 5.\n"
           "Assumptions: plain functions, as the project has no classes.\nOpen items: none")
 
 
 def file_changing_task(project, level, steps=None):
     brain = ScriptedBrain(steps or [[("write_file", {"path": "calc.py", "content": "print(2 + 3)\n"})],
-                                    [("run_command", {"command": "python3 calc.py"})], REPORT])
+                                    [("run_command", {"command": RUN_CALC})], REPORT])
     session = session_for(project, brain)
     session.workspace.rules = rules.Rules(level)
     session.messages[0] = session.fresh()[0]
@@ -360,7 +362,7 @@ def test_with_the_rules_on_artycode_writes_the_history_entry_and_the_model_spend
     assert "Status: DONE" in lines and "Changed: calc.py" in lines
     assert "What: calc.py adds two numbers." in lines
     assert "Why: plain functions, as the project has no classes." in lines
-    assert "Verified by: run_command python3 calc.py: 5 (exit code 0)" in lines
+    assert f"Verified by: run_command {RUN_CALC}: 5 (exit code 0)" in lines
     assert "Left open: none" in lines and checks.EM_DASH not in entry
     assert not (project / ".arty" / "scratchpad.md").exists()
 
