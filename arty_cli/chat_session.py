@@ -1,7 +1,7 @@
 import socket
 
-from arty_cli import (commands, context, helpers, hooks, mcp, mcp_sign_in, memory, models, permissions, providers,
-                      remote, rules, screen, sessions, settings, sign_ins, skills, suggest, tools)
+from arty_cli import (commands, context, helpers, hooks, mcp, mcp_sign_in, memory, models, oauth, permissions,
+                      providers, remote, rules, screen, sessions, settings, sign_ins, skills, suggest, tools, view)
 from arty_cli.conversation import NOTE_ACK, RESUME, SUMMARY_ACK, SUMMARY_LEADS, TODO_MARKS, Conversation
 
 SESSIONS_FOLDER = "sessions"
@@ -70,6 +70,7 @@ REMOTE_NAME_NEEDS_SHARING = "Turn remote control on with /remote first, then ren
 REMOTE_NAME = "name"
 MCP_USAGE = "Use /mcp, /mcp add [service or https address] [name], /mcp login <name> or /mcp remove <name>."
 SIGN_IN_AGAIN_CHOICES = (("y", "Yes, open the sign-in page"), ("n", "Not now"))
+SIGN_IN_TROUBLE = (mcp_sign_in.SignInStopped, sign_ins.SignInError, oauth.OAuthError, mcp.McpError, OSError)
 
 
 class Session(Conversation):
@@ -180,7 +181,7 @@ class Session(Conversation):
         hint = f" (/mcp login {state.name})" if state.status == mcp.NEEDS_SIGN_IN else ""
         self.terminal.note(f"{state.name} ({state.source}): {state.status}{hint}", "error")
         if state.problem and state.status != mcp.NEEDS_SIGN_IN:
-            self.terminal.note(f"  {state.problem}")
+            self.terminal.note(f"  {view.readable(state.problem)}")
 
     def offer_sign_in_again(self, names: list[str]) -> None:
         if not names or self.remote or not screen.is_interactive():
@@ -231,8 +232,8 @@ class Session(Conversation):
         store = sign_ins.Store(self.personal)
         try:
             config = sign_in(store)
-        except (mcp_sign_in.SignInStopped, sign_ins.SignInError) as error:
-            self.terminal.note(f"{error} Nothing was saved.", "error")
+        except SIGN_IN_TROUBLE as error:
+            self.terminal.note(view.readable(f"{error} Nothing was saved."), "error")
             return
         hub = self.extras.hub
         if hub is None:
@@ -240,16 +241,17 @@ class Session(Conversation):
             return
         hub.sign_ins = hub.sign_ins or store
         for problem in hub.restart(config):
-            self.terminal.note(problem, "error")
+            self.terminal.note(view.readable(problem), "error")
         for state in hub.states():
             if state.name == config.name:
                 self.show_mcp_state(state)
 
     def remove_mcp_service(self, name: str) -> None:
         try:
-            gone = mcp_sign_in.removed(self.terminal, self.personal, name, sign_ins.Store(self.personal))
-        except (mcp_sign_in.SignInStopped, sign_ins.SignInError) as error:
-            self.terminal.note(str(error), "error")
+            gone = mcp_sign_in.removed(self.terminal, self.personal, name, sign_ins.Store(self.personal),
+                                       self.sign_in_world().fetch)
+        except SIGN_IN_TROUBLE as error:
+            self.terminal.note(view.readable(str(error)), "error")
             return
         hub = self.extras.hub
         config = hub.config_of(name) if hub is not None and gone else None

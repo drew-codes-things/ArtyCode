@@ -138,3 +138,54 @@ def test_the_finish_check_can_be_switched_off_from_the_environment(tmp_path):
 def test_a_finish_check_setting_that_is_not_on_or_off_says_where_to_fix_it():
     with pytest.raises(settings.SettingsError, match="ARTY_CLI_FINISH_CHECK"):
         settings.is_on(settings.Settings(finish_check="sometimes"), "finish_check")
+
+
+def flaky_replace(monkeypatch, failures: int) -> list:
+    attempts = []
+    real_replace = os.replace
+
+    def replace(source, target):
+        attempts.append(target)
+        if len(attempts) <= failures:
+            raise PermissionError(13, "The process cannot access the file because it is being used", str(target))
+        real_replace(source, target)
+
+    monkeypatch.setattr(settings.os, "replace", replace)
+    monkeypatch.setattr(settings.time, "sleep", lambda seconds: None)
+    return attempts
+
+
+def test_on_windows_a_file_held_open_for_a_moment_is_replaced_once_it_is_free(tmp_path, monkeypatch):
+    source, target = tmp_path / "new.json", tmp_path / "saved.json"
+    source.write_text("new")
+    target.write_text("old")
+    attempts = flaky_replace(monkeypatch, 2)
+    settings.replaced(source, target, platform="win32")
+    assert len(attempts) == 3 and target.read_text() == "new" and not source.exists()
+
+
+def test_on_windows_a_file_that_stays_locked_still_fails_in_the_end(tmp_path, monkeypatch):
+    source, target = tmp_path / "new.json", tmp_path / "saved.json"
+    source.write_text("new")
+    attempts = flaky_replace(monkeypatch, settings.REPLACE_ATTEMPTS)
+    with pytest.raises(PermissionError):
+        settings.replaced(source, target, platform="win32")
+    assert len(attempts) == settings.REPLACE_ATTEMPTS
+
+
+def test_elsewhere_a_refused_replace_is_not_tried_again(tmp_path, monkeypatch):
+    source, target = tmp_path / "new.json", tmp_path / "saved.json"
+    source.write_text("new")
+    attempts = flaky_replace(monkeypatch, 1)
+    with pytest.raises(PermissionError):
+        settings.replaced(source, target, platform="linux")
+    assert len(attempts) == 1
+
+
+def test_writing_private_json_goes_through_the_retrying_replace(tmp_path, monkeypatch):
+    attempts = flaky_replace(monkeypatch, 1)
+    retrying = settings.replaced
+    monkeypatch.setattr(settings, "replaced", lambda source, target: retrying(source, target, platform="win32"))
+    target = tmp_path / "saved.json"
+    settings.write_private_json(target, {"a": 1})
+    assert json.loads(target.read_text()) == {"a": 1} and len(attempts) == 2

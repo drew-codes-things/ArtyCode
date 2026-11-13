@@ -1,4 +1,8 @@
+import html
+import http.server
 import json
+import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -144,16 +148,68 @@ def test_the_callback_takes_the_code_when_the_state_matches():
         callback.close()
 
 
-def test_a_state_mismatch_is_refused():
+def test_a_stray_answer_with_the_wrong_state_is_refused_and_the_real_one_still_finishes():
     callback = oauth.Callback()
     callback.listen("the-state")
     try:
-        status, page = callback_answer(f"{callback.redirect_uri}?code=abc&state=forged")
-        assert status == 400 and "doesn't match" in page
-        with pytest.raises(oauth.OAuthError, match="doesn't match"):
-            callback.wait(1)
+        status, page = callback_answer(f"{callback.redirect_uri}?code=junk&state=forged")
+        assert status == 400 and "match the sign-in" in page
+        assert not callback.finished()
+        status, page = callback_answer(f"{callback.redirect_uri}?code=real&state=the-state")
+        assert status == 200 and "Signed in" in page
+        assert callback.wait(1) == "real"
     finally:
         callback.close()
+
+
+def test_an_answer_without_any_state_does_not_end_the_sign_in():
+    callback = oauth.Callback()
+    callback.listen("the-state")
+    try:
+        assert callback_answer(f"{callback.redirect_uri}?error=access_denied")[0] == 400
+        with pytest.raises(oauth.OAuthError, match="wasn't finished"):
+            callback.wait(0.3)
+    finally:
+        callback.close()
+
+
+def test_an_idle_connection_neither_blocks_the_real_answer_nor_stops_close():
+    callback = oauth.Callback()
+    callback.listen("the-state")
+    idle = socket.create_connection((oauth.LOOPBACK_HOST, callback.port))
+    try:
+        time.sleep(0.2)
+        status, _page = callback_answer(f"{callback.redirect_uri}?code=real&state=the-state")
+        assert status == 200 and callback.wait(1) == "real"
+        closer = threading.Thread(target=callback.close, daemon=True)
+        started = time.monotonic()
+        closer.start()
+        closer.join(3)
+        assert not closer.is_alive() and time.monotonic() - started < 3
+    finally:
+        idle.close()
+
+
+def test_the_callback_waits_only_so_long_for_a_silent_connection():
+    assert 0 < oauth.CALLBACK_REQUEST_SECONDS <= 30
+    callback = oauth.Callback()
+    try:
+        assert callback.server.daemon_threads and not callback.server.block_on_close
+        assert callback.server.RequestHandlerClass.timeout == oauth.CALLBACK_REQUEST_SECONDS
+    finally:
+        callback.close()
+
+
+def test_the_refused_page_never_repeats_markup_from_the_address():
+    callback = oauth.Callback()
+    callback.listen("s")
+    markup = "<script>document.title='ran'</script>"
+    query = urllib.parse.urlencode({"state": "s", "error": "x", "error_description": markup})
+    try:
+        status, page = callback_answer(f"{callback.redirect_uri}?{query}")
+    finally:
+        callback.close()
+    assert status == 400 and markup not in page and html.escape(markup) in page
 
 
 def test_a_turned_down_sign_in_says_so():
@@ -259,3 +315,276 @@ def test_a_client_secret_goes_where_registration_said():
 def test_www_authenticate_parameters_are_read():
     found = oauth.challenge_parameters('Bearer realm="OAuth", resource_metadata="https://a/b", scope="read write", x=y')
     assert found == {"realm": "OAuth", "resource_metadata": "https://a/b", "scope": "read write", "x": "y"}
+
+
+def canned(table: dict):
+    asked = []
+
+    def fetch(url, data=None, headers=None, method=None):
+        asked.append((method, url))
+        if url not in table:
+            return 404, {}, b"{}"
+        status, body = table[url]
+        return status, {}, body if isinstance(body, bytes) else json.dumps(body).encode()
+
+    fetch.asked = asked
+    return fetch
+
+
+REMOTE = "https://mcp.remote.example/mcp"
+REMOTE_ISSUER = "https://mcp.remote.example"
+
+
+def remote_metadata(**changes) -> dict:
+    return {"issuer": REMOTE_ISSUER, "code_challenge_methods_supported": ["S256"],
+            "authorization_endpoint": f"{REMOTE_ISSUER}/authorize", "token_endpoint": f"{REMOTE_ISSUER}/token",
+            "registration_endpoint": f"{REMOTE_ISSUER}/register", **changes}
+
+
+def remote_world(resource: dict | None = None, **metadata_changes):
+    return canned({
+        REMOTE: (401, b""),
+        f"{REMOTE_ISSUER}/.well-known/oauth-protected-resource/mcp": (
+            200, resource if resource is not None else {"resource": REMOTE, "authorization_servers": [REMOTE_ISSUER]}),
+        f"{REMOTE_ISSUER}/.well-known/oauth-authorization-server": (200, remote_metadata(**metadata_changes)),
+    })
+
+
+@pytest.mark.parametrize("endpoint", [
+    "http://127.0.0.1:8080/api/v1/containers/create",
+    "https://127.0.0.1/register",
+    "https://127.1/register",
+    "https://0.0.0.0/register",
+    "https://10.1.2.3/register",
+    "https://192.168.1.1/register",
+    "https://169.254.169.254/latest/meta-data/",
+    "https://[::1]/register",
+    "https://[fd00:ec2::254]/register",
+    "https://[fe80::1]/register",
+    "https://100.100.100.200/register",
+    "https://metadata.google.internal/register",
+    "https://router/register",
+    "https://printer.local/register",
+    "https://localhost/register",
+])
+def test_a_remote_server_cannot_point_its_sign_in_at_this_computer_or_a_private_network(endpoint):
+    fetch = remote_world(registration_endpoint=endpoint)
+    with pytest.raises(oauth.OAuthError, match="registration address"):
+        oauth.discover(REMOTE, fetch)
+    assert all(method == "GET" or url == REMOTE for method, url in fetch.asked)
+
+
+def test_a_remote_server_cannot_send_discovery_to_this_computer():
+    def fetch(url, data=None, headers=None, method=None):
+        return 401, {"WWW-Authenticate": 'Bearer resource_metadata="https://127.0.0.1:9/prm"'}, b""
+
+    with pytest.raises(oauth.OAuthError, match="resource metadata address"):
+        oauth.discover(REMOTE, fetch)
+    with pytest.raises(oauth.OAuthError, match="sign-in server address"):
+        oauth.discover(REMOTE, remote_world({"resource": REMOTE, "authorization_servers": ["https://10.0.0.1"]}))
+
+
+def test_a_server_on_this_computer_may_sign_in_on_this_computer(provider):
+    found, url = provider
+    assert oauth.discover(url).registration_endpoint == f"{found.base}/register"
+
+
+def test_a_public_sign_in_server_is_still_accepted():
+    discovery = oauth.discover(REMOTE, remote_world(token_endpoint="https://id.other.example/token"))
+    assert discovery.token_endpoint == "https://id.other.example/token"
+
+
+class Redirecting(http.server.BaseHTTPRequestHandler):
+    hits = []
+
+    def log_message(self, *args):
+        return None
+
+    def do_GET(self):
+        Redirecting.hits.append(self.path)
+        if self.path == "/target":
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
+        self.send_response(302)
+        self.send_header("Location", "/target")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+def serving(handler):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def test_oauth_requests_never_follow_a_redirect():
+    Redirecting.hits.clear()
+    server, base = serving(Redirecting)
+    try:
+        status, headers, _body = oauth.fetched(f"{base}/prm", None, {"Accept": "application/json"}, "GET")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 302 and oauth.header(headers, "Location") == "/target"
+    assert Redirecting.hits == ["/prm"]
+
+
+class Endless(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        return None
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        chunk = b" " * 65536
+        try:
+            for _ in range(64):
+                self.wfile.write(chunk)
+        except OSError:
+            return
+
+
+def test_an_answer_bigger_than_a_megabyte_is_not_read_whole():
+    server, base = serving(Endless)
+    try:
+        with pytest.raises(oauth.OAuthError, match="more than 1024 KB"):
+            oauth.fetched(f"{base}/.well-known/oauth-protected-resource")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def cut_short_server():
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+
+    def serve():
+        while True:
+            try:
+                connection, _address = listener.accept()
+            except OSError:
+                return
+            connection.recv(65536)
+            connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 500\r\n\r\n{\"acc")
+            connection.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return listener, f"http://127.0.0.1:{listener.getsockname()[1]}/token"
+
+
+def test_an_answer_cut_short_is_a_reach_problem_not_a_crash():
+    listener, address = cut_short_server()
+    try:
+        with pytest.raises(oauth.Unavailable, match="Couldn't reach"):
+            oauth.fetched(address, b"x", {}, "POST")
+    finally:
+        listener.close()
+
+
+def test_an_address_urllib_cannot_use_is_an_oauth_error():
+    with pytest.raises(oauth.OAuthError):
+        oauth.fetched("http://[::1/x")
+
+
+@pytest.mark.parametrize("resource, metadata_changes", [
+    ({"resource": REMOTE, "authorization_servers": [REMOTE_ISSUER], "scopes_supported": [1, 2]}, {}),
+    ({"resource": REMOTE, "authorization_servers": [REMOTE_ISSUER], "scopes_supported": "read"}, {}),
+    ({"resource": REMOTE, "authorization_servers": [REMOTE_ISSUER]}, {"code_challenge_methods_supported": 7}),
+    ({"resource": REMOTE, "authorization_servers": [["x"]]}, {}),
+    ({"resource": REMOTE, "authorization_servers": "https://mcp.remote.example"}, {}),
+    ({"resource": 5, "authorization_servers": [REMOTE_ISSUER]}, {}),
+    ({"resource": REMOTE, "authorization_servers": [REMOTE_ISSUER]}, {"issuer": ["x"]}),
+])
+def test_metadata_of_the_wrong_shape_is_refused_plainly(resource, metadata_changes):
+    with pytest.raises(oauth.OAuthError):
+        oauth.discover(REMOTE, remote_world(resource, **metadata_changes))
+
+
+def test_a_resource_metadata_hint_with_a_bad_port_is_refused_plainly():
+    def fetch(url, data=None, headers=None, method=None):
+        return 401, {"WWW-Authenticate": 'Bearer resource_metadata="https://mcp.remote.example:port/x"'}, b""
+
+    with pytest.raises(oauth.OAuthError, match="resource metadata address"):
+        oauth.discover(REMOTE, fetch)
+
+
+@pytest.mark.parametrize("address", [
+    "https://mcp.example/authorize\x1b]0;owned\x07",
+    "https://mcp.example/authorize\x1b[2J",
+    "https://mcp.example/a\nb",
+    "https://mcp.example/a\x9bb",
+    "https://user@mcp.example/authorize",
+    "https://trusted.example@evil.example/authorize",
+])
+def test_addresses_with_control_characters_or_a_user_part_are_refused(address):
+    assert not oauth.is_safe_address(address)
+    with pytest.raises(oauth.OAuthError):
+        oauth.checked_address(address, "sign-in page address")
+
+
+def test_a_busy_or_broken_sign_in_server_is_unavailable_not_a_refusal():
+    for status in (429, 500, 503):
+        fetch = answers({"https://id.example/token": (status, {"error": "temporarily_unavailable"}, {})})
+        with pytest.raises(oauth.Unavailable):
+            oauth.refreshed("https://id.example/token", "r", oauth.Client("c", "", "none"), "x", fetch)
+    fetch = answers({"https://id.example/token": (400, {"error": "invalid_grant"}, {})})
+    with pytest.raises(oauth.OAuthError) as raised:
+        oauth.refreshed("https://id.example/token", "r", oauth.Client("c", "", "none"), "x", fetch)
+    assert not isinstance(raised.value, oauth.Unavailable)
+
+
+def test_a_network_failure_is_unavailable():
+    with pytest.raises(oauth.Unavailable):
+        oauth.fetched("http://127.0.0.1:9/token", b"", {}, "POST")
+
+
+def id_token(claims: dict) -> str:
+    def part(data: dict) -> str:
+        return oauth.base64_url(json.dumps(data).encode())
+
+    return f"{part({'alg': 'none'})}.{part(claims)}.sig"
+
+
+def test_the_account_comes_from_the_id_token_or_the_token_answer_when_the_service_says():
+    with_id = {"access_token": "a", "id_token": id_token({"email": "me@example.com", "sub": "1"})}
+    assert oauth.tokens_from(200, with_id, "", lambda: 0.0).account == "me@example.com"
+    assert oauth.tokens_from(200, {"access_token": "a", "preferred_username": "drew"}, "", lambda: 0.0).account == "drew"
+    assert oauth.tokens_from(200, {"access_token": "a", "id_token": "not.a.jwt!"}, "", lambda: 0.0).account == ""
+    assert oauth.tokens_from(200, {"access_token": "a"}, "", lambda: 0.0).account == ""
+
+
+def test_a_huge_lifetime_does_not_crash():
+    tokens = oauth.tokens_from(200, {"access_token": "a", "expires_in": 10 ** 400}, "", lambda: 0.0)
+    assert tokens.expires_at == oauth.LONGEST_LIFETIME_SECONDS
+
+
+def test_revoking_sends_the_token_with_its_hint_to_the_advertised_address():
+    sent = []
+
+    def fetch(url, data=None, headers=None, method=None):
+        sent.append((url, dict(urllib.parse.parse_qsl(data.decode()))))
+        return 200, {}, b""
+
+    oauth.revoked("https://id.example/revoke", "https://mcp.example/mcp", oauth.Client("c", "", "none"), "r1",
+                  "refresh_token", fetch)
+    assert sent == [("https://id.example/revoke", {"token": "r1", "token_type_hint": "refresh_token", "client_id": "c"})]
+    with pytest.raises(oauth.OAuthError):
+        oauth.revoked("https://10.0.0.1/revoke", "https://mcp.example/mcp", oauth.Client("c", "", "none"), "r1",
+                      "refresh_token", fetch)
+
+
+@pytest.mark.parametrize("address", ["https://[", "http://[::1/x", "https://a:99999/x", "https://a:port/x"])
+def test_an_address_that_cannot_be_read_is_unsafe_rather_than_a_crash(address):
+    assert not oauth.is_safe_address(address) and oauth.host_of(address) == "" and oauth.comparable(address) == ""
+    with pytest.raises(oauth.WrongAnswer):
+        oauth.code_from_address(address, "s")
+
+
+def test_a_resource_that_cannot_be_read_is_refused_plainly():
+    with pytest.raises(oauth.OAuthError, match="isn't the address you gave"):
+        oauth.discover(REMOTE, remote_world({"resource": "https://[", "authorization_servers": [REMOTE_ISSUER]}))
