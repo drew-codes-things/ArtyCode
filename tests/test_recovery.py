@@ -342,3 +342,15 @@ def test_a_missed_deletion_is_not_reported_as_already_made(project):
     tools.read_file(workspace, "calc.py")
     found = tools.run("edit_file", {"path": "calc.py", "old_text": "x = 10\ny = 2", "new_text": "y = 2"}, workspace)
     assert found.startswith("Error") and tools.ALREADY_MADE_LEAD not in found
+
+
+def test_an_edit_whose_new_text_equals_old_text_says_nothing_changed(project):
+    (project / "calc.py").write_text(PARSE_ATOM)
+    workspace = tools.Workspace(project)
+    tools.read_file(workspace, "calc.py")
+    same = PARSE_ATOM.split("\n        self.pos")[0]
+    found = tools.run("edit_file", {"path": "calc.py", "old_text": same, "new_text": same}, workspace)
+    assert found.startswith("Error") and tools.NOTHING_CHANGED in found
+    many = tools.run("multi_edit", {"path": "calc.py", "edits": [{"old_text": same, "new_text": same}]}, workspace)
+    assert many.startswith("Error") and tools.NOTHING_CHANGED in many
+    assert not workspace.checkpoints
