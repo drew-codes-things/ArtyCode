@@ -1873,3 +1873,44 @@ def test_an_older_prefix_for_a_powershell_command_that_runs_code_covers_nothing(
     gate.rules = rules(allow=[permissions.prefix_rule(prefix)])
     assert not gate.allows("run_command", {"command": prefix + " x"})
     assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("deny, command", [
+    ("run_command(Remove-Item:*)", "remove-item x"), ("run_command(Remove-Item:*)", "REMOVE-ITEM x"),
+    ("run_command(Remove-Item:*)", "ri x"), ("run_command(Remove-Item:*)", "del x"),
+    ("run_command(Remove-Item:*)", "rm x"), ("run_command(Remove-Item:*)", "erase x"),
+    ("run_command(Remove-Item:*)", "rd x"), ("run_command(Remove-Item:*)", "rmdir x"),
+    ("run_command(Remove-Item:*)", "RI x"), ("run_command(Remove-Item:*)", "Get-ChildItem; Del x"),
+    ("run_command(Remove-Item:*)", "Microsoft.PowerShell.Management\\Remove-Item x"),
+    ("run_command(remove-item:*)", "Remove-Item x"), ("run_command(rm:*)", "Remove-Item -Recurse x"),
+    ("run_command(del:*)", "ri x"), ("run_command(Remove-Item *)", "erase x"),
+    ("run_command(Invoke-WebRequest:*)", "iwr https://example.com"),
+    ("run_command(Invoke-WebRequest:*)", "curl https://example.com"),
+    ("run_command(Invoke-WebRequest:*)", "WGET https://example.com"),
+    ("run_command(iwr *)", "Invoke-WebRequest https://example.com"),
+    ("run_command(Start-Process:*)", "saps notepad"), ("run_command(Start-Process:*)", "start notepad"),
+    ("run_command(Invoke-Expression:*)", "IEX x"), ("run_command(Set-Content:*)", "sc a.txt x"),
+    ("run_command(Copy-Item:*)", "cp a b"), ("run_command(Move-Item:*)", "mv a b"),
+    ("run_command(Stop-Process:*)", "kill 4"), ("run_command(Get-Content:*)", "type a.py"),
+    ("run_command(Tee-Object:*)", "tee x.txt"), ("run_command(New-Item:*)", "md build"),
+])
+def test_on_windows_a_deny_rule_matches_any_letters_and_the_built_in_aliases(workspace, monkeypatch, deny, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=[deny])
+    assert gate.check("run_command", {"command": command}) == permissions.RULE_DENIED
+
+
+@pytest.mark.parametrize("command", ["Remove-ItemProperty HKCU:/x y", "Get-ChildItem", "rename-item a b", "ls"])
+def test_on_windows_a_deny_rule_still_leaves_other_commands_alone(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(Remove-Item:*)"])
+    assert gate.check("run_command", {"command": command}) is None
+
+
+def test_off_windows_a_deny_rule_still_matches_the_name_as_written(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(Remove-Item:*)"])
+    assert gate.check("run_command", {"command": "rm x"}) is None

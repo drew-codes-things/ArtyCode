@@ -88,7 +88,9 @@ to the project), the command, the address or the list pattern. A command pattern
 `run_command(npm test:*)`, is a prefix: it matches any command whose first words are those words. Deny wins over
 everything, including `allow-all` and hooks, and is checked against each part of a chained command and against the
 program each part runs, also behind a path (`/bin/rm`), a setting (`X=1 rm`), a shell keyword or a program that starts
-another (`sudo`, `xargs`, `bash -c`). It is still a match on the command's words, not on what a program does:
+another (`sudo`, `xargs`, `bash -c`). On Windows the program is matched in any letters, behind a module name, and
+through PowerShell's built-in aliases, so `run_command(Remove-Item:*)` also stops `remove-item`, `ri`, `del`, `rm`,
+`erase`, `rd` and `rmdir` (and `run_command(rm:*)` stops `Remove-Item`). It is still a match on the command's words, not on what a program does:
 `find -delete` or a script that removes files is not caught by `run_command(rm *)`, so a command deny rule stops the usual
 ways of running that program, not every way of doing what it does. While any `run_command` deny rule is set, a command
 ArtyCode can't read through (a `$` or backtick expansion, brackets or braces, `<`, `>` into a file, a `#` comment, or a

@@ -160,6 +160,20 @@ POWERSHELL_CHANGING = {"remove-item", "ri", "del", "erase", "rd", "new-item", "n
                        "invoke-restmethod", "irm", "stop-process", "spps", "cli", "md", "clear-itemproperty", "clp",
                        "move-itemproperty", "mp", "copy-itemproperty", "cpp", "rename-itemproperty", "rnp",
                        "tee-object", "start-bitstransfer"}
+POWERSHELL_ALIAS_FAMILIES = {
+    "remove-item": ("ri", "rm", "rmdir", "del", "erase", "rd"), "new-item": ("ni", "md", "mkdir"),
+    "move-item": ("mi", "mv", "move"), "copy-item": ("cpi", "cp", "copy"), "rename-item": ("rni", "ren"),
+    "set-content": ("sc",), "add-content": ("ac",), "clear-content": ("clc",), "set-item": ("si",),
+    "clear-item": ("cli",), "set-itemproperty": ("sp",), "remove-itemproperty": ("rp",),
+    "clear-itemproperty": ("clp",), "move-itemproperty": ("mp",), "copy-itemproperty": ("cpp",),
+    "rename-itemproperty": ("rnp",), "invoke-webrequest": ("iwr", "curl", "wget"), "invoke-restmethod": ("irm",),
+    "stop-process": ("spps", "kill"), "start-process": ("saps", "start"), "invoke-expression": ("iex",),
+    "invoke-command": ("icm",), "invoke-item": ("ii",), "start-job": ("sajb",), "tee-object": ("tee",),
+    "set-alias": ("sal",), "new-alias": ("nal",), "import-module": ("ipmo",), "get-content": ("gc", "cat", "type"),
+    "get-childitem": ("gci", "ls", "dir"), "select-string": ("sls",), "get-location": ("gl", "pwd"),
+}
+POWERSHELL_COMMAND_OF_ALIAS = {alias: command for command, family in POWERSHELL_ALIAS_FAMILIES.items()
+                               for alias in family}
 NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS | POWERSHELL_LAUNCHERS
 EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | POWERSHELL_CHANGING | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
@@ -701,6 +715,22 @@ def rule_matches(rule: str, name: str, targets: list[str]) -> bool:
     return parts[1] is None or any(fnmatch.fnmatchcase(target, parts[1].strip()) for target in targets)
 
 
+def powershell_spelling(command: str) -> str:
+    program, _space, rest = command.strip().partition(" ")
+    name = program_name(program)
+    return " ".join(filter(None, [POWERSHELL_COMMAND_OF_ALIAS.get(name, name), rest.lower()]))
+
+
+def powershell_rule(rule: str) -> str:
+    parts = rule_parts(rule)
+    if parts is None or parts[1] is None:
+        return rule
+    pattern = parts[1].strip()
+    if pattern.endswith(PREFIX_RULE_END):
+        return f"{parts[0]}({powershell_spelling(pattern.removesuffix(PREFIX_RULE_END))}{PREFIX_RULE_END})"
+    return f"{parts[0]}({powershell_spelling(pattern)})"
+
+
 def without_settings_and_keywords(words: list[str]) -> list[str]:
     while words and (ENVIRONMENT_SETTING.match(words[0]) or words[0] in SHELL_KEYWORDS):
         words = words[1:]
@@ -778,7 +808,12 @@ class Rules:
     def denies(self, name: str, target: str) -> bool:
         targets = [target] + ([part.strip() for part in COMMAND_PARTS.split(target) if part.strip()]
                               + program_runs(target) if name == "run_command" else [])
-        return any(rule_matches(rule, name, targets) for rule in self.deny)
+        if any(rule_matches(rule, name, targets) for rule in self.deny):
+            return True
+        if name != "run_command" or sys.platform != "win32":
+            return False
+        spelled = [powershell_spelling(each) for each in targets]
+        return any(rule_matches(powershell_rule(rule), name, spelled) for rule in self.deny)
 
     def denies_commands(self) -> bool:
         return any(parts is not None and parts[1] is not None and fnmatch.fnmatchcase("run_command", parts[0])
