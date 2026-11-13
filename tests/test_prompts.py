@@ -45,3 +45,16 @@ def test_the_model_is_told_to_check_its_own_work_and_say_what_it_could_not_check
     prompt = prompts.system_prompt(tools.Workspace(tmp_path))
     assert "check it yourself" in prompt and "run the script with sample input" in prompt
     assert "what you ran to check it and what that showed" in prompt and "could not be checked" in prompt
+
+
+def test_the_model_is_told_to_look_up_what_it_is_not_sure_of_before_writing_code(tmp_path):
+    prompt = prompts.system_prompt(tools.Workspace(tmp_path))
+    assert "Knowing:" in prompt
+    assert "Not certain of a library, function, flag, error message or version? web_search, then web_fetch" in prompt
+    assert "don't give a version from memory" in prompt
+
+
+def test_the_model_is_told_never_to_invent_a_function_or_flag_and_to_say_what_it_cannot_confirm(tmp_path):
+    prompt = prompts.system_prompt(tools.Workspace(tmp_path))
+    assert "Never invent a function, flag or package" in prompt
+    assert "if you can't confirm one exists, say so plainly" in prompt
