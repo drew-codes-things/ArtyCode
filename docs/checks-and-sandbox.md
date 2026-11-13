@@ -34,7 +34,10 @@ usual:
   made a new repository, look at `.git/config` and `.git/hooks` before you run git there yourself.
 - Windows: an AppContainer and a Job Object. The command can change only the project folder (it starts in a
   `Project:` drive there), can't read your user folder, and everything it started ends with it. A project folder that
-  holds your whole user folder is refused. Programs installed only for you (under `AppData`) can't be run inside it.
+  holds your whole user folder is refused. A program only runs inside it when app containers may read its folder
+  (`ALL APPLICATION PACKAGES` in the folder's permissions). `Program Files` allows that, so Python installed for all
+  users works; programs installed only for you (under `AppData`), a virtual environment outside the project, or a
+  folder with permissions of its own can't be run inside it (`icacls <folder>` shows them).
 - No network unless you also set `"sandboxNetwork": true` in your own `settings.json`.
 
 It is off by default. When it can't run (no `bwrap`, or a container that blocks it) ArtyCode says so and runs commands
