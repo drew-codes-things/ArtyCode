@@ -1175,3 +1175,35 @@ def test_a_carriage_return_makes_a_command_unreadable_so_it_asks(workspace, monk
     gate.always.add(permissions.SESSION_PREFIX_MARK + "git status")
     assert not gate.allows("run_command", {"command": command})
     assert len(ask.questions) == 1
+
+
+@pytest.fixture
+def option_named_files(workspace):
+    for name in ("-delete", "--pre", "-pmalicious"):
+        (workspace.root / name).write_text("x\n")
+    return workspace
+
+
+@pytest.mark.parametrize("command", ["find . -delet?", "find . -[d]elete", "find . *", "rg --pr[e] sh x a.py",
+                                     "ls -la *"])
+def test_a_wildcard_that_bash_would_turn_into_an_option_asks_and_is_refused_in_plan_mode(option_named_files, command):
+    ask = Asker("n")
+    assert not permissions.Gate(option_named_files, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(option_named_files, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+def test_a_prefix_never_covers_a_wildcard_that_bash_would_turn_into_an_option(option_named_files):
+    ask = Asker("n")
+    gate = permissions.Gate(option_named_files, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "python3 -m pytest")
+    assert not gate.allows("run_command", {"command": "python3 -m pytest *"})
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("command", ["ls *.py", "find . -name '*.py'", "cat ./*", "grep -n x -- *"])
+def test_wildcards_that_only_match_ordinary_names_still_need_no_question(option_named_files, command):
+    ask = Asker()
+    assert permissions.Gate(option_named_files, ask).allows("run_command", {"command": command})
+    assert ask.questions == []
