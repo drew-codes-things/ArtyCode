@@ -418,9 +418,15 @@ def gh_option_asks(words: list[str]) -> bool:
 
 
 def gh_word_asks(word: str) -> bool:
-    if any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS):
+    if any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS) or has_unusual_spacing(word):
         return True
-    return gh_option_opens_writes_or_waits(word) or names_another_host(gh_value(word))
+    if gh_option_opens_writes_or_waits(word):
+        return True
+    return names_another_host(gh_value(word)) or names_another_host(word.lstrip("-"))
+
+
+def has_unusual_spacing(word: str) -> bool:
+    return any(not character.isprintable() or (character.isspace() and character != " ") for character in word)
 
 
 def gh_option_opens_writes_or_waits(word: str) -> bool:

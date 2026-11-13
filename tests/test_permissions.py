@@ -1427,6 +1427,8 @@ ASKING_GH = [
     "sudo gh pr view 1", "gh pr view -[w]", "gh pr view 1 \"--web\"", "gh pr view 1 '-w'",
     "g\\h pr view 1 --web", "gh pr view 1\rtouch x",
     "gh pr list -R evil.example:443/r", "gh repo view evil.example:443/r", "gh pr list --repo=evil.example:8080/r",
+    "gh pr view 1 -R --evil.example/o/r=", "gh repo view -- --evil.example/o/r=",
+    "gh pr list -R 'git@evil.example\u00a0:o/r'", "gh pr list --search 'x\u2028y'",
 ]
 
 
