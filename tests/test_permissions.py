@@ -739,6 +739,8 @@ def test_always_for_a_command_covers_its_variants_and_the_question_says_which(wo
     "python3 -m pytest | tail -5 /etc/passwd", "python3 -m pytest | grep -f /etc/shadow", "python3 -m pip install x",
     "python3 -m pytest\nrm -rf build", "python3 -m pytest & rm -rf build", "(python3 -m pytest)",
     "python3 -m pytest | grep x > found.txt", "python3 -c 'import os' -m pytest", "python3 -m pytest < /etc/passwd",
+    "python3 -m pytest | egrep -R token .", "python3 -m pytest | fgrep -R token .",
+    "python3 -m pytest | egrep --dereference-recursive token .",
 ])
 def test_a_command_prefix_never_covers_anything_else_hidden_in_the_command(workspace, command):
     ask = Asker("a")

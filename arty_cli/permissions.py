@@ -29,7 +29,9 @@ BRANCH_LISTING_FLAGS = {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbos
                         "--no-abbrev", "--omit-empty", "-q", "--quiet"}
 BRANCH_FILTERS = {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
 BRANCH_LIST_ONLY = {"-l", "--list"}
-LINK_FOLLOWING_FLAGS = {"grep": ("R", ("--dereference-recursive",)), "rg": ("L", ("--follow",)),
+GREP_LINK_FOLLOWING = ("R", ("--dereference-recursive",))
+LINK_FOLLOWING_FLAGS = {"grep": GREP_LINK_FOLLOWING, "egrep": GREP_LINK_FOLLOWING, "fgrep": GREP_LINK_FOLLOWING,
+                        "rg": ("L", ("--follow",)),
                         "ls": ("L", ("--dereference",)), "du": ("L", ("--dereference",)),
                         "tree": ("loRH", ("--o",)), "file": ("C", ("--compile",)), "diff": ("r", ("--recursive",))}
 FIND_LINK_FOLLOWING = {"-L", "-follow"}
