@@ -1,6 +1,7 @@
 import difflib
 import fnmatch
 import glob
+import itertools
 import json
 import os
 import re
@@ -24,6 +25,9 @@ READ_ONLY_GIT = {"status", "diff", "log", "show", "branch", "blame", "rev-parse"
 FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 RG_RUNNING_OPTIONS = ("--pre", "--hostname-bin")
 GIT_WRITING_OPTIONS = ("--output", "--ext-diff", "--exec-path")
+GIT_RUNNING_OPTIONS = ("--textconv", "--upload-pack", "--receive-pack", "--exec=", "--open-files-in-pager")
+GIT_CONFIG_OPTIONS = ("-c", "--config-env")
+GIT_GREP_PAGER_OPTION = "-O"
 BRANCH_LISTING_FLAGS = {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current",
                         "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case", "--abbrev",
                         "--no-abbrev", "--omit-empty", "-q", "--quiet"}
@@ -340,9 +344,28 @@ def is_branch_listing(arguments: list[str]) -> bool:
 def is_read_only_git(arguments: list[str]) -> bool:
     if not arguments or arguments[0] not in READ_ONLY_GIT:
         return False
-    if any(word.startswith(GIT_WRITING_OPTIONS) for word in arguments):
+    if git_option_runs_or_writes(arguments):
         return False
     return arguments[0] != "branch" or is_branch_listing(arguments[1:])
+
+
+def git_option_runs_or_writes(arguments: list[str]) -> bool:
+    leading = list(itertools.takewhile(lambda word: word.startswith("-"), arguments))
+    if any(word.startswith(GIT_CONFIG_OPTIONS) for word in leading):
+        return True
+    if any(word.startswith(GIT_WRITING_OPTIONS + GIT_RUNNING_OPTIONS) for word in arguments):
+        return True
+    subcommand = arguments[len(leading):len(leading) + 1]
+    return subcommand == ["grep"] and any(word.startswith(GIT_GREP_PAGER_OPTION) for word in arguments)
+
+
+def option_runs_or_writes(words: list[str]) -> bool:
+    program = program_name(words[0])
+    if program == "git":
+        return git_option_runs_or_writes(words[1:])
+    if program in READ_ONLY_PROGRAMS or program == "find":
+        return not is_read_only_piece(shlex.join(words))
+    return False
 
 
 def writes_tree_output(arguments: list[str]) -> bool:
@@ -520,6 +543,12 @@ def rough_words(part: str) -> list[str]:
     return [word.strip(UNREADABLE_WORD_EDGES) for word in part.split() if word.strip(UNREADABLE_WORD_EDGES)]
 
 
+def prefix_covers_an_option(rule: str, name: str, target: str) -> bool:
+    parts = rule_parts(rule)
+    words = words_of(target)
+    return bool(parts and command_prefix_of(name, parts[1]) and words and option_runs_or_writes(words))
+
+
 @dataclass
 class Rules:
     allow: list[str] = field(default_factory=list)
@@ -538,7 +567,8 @@ class Rules:
         if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)
                                       or not command_pieces(target)):
             return False
-        return any(rule_matches(rule, name, [target]) for rule in self.allow if is_honoured_allow(rule))
+        return any(rule_matches(rule, name, [target]) and not prefix_covers_an_option(rule, name, target)
+                   for rule in self.allow if is_honoured_allow(rule))
 
     def command_prefixes(self) -> list[str]:
         found = [command_prefix_of(*parts) for parts in map(rule_parts, self.allow) if parts]
@@ -789,7 +819,7 @@ class Gate:
             return False
         if text in self.always or self.rules.allows("run_command", text):
             return True
-        if any(starts_with_words(words, prefix) for prefix in prefixes):
+        if any(starts_with_words(words, prefix) for prefix in prefixes) and not option_runs_or_writes(words):
             return True
         return joiner in PIPES and not has_bash_only_wildcard(text) and self.is_quiet_filter(words, folder)
 

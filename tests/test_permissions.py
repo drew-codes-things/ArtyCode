@@ -1137,3 +1137,27 @@ def test_a_quoted_or_escaped_bracket_class_is_a_pattern_not_a_wildcard(workspace
     ask = Asker()
     assert permissions.Gate(workspace, ask).allows("run_command", {"command": command})
     assert ask.questions == []
+
+
+@pytest.mark.parametrize("prefix, command", [
+    ("git log", "git log --ext-diff"), ("git log", "git log -p --textconv"), ("git diff", "git diff --exec-path=/tmp"),
+    ("git", "git -c core.pager=sh log"), ("git", "git --config-env=core.pager=X log"),
+    ("git grep", "git grep -Osh x"), ("git diff", "git diff --output=made.txt"),
+    ("git fetch", "git fetch --upload-pack=sh origin"), ("git grep", "git grep --open-files-in-pager=sh x"),
+    ("rg", "rg --pre cat x a.py"), ("grep", "grep -R token ."), ("find", "find . -delete"),
+])
+def test_a_remembered_prefix_never_covers_an_option_that_runs_a_program_or_writes(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+
+def test_a_remembered_git_prefix_still_covers_its_ordinary_options(workspace):
+    gate = permissions.Gate(workspace, Asker())
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "git commit")
+    assert gate.allows("run_command", {"command": "git commit -m 'fix the sum' --no-verify"})
