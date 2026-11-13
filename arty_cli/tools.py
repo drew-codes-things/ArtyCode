@@ -71,6 +71,10 @@ NOT_FOUND = "old_text was not found"
 ALREADY_MADE_LEAD = "new_text is already in the file"
 ALREADY_MADE = (f"{NOT_FOUND}, but {ALREADY_MADE_LEAD} at lines {{first}}-{{last}}, so this change is already made. "
                 "Don't send it again: run the tests or make the next change. Those lines now:\n{numbered}\n")
+NOTHING_CHANGED = "new_text is the same as old_text, so nothing changed"
+NO_CHANGE = (NOTHING_CHANGED + ". If that code is already what you want, the change is already made: run the "
+             "tests or make the next change; otherwise put the new code in new_text")
+SAME_TEXT_TOOLS = ("edit_file", "multi_edit")
 DROPPED_MARK = "characters dropped to save room"
 HIDDEN_MARK = "[Hidden to save room"
 PLACEHOLDERS = re.compile(rf"\(\d+ {DROPPED_MARK}\)|^\.\.\. \d+ characters cut \.\.\.$|{re.escape(HIDDEN_MARK)}", re.M)
@@ -687,6 +691,8 @@ def refuse_placeholders(before: str, after: str) -> None:
 
 def planned_change(name: str, arguments: dict, workspace) -> tuple[Path, str, str]:
     target, before, after = planned_text(name, arguments, workspace)
+    if name in SAME_TEXT_TOOLS and after == before:
+        raise ToolError(NO_CHANGE)
     refuse_placeholders(before, after)
     return target, before, after
 
