@@ -371,6 +371,7 @@ def signals_end_cleanly():
 
 
 def main(argv=None) -> int:
+    screen.write_utf8_when_redirected()
     argv = sys.argv[1:] if argv is None else argv
     if upkeep.handles(argv):
         return upkeep.run(argv)
