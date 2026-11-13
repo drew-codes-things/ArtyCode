@@ -1,6 +1,6 @@
 import json
 
-from arty_cli import agent, prune, tools
+from arty_cli import agent, cli, prune, tools
 from tests.scripted import ScriptedBrain, project, session_for
 
 assert project
@@ -166,3 +166,55 @@ def test_the_second_miss_on_a_big_file_carries_the_function_around_the_closest_m
     assert "def evaluate(source):" in twice and "        total += int(token)" in twice
     assert "def helper_0(value)" not in twice
     assert len(twice) <= session.workspace.result_chars
+
+
+CALC_LINES = 150
+PYTEST_LIKE = ("import sys\n"
+               "for number in range(500):\n"
+               "    print(f'E       calc.CalculatorError: expected a number, got token {number} in test_evaluate')\n"
+               "print('FAILED test_calc.py::test_evaluate_complex_expression - calc.CalculatorError')\n"
+               "print('======================== 15 failed, 15 passed in 0.09s =========================')\n"
+               "sys.exit(1)\n")
+
+
+def calc_of(lines: int = CALC_LINES) -> str:
+    return "".join(f"def step_{number}(value):\n    return value + {number}\n\n" for number in range(lines // 3))
+
+
+def edit_of(number: int) -> tuple:
+    return ("edit_file", {"path": "calc.py", "old_text": f"    return value + {number}\n",
+                          "new_text": f"    return value + {number} * 2\n"})
+
+
+def calc_view_in(prompt: list[dict], text: str) -> bool:
+    numbered = [f"{number}\t{line}" for number, line in enumerate(text.splitlines(), start=1) if line]
+    return any(not str(message.get("content") or "").startswith(prune.STUB_LEAD)
+               and all(line in str(message.get("content") or "") for line in numbered)
+               for message in prompt if message["role"] in ("tool", "user"))
+
+
+def recording_file(path, seen: list[str], step):
+    def recorded(_prompt):
+        seen.append(path.read_text())
+        return step
+    return recorded
+
+
+def test_after_older_results_are_hidden_the_model_still_sees_the_file_it_is_editing(project):
+    calc = project / "calc.py"
+    calc.write_text(calc_of())
+    (project / "fake_pytest.py").write_text(PYTEST_LIKE)
+    tests = ("run_command", {"command": "python3 fake_pytest.py"})
+    steps = [[("read_file", {"path": "calc.py"})], [tests]]
+    for number in range(1, 15):
+        steps += [[edit_of(number)], [edit_of(number + 20)], [tests]]
+    seen = []
+    brain = ScriptedBrain([recording_file(calc, seen, step) for step in steps + ["Done."]])
+    session = session_for(project, brain)
+    session.ask("fix calc.py so the tests pass")
+    assert cli.PRUNED_NOTE in session.terminal.err.getvalue()
+    stubs = [sum(str(m.get("content") or "").startswith(prune.STUB_LEAD) for m in prompt) for prompt in brain.prompts]
+    pruned = [index for index in range(1, len(stubs)) if stubs[index] > stubs[index - 1]]
+    assert pruned
+    blind = [index for index in pruned if not calc_view_in(brain.prompts[index], seen[index])]
+    assert not blind, f"{len(blind)} of {len(pruned)} prompts after a prune had no current view of calc.py"

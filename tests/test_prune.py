@@ -101,3 +101,15 @@ def test_the_newest_rounds_are_kept_whole_when_hiding_older_ones_is_enough():
     contents = tool_contents(messages)
     assert all(not text.startswith(prune.STUB_LEAD) for text in contents[-prune.KEPT_ROUNDS:])
     assert contents[0].startswith(prune.STUB_LEAD)
+
+
+def test_the_newest_result_for_a_file_being_edited_is_never_hidden():
+    miss = "Error: old_text was not found. The closest lines in the file are these:\n1\tx = 1"
+    rounds = [round_of(1, "read_file", "1\tx = 1", path="a.py"),
+              round_of(2, "edit_file", miss, path="a.py", old_text="x = 2", new_text="x = 3")]
+    rounds += [round_of(number, "search", f"hit {number} " * 2_000, pattern=f"p{number}") for number in range(3, 10)]
+    messages = conversation(*rounds)
+    prune.prune(messages, 4_000, Client())
+    contents = tool_contents(messages)
+    assert contents[1] == miss
+    assert contents[2].startswith(prune.STUB_LEAD)

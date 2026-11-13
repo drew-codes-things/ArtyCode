@@ -890,10 +890,13 @@ class Session:
         self.remember()
         return True
 
-    def changed_in_turn(self) -> list[str]:
+    def changes_this_request(self) -> list:
         checkpoints = self.workspace.checkpoints
         start = checkpoints.index(self.last_checkpoint) + 1 if self.last_checkpoint in checkpoints else 0
-        shown = [self.workspace.shown(kept.path) for kept in checkpoints[start:]
+        return checkpoints[start:]
+
+    def changed_in_turn(self) -> list[str]:
+        shown = [self.workspace.shown(kept.path) for kept in self.changes_this_request()
                  if not rules.is_record_path(self.workspace, kept.path)]
         return list(dict.fromkeys(shown))
 
@@ -1064,6 +1067,36 @@ class Session:
             return f"{LAST_FILE_LEAD.format(path=self.workspace.shown(checkpoint.path))}\n{numbered}"
         return ""
 
+    def is_step_on(self, step: prune.Step, path: Path) -> bool:
+        try:
+            return bool(step.path()) and self.workspace.resolve(step.path()) == path
+        except (tools.ToolError, OSError, ValueError):
+            return False
+
+    def has_current_view(self, messages: list[dict], path: Path) -> bool:
+        lead = LAST_FILE_LEAD.format(path=self.workspace.shown(path))
+        steps = prune.steps_of(messages)
+        changes = [step.index for step in steps if step.name in tools.CHANGING_TOOLS and self.is_step_on(step, path)
+                   and not str(messages[step.index].get("content") or "").startswith(ERROR_MARK)]
+        last_change = changes[-1] if changes else -1
+        for step in steps:
+            content = str(messages[step.index].get("content") or "")
+            if step.index <= last_change or prune.is_stub(content):
+                continue
+            if lead in content or (step.name == prune.READ_TOOL and self.is_step_on(step, path)):
+                return True
+        return False
+
+    def keep_edited_file_in_view(self, messages: list[dict]) -> None:
+        changes = self.changes_this_request()
+        if not changes or not messages or messages[-1].get("role") != "tool":
+            return
+        if self.has_current_view(messages, changes[-1].path):
+            return
+        view = self.last_changed_file()
+        if view:
+            messages[-1] = {**messages[-1], "content": f"{messages[-1].get('content') or ''}\n\n{view}"}
+
     def carried_state(self, messages: list[dict]) -> str:
         output = self.last_command_output(messages)
         self.workspace.seen.clear()
@@ -1078,6 +1111,7 @@ class Session:
         if not pruned:
             prune.cut_newest(messages, limit, self.client)
         if pruned or context.estimated_tokens(messages, self.client) <= limit:
+            self.keep_edited_file_in_view(messages)
             self.terminal.note(PRUNED_NOTE)
             return
         instructions = self.compact_instructions(AUTOMATIC)

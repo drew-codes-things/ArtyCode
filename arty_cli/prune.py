@@ -136,11 +136,19 @@ def shorten_past_changes(messages: list[dict], protected_from: int) -> None:
             messages[index] = {**messages[index], "tool_calls": [with_short_arguments(call) for call in calls]}
 
 
+def newest_views_of_edited_files(steps: list[Step]) -> set[int]:
+    edited = {step.path() for step in steps if step.name in CHANGING_TOOLS and step.path()}
+    newest = {step.path(): step.index for step in steps
+              if step.path() in edited and (step.name == READ_TOOL or step.name in CHANGING_TOOLS)}
+    return set(newest.values())
+
+
 def stub_stale(messages: list[dict]) -> None:
     protected_from = newest_round_start(messages)
     steps = steps_of(messages)
+    kept_in_view = newest_views_of_edited_files(steps)
     for position, step in enumerate(steps):
-        if step.index >= protected_from or is_stub(messages[step.index].get("content")):
+        if step.index >= protected_from or step.index in kept_in_view or is_stub(messages[step.index].get("content")):
             continue
         if is_stale(step, steps[position + 1:]):
             stubbed(messages, step)
@@ -157,10 +165,12 @@ def rounds_start(messages: list[dict], kept: int) -> int:
 
 
 def hide_oldest(messages: list[dict], client, target: float, protected_from: int) -> None:
-    for step in steps_of(messages):
+    steps = steps_of(messages)
+    kept_in_view = newest_views_of_edited_files(steps)
+    for step in steps:
         if estimated(messages, client) <= target or step.index >= protected_from:
             return
-        if not is_stub(messages[step.index].get("content")):
+        if step.index not in kept_in_view and not is_stub(messages[step.index].get("content")):
             stubbed(messages, step)
 
 
