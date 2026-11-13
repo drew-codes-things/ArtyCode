@@ -1,4 +1,4 @@
-from arty_cli import cli, suggest
+from arty_cli import chat_session, suggest
 
 GROUPS = (("Settings", {"/model [number|name]": "switch model", "/mode [name]": "how much is asked",
                         "/mcp, /skills": "servers and skills", "Ctrl-D, /exit": "leave", "@path": "attach"}),)
@@ -22,8 +22,8 @@ def test_a_mistyped_command_gets_the_nearest_guess():
     choices = suggest.slash_choices(GROUPS, {})
     assert suggest.closest("/skils", choices) == "/skills"
     assert suggest.closest("/zzzzzz", choices) is None
-    assert "Did you mean /skills?" in cli.unknown_command_note("/skils", choices)
-    assert "Did you mean" not in cli.unknown_command_note("/zzzzzz", choices)
+    assert "Did you mean /skills?" in chat_session.unknown_command_note("/skils", choices)
+    assert "Did you mean" not in chat_session.unknown_command_note("/zzzzzz", choices)
 
 
 def test_the_menu_lines_up_meanings_fits_the_width_and_counts_the_rest():
@@ -35,7 +35,7 @@ def test_the_menu_lines_up_meanings_fits_the_width_and_counts_the_rest():
 
 
 def test_every_command_the_session_knows_is_offered():
-    choices = suggest.slash_choices(cli.HELP_GROUPS, {})
+    choices = suggest.slash_choices(chat_session.HELP_GROUPS, {})
     for name in ("/clear", "/model", "/mode", "/plan", "/status", "/todos", "/memory", "/compact", "/undo",
                  "/rewind", "/resume", "/remote", "/rules", "/mcp", "/skills", "/helpers", "/hooks", "/help",
                  "/exit", "/init", "/review"):

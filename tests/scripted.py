@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from arty_cli import cli, context, permissions, sessions, tools
+from arty_cli import chat_session, cli, context, conversation, login_flow, permissions, screen, sessions, tools, welcome
 
 DREWS_WINDOW = 24_576
 SUMMARY_MARK = "SUMMARY"
-ARTY_CLI_SOURCE = Path(cli.__file__)
+ARTY_CLI_SOURCES = tuple(Path(module.__file__) for module in (cli, chat_session, conversation, screen, login_flow, welcome))
 
 
 def call_of(number: int, name: str, arguments) -> dict:
@@ -18,7 +18,7 @@ def call_of(number: int, name: str, arguments) -> dict:
 
 def is_summary_request(messages: list[dict]) -> bool:
     last = messages[-1] if messages else {}
-    return last.get("role") == "user" and str(last.get("content") or "").startswith(cli.SUMMARY_REQUEST)
+    return last.get("role") == "user" and str(last.get("content") or "").startswith(conversation.SUMMARY_REQUEST)
 
 
 class ScriptedBrain:
@@ -95,5 +95,5 @@ def session_for(folder: Path, brain, mode: str = permissions.ALLOW_ALL, saved=No
 
 def copy_of_arty_cli_source(folder: Path, name: str = "big.py") -> Path:
     target = folder / name
-    target.write_text(ARTY_CLI_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+    target.write_text("".join(source.read_text(encoding="utf-8") for source in ARTY_CLI_SOURCES), encoding="utf-8")
     return target

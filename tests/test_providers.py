@@ -2,7 +2,7 @@ import io
 
 import pytest
 
-from arty_cli import authorise, brain, cli, providers, settings
+from arty_cli import authorise, brain, chat_session, cli, login_flow, providers, screen, settings
 
 
 class FakeBrain:
@@ -86,7 +86,7 @@ def login_with(monkeypatch, tmp_path, answers, secrets, expected=0, **connection
     for name, value in connection.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr("builtins.input", lambda prompt="": (asked.append(prompt), answers.pop(0))[1])
-    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": (asked.append(prompt), secrets.pop(0))[1])
+    monkeypatch.setattr(login_flow.getpass, "getpass", lambda prompt="": (asked.append(prompt), secrets.pop(0))[1])
     assert cli.main(["login"]) == expected
     return asked
 
@@ -118,9 +118,9 @@ def test_login_with_an_api_key_asks_for_the_key_and_nothing_else(monkeypatch, tm
 def test_browser_login_asks_nothing_after_the_choice(monkeypatch, tmp_path, capsys):
     opened, waited = [], []
     request = authorise.Request("device-secret", "WXYZ-1234", "https://arty.example/ios/?authorise=WXYZ-1234", 3, 600)
-    monkeypatch.setattr(cli.authorise, "start", lambda url, headers, name="": (waited.append((url, headers)), request)[1])
-    monkeypatch.setattr(cli.authorise, "wait_for_key", lambda url, headers, started: "approved-key")
-    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(login_flow.authorise, "start", lambda url, headers, name="": (waited.append((url, headers)), request)[1])
+    monkeypatch.setattr(login_flow.authorise, "wait_for_key", lambda url, headers, started: "approved-key")
+    monkeypatch.setattr(login_flow.webbrowser, "open", lambda url: opened.append(url) or True)
     asked = login_with(monkeypatch, tmp_path, ["2"], [], **REMOTE_BRAIN)
     assert asked == ["Choose 1-2: "]
     assert settings.Settings(**settings.read_file(settings.config_path())).api_key == "approved-key"
@@ -152,14 +152,14 @@ def test_login_without_a_known_address_says_how_to_set_one_and_asks_nothing(monk
     (True, '$env:ARTY_URL = "http://', '$env:ARTY_REMOTE_URL = "https://', "setx ARTY_URL"),
 ])
 def test_the_address_help_shows_lines_to_copy_for_this_kind_of_shell(windows, home, anywhere, keep):
-    shown = cli.address_help(windows)
+    shown = login_flow.address_help(windows)
     assert home in shown and anywhere in shown and keep in shown
     assert "arty-cli login" in shown.splitlines()[0]
 
 
 def test_login_without_a_known_address_shows_the_lines_for_this_computer(monkeypatch, tmp_path, capsys):
     login_with(monkeypatch, tmp_path, [], [], expected=cli.FAILED)
-    assert cli.address_help(cli.os.name == "nt") in capsys.readouterr().err.replace(cli.COLOURS["reset"], "")
+    assert login_flow.address_help(login_flow.os.name == "nt") in capsys.readouterr().err.replace(screen.COLOURS["reset"], "")
 
 
 def test_a_first_run_without_an_address_says_it_once(monkeypatch, tmp_path, capsys):
@@ -167,7 +167,7 @@ def test_a_first_run_without_an_address_says_it_once(monkeypatch, tmp_path, caps
     monkeypatch.setenv("APPDATA", str(tmp_path / "config"))
     for name in CONNECTION_VARIABLES:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(screen, "is_interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail(f"asked {prompt!r}"))
     assert cli.main([]) == cli.NOT_SET_UP
     shown = capsys.readouterr().err
@@ -179,7 +179,7 @@ def test_a_first_run_without_an_address_says_it_once(monkeypatch, tmp_path, caps
 def test_a_failed_browser_login_saves_nothing(monkeypatch, tmp_path, capsys):
     def refused(url, headers, name=""):
         raise authorise.AuthoriseError("This Arty is too old to authorise devices.")
-    monkeypatch.setattr(cli.authorise, "start", refused)
+    monkeypatch.setattr(login_flow.authorise, "start", refused)
     login_with(monkeypatch, tmp_path, ["2"], [], expected=cli.FAILED, **HOME_BRAIN)
     assert "too old" in capsys.readouterr().err
     assert not settings.config_path().exists()
@@ -187,7 +187,7 @@ def test_a_failed_browser_login_saves_nothing(monkeypatch, tmp_path, capsys):
 
 def test_browser_login_over_plain_http_to_a_public_address_is_refused(monkeypatch, tmp_path, capsys):
     started = []
-    monkeypatch.setattr(cli.authorise, "start", lambda url, headers, name="": started.append(url))
+    monkeypatch.setattr(login_flow.authorise, "start", lambda url, headers, name="": started.append(url))
     login_with(monkeypatch, tmp_path, ["2"], [], expected=cli.FAILED, ARTY_URL="http://8.8.8.8:8081/v1")
     assert started == [] and "https" in capsys.readouterr().err
 
@@ -198,4 +198,4 @@ def test_resume_lists_this_projects_conversations_and_how_to_carry_one_on(connec
     shown = capsys.readouterr().err
     listed = [line for line in shown.splitlines() if "hello there" in line and not line.startswith("›")]
     assert listed
-    assert cli.RESUME_HINT in shown and cli.THIS_SESSION in shown
+    assert chat_session.RESUME_HINT in shown and chat_session.THIS_SESSION in shown

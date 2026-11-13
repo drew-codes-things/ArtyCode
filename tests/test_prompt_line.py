@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from arty_cli import cli, permissions, prompt_line
+from arty_cli import cli, permissions, prompt_line, screen
 
 
 @pytest.mark.parametrize("mode, following", [
@@ -130,7 +130,7 @@ def test_the_prompt_shows_the_mode_in_arty_red_or_plain():
     coloured, plain = cli.Terminal(), cli.Terminal()
     coloured.colour, plain.colour = True, False
     shown, width = prompt_line.mode_prompt(coloured, permissions.PLAN)
-    assert cli.TRUE_COLOUR_ACCENT in shown or cli.PALETTE_ACCENT in shown
+    assert screen.TRUE_COLOUR_ACCENT in shown or screen.PALETTE_ACCENT in shown
     assert width == len("plan › ")
     assert prompt_line.mode_prompt(plain, permissions.AUTO_EDIT) == ("auto-edit › ", len("auto-edit › "))
 
@@ -160,15 +160,15 @@ def test_no_reader_means_the_plain_prompt(ready_session, monkeypatch):
 
 
 def test_the_reader_is_picked_for_the_platform(monkeypatch):
-    monkeypatch.setattr(cli, "is_interactive", lambda: False)
-    assert prompt_line.line_reader(cli.is_interactive) is None
-    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(screen, "is_interactive", lambda: False)
+    assert prompt_line.line_reader(screen.is_interactive) is None
+    monkeypatch.setattr(screen, "is_interactive", lambda: True)
     monkeypatch.setattr(prompt_line.os, "name", "posix")
     monkeypatch.setitem(sys.modules, "readline", FakeReadline())
-    assert isinstance(prompt_line.line_reader(cli.is_interactive), prompt_line.ReadlineLine)
+    assert isinstance(prompt_line.line_reader(screen.is_interactive), prompt_line.ReadlineLine)
     monkeypatch.setattr(prompt_line.os, "name", "nt")
     monkeypatch.setattr(prompt_line, "console_keys", lambda: lambda: "\r")
-    assert isinstance(prompt_line.line_reader(cli.is_interactive), prompt_line.ConsoleLine)
+    assert isinstance(prompt_line.line_reader(screen.is_interactive), prompt_line.ConsoleLine)
 
 
 @pytest.fixture

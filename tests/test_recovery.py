@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from arty_cli import agent, cli, finish, permissions, prune, tools
+from arty_cli import agent, cli, conversation, finish, permissions, prune, tools
 from tests.scripted import ScriptedBrain, project, session_for
 
 assert project
@@ -215,7 +215,7 @@ def test_after_older_results_are_hidden_the_model_still_sees_the_file_it_is_edit
     brain = ScriptedBrain([recording_file(calc, seen, step) for step in steps + ["Done."]])
     session = session_for(project, brain)
     session.ask("fix calc.py so the tests pass")
-    assert cli.PRUNED_NOTE in session.terminal.err.getvalue()
+    assert conversation.PRUNED_NOTE in session.terminal.err.getvalue()
     stubs = [sum(str(m.get("content") or "").startswith(prune.STUB_LEAD) for m in prompt) for prompt in brain.prompts]
     pruned = [index for index in range(1, len(stubs)) if stubs[index] > stubs[index - 1]]
     assert pruned
@@ -234,9 +234,9 @@ def test_the_footer_shows_real_room_right_after_older_results_are_dropped(projec
     session = session_for(project, ScriptedBrain(steps + ["Done."]))
     shown = []
     session.terminal.measure = lambda: shown.append(
-        (session.terminal.err.getvalue().count(cli.PRUNED_NOTE), cli.context_left(session)))
+        (session.terminal.err.getvalue().count(conversation.PRUNED_NOTE), cli.context_left(session)))
     session.ask("fix calc.py so the tests pass")
-    notes = session.terminal.err.getvalue().count(cli.PRUNED_NOTE)
+    notes = session.terminal.err.getvalue().count(conversation.PRUNED_NOTE)
     assert notes
     right_after = [next(left for count, left in shown if count >= note) for note in range(1, notes + 1)]
     assert min(right_after) >= 40, right_after

@@ -2,7 +2,7 @@ import io
 
 import pytest
 
-from arty_cli import cli, permissions, remote
+from arty_cli import chat_session, cli, permissions, remote, screen
 from tests.test_cli import FakeBrain, chat_with, ready, user_texts
 
 PHONE = "Drew's phone"
@@ -92,14 +92,14 @@ def test_slash_remote_shares_the_chat_and_slash_remote_off_stops(bridged, monkey
     assert not any(event.get("text") == "after" for event in shared.sent)
     assert shared.stopped
     err = capsys.readouterr().err
-    assert cli.REMOTE_ON_LEAD in err and cli.REMOTE_OFF in err
+    assert chat_session.REMOTE_ON_LEAD in err and chat_session.REMOTE_OFF in err
 
 
 def test_the_remote_flag_shares_from_the_start_and_leaving_stops_sharing(bridged, monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("/remote\n/exit\n"))
     assert cli.main(["--remote"]) == 0
     assert len(FakeBridge.made) == 1 and FakeBridge.made[0].stopped
-    assert cli.REMOTE_ALREADY_ON in capsys.readouterr().err
+    assert chat_session.REMOTE_ALREADY_ON in capsys.readouterr().err
 
 
 def test_requests_from_afar_are_asked_as_plain_text_never_as_commands(bridged, monkeypatch, capsys):
@@ -154,14 +154,14 @@ def test_a_session_the_brain_ended_turns_remote_control_off_with_the_reason(brid
     FakeBridge.lost = True
     chat_with(monkeypatch, "/remote", "/status")
     err = capsys.readouterr().err
-    assert "Remote control ended: that session has ended" in err and cli.REMOTE_OFF in err
+    assert "Remote control ended: that session has ended" in err and chat_session.REMOTE_OFF in err
     assert FakeBridge.made[0].stopped
 
 
 def test_a_permission_answered_from_afar_is_said_here_even_without_a_terminal(monkeypatch):
     terminal = cli.Terminal(out=io.StringIO(), err=io.StringIO())
     terminal.remote = FakeBridge()
-    monkeypatch.setattr(cli, "is_interactive", lambda: False)
+    monkeypatch.setattr(screen, "is_interactive", lambda: False)
     assert terminal.ask("Run `ls`?", "preview") == permissions.YES
     assert terminal.remote.asked == [("Run `ls`?", "preview")]
     assert f"Allowed on {PHONE} (remote control)." in terminal.err.getvalue()
@@ -170,7 +170,7 @@ def test_a_permission_answered_from_afar_is_said_here_even_without_a_terminal(mo
 def test_a_plan_answered_from_afar_is_approved_or_kept_without_asking_for_feedback(monkeypatch):
     terminal = cli.Terminal(out=io.StringIO(), err=io.StringIO())
     terminal.remote = FakeBridge()
-    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(screen, "is_interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("asked here"))
     FakeBridge.given_answer = (permissions.YES, PHONE)
     assert terminal.review_plan("1. Do it") == (permissions.YES, "")
@@ -182,7 +182,7 @@ def test_a_plan_answered_from_afar_is_approved_or_kept_without_asking_for_feedba
 
 def remote_notice(err):
     rows = err.splitlines()
-    start = next(index for index, row in enumerate(rows) if row.startswith(cli.REMOTE_ON_LEAD))
+    start = next(index for index, row in enumerate(rows) if row.startswith(chat_session.REMOTE_ON_LEAD))
     return rows[start:start + 3]
 
 
@@ -206,7 +206,7 @@ def test_status_says_whether_remote_control_is_on(bridged, monkeypatch, capsys):
 def test_an_answer_from_another_device_names_the_device_and_the_answer(monkeypatch):
     terminal = cli.Terminal(out=io.StringIO(), err=io.StringIO())
     terminal.remote = FakeBridge()
-    monkeypatch.setattr(cli, "is_interactive", lambda: False)
+    monkeypatch.setattr(screen, "is_interactive", lambda: False)
     FakeBridge.given_answer = (permissions.NO, PHONE)
     assert terminal.ask("Run `ls`?") == permissions.NO
     assert terminal.err.getvalue().splitlines()[-1] == f"Refused on {PHONE} (remote control)."
@@ -216,17 +216,17 @@ def test_an_answer_from_another_device_names_the_device_and_the_answer(monkeypat
 def test_while_shared_a_question_says_it_can_be_answered_on_another_device(monkeypatch):
     terminal = cli.Terminal(out=io.StringIO(), err=io.StringIO())
     terminal.remote = FakeBridge()
-    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(screen, "is_interactive", lambda: True)
     terminal.ask("Run `ls`?")
-    assert cli.REMOTE_ANSWER_HINT in terminal.err.getvalue()
+    assert screen.REMOTE_ANSWER_HINT in terminal.err.getvalue()
 
 
 def test_a_question_without_remote_control_has_no_hint(monkeypatch):
-    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(screen, "is_interactive", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
     terminal = cli.Terminal(out=io.StringIO(), err=io.StringIO())
     terminal.ask("Run `ls`?")
-    assert cli.REMOTE_ANSWER_HINT not in terminal.err.getvalue()
+    assert screen.REMOTE_ANSWER_HINT not in terminal.err.getvalue()
 
 
 def test_a_request_from_another_device_is_marked_as_remote(bridged, monkeypatch, capsys):
@@ -284,7 +284,7 @@ def test_remote_name_renames_this_terminal_for_the_other_devices(bridged, monkey
     chat_with(monkeypatch, "/remote name docs work", "/remote", "/remote name docs work", "/remote name", "/status")
     err = capsys.readouterr().err
     assert FakeBridge.made[0].renamed == ["docs work"]
-    assert cli.REMOTE_NAME_NEEDS_SHARING in err and cli.REMOTE_NAME_USAGE in err
+    assert chat_session.REMOTE_NAME_NEEDS_SHARING in err and chat_session.REMOTE_NAME_USAGE in err
     assert 'Remote control: on as "docs work 2"' in err
 
 
