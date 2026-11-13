@@ -701,7 +701,7 @@ def test_a_bad_address_is_refused_before_anything_is_asked(workspace):
     ("pytest -q tests/test_calc.py", ["pytest"]),
     ("python3 calc.py add 2 3", ["python3 calc.py add"]),
     ("uv run python -m pytest -x", ["uv run python -m pytest"]),
-    ("make && make install", ["make"]),
+    ("make && make install", []),
     ("cd tests && npm test", ["cd tests", "npm test"]),
 ])
 def test_a_command_is_offered_as_its_program_and_subcommand_words(workspace, command, prefixes):
@@ -902,6 +902,29 @@ def test_an_older_launcher_or_keyword_prefix_no_longer_covers_anything(workspace
     assert not saved.allows("run_command", {"command": command})
     assert len(ask.questions) == 2
 
+
+SCRIPT_RUNNERS = ["make test", "make", "gmake all", "cmake --build .", "ninja", "vim -c ':!sh' f", "vi f", "nvim f",
+                  "view f", "emacs --batch f", "nano f", "ex f", "less file", "more file", "most file", "man ls",
+                  "tar -cf a.tar --to-command=sh .", "tar -tf a.tar", "zip -TT sh a.zip f", "tmux new", "screen -d"]
+
+
+@pytest.mark.parametrize("command", SCRIPT_RUNNERS)
+def test_programs_that_run_scripts_or_commands_through_an_option_are_never_offered_as_a_prefix(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+@pytest.mark.parametrize("prefix, command", [("make test", "make test install"), ("make", "make deploy"),
+                                             ("vim", "vim -c ':!sh' f"), ("less", "less file"),
+                                             ("tar", "tar -cf a.tar --to-command=sh .")])
+def test_an_older_prefix_for_a_script_runner_no_longer_covers_anything(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
 
 RM_HIDDEN_FROM_TEXT_MATCHING = ["/bin/rm -rf build", "if true; then rm -rf build; fi", "command rm -rf build",
                                 "X=1 rm -rf build", "echo $(rm -rf build)", "sudo rm -rf build", "(rm -rf build)",

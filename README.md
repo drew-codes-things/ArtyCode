@@ -53,6 +53,8 @@ command the program and its subcommand words, which the question names (`Yes, an
 `python3 -m pytest | grep -E "FAILED|ERROR"` are covered too. A command whose words decide what it touches or runs
 (`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like), one that starts another
 program (`systemd-run`, `stdbuf`, `xvfb-run`, `strace`, `timeout`, `nice`, `uv run --with ...` and the like), one that
+runs a script or a command through an option (`make`, `cmake`, `tar`, `zip`, `vim`, `emacs`, `less`, `man`, `tmux`
+and the like), one that
 starts with a shell keyword (`if`, `then`, `do`), or one with `$`, backticks, `(`, `<`, a `#` comment or output written
 to a file is only ever remembered exactly, as before. A prefix rule for such a program or keyword in the settings is not
 followed as an allow rule (it would cover any command); as a deny rule it still forbids. In a trusted project there is also

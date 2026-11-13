@@ -108,7 +108,10 @@ WRAPPER_PROGRAMS = {"sudo", "su", "doas", "env", "xargs", "eval", "exec", "sourc
 SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "case", "esac", "in",
                   "function", "coproc", "select", "!", "[[", "]]", "{", "}"}
 LAUNCHING_SUBCOMMANDS = {"run", "x", "dlx"}
-NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS
+SCRIPT_RUNNING_PROGRAMS = {"make", "gmake", "bmake", "cmake", "ninja", "tar", "zip", "vim", "vi", "nvim", "view",
+                           "vimdiff", "gvim", "emacs", "nano", "ex", "ed", "less", "more", "most", "pager", "man",
+                           "tmux", "screen"}
+NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS
 EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
                                           "ssh", "curl", "wget", "kill", "pkill", "killall", "find", "sed", "awk",
