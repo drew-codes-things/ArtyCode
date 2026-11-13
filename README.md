@@ -232,12 +232,14 @@ shown there is thrown away when the question appears, so only an answer typed af
 `ls`, `cat`, `grep`, `git status`, `git diff` and the like run without a question when they stay inside the project,
 also when joined by pipes or `&&` (`cat a.py | grep -n x`), as long as there is no `$`, backtick or file redirection.
 Every path is read the way the shell would: `~`, `~+` and `~-`, wildcards (each match is followed through links), and
-Windows backslash, drive and network paths. Anything that reaches outside the project, or can't be read, asks first,
+Windows backslash, drive and network paths. A wildcard that starts with a dot (`.*`, `.?`) asks, since some shells
+match it to `..`, the folder above the project. Anything that reaches outside the project, or can't be read, asks first,
 in plan mode and in helpers too; so does a file with more than one hard link, since another of its names may be outside.
 Program names are matched letter for letter (`CAT` is not `cat`), except on Windows and for PowerShell commands. A command also asks when it uses an option that writes, runs a program or follows
 links out of the project (`rg --pre`, `find -fprint`, `find -L`, `grep -R`, `ls -L`, `du -L`, `tree -l`, `tree -o`,
-`file -C`, `diff -r`, `git log --output`, `git branch -D`), and look-only git asks when the repository's own git
-settings name a program git would run (an fsmonitor, an external diff, a textconv or filter driver, a gpg program).
+`file -C`, `diff -r`, `git log --output`, `git branch -D`), and look-only git asks when the git settings of the
+repository it runs in (the project, or a repository inside it reached through `cwd`) name a program git would run (an
+fsmonitor, an external diff, a textconv or filter driver, a gpg program).
 
 The GitHub CLI's look-only commands run without a question too: `gh pr view`, `gh pr list`, `gh pr diff`,
 `gh pr checks`, `gh pr status`, `gh issue view`, `gh issue list`, `gh issue status`, `gh run view` (with `--log` or
@@ -245,8 +247,9 @@ The GitHub CLI's look-only commands run without a question too: `gh pr view`, `g
 `gh workflow list` and `gh status`. The program has to be written `gh` (not `GH`, `./gh` or a path), followed straight
 by those words; any other gh command asks, and so does one gh doesn't know itself, since it could be an alias or an
 extension. They ask when they open a browser (`--web`, `-w`), write files (`--output`, `-O`, `--dir`, `-D`), keep
-watching (`--watch`), name a host other than github.com (`-R host/owner/repo`, a URL or `git@host:` address), or
-have a word containing `env`, `import`, `include` or `input` (the jq words for environment variables, modules and
+watching (`--watch`), name a host other than github.com (`-R host/owner/repo`, `-R host:port/repo`, a URL or
+`git@host:` address), have a wildcard or `~` outside quotes (the shell would swap it for file names first), or have a
+word containing `env`, `import`, `include` or `input` (the jq words for environment variables, modules and
 inputs, which `--jq` passes on). `-R owner/repo` (with a space) and github.com URLs are fine; a word with two or more
 `/` that doesn't start with `github.com` asks, so a jq `//` does too. Like git, they ask when the repository's git
 settings name a program, and deny rules still stop them.

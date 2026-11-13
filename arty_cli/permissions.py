@@ -43,6 +43,7 @@ GITHUB_HOST = "github.com"
 URL_MARK = "://"
 SSH_ADDRESS = re.compile(r"^[^@/\s]+@([^:/\s]+):")
 HOST_PATH_SLASHES = 2
+HOST_WITH_PORT = re.compile(r"^[^/\s@:]+:\d+/")
 PROGRAMS_RUNNING_GIT = {"git", GH_PROGRAM}
 BRANCH_LISTING_FLAGS = {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current",
                         "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case", "--abbrev",
@@ -61,6 +62,8 @@ WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
+SHELL_EXPANDING_CHARACTERS = GLOB_CHARACTERS | {"~"}
+PARENT_FOLDER = ".."
 SHELL_PATTERN = re.compile(r"[*?]|\[.*\]")
 BASH_ONLY_BRACKETS = re.compile(r"\[(?:\^|!?\[[:=.])")
 END_OF_OPTIONS = "--"
@@ -443,6 +446,8 @@ def names_another_host(value: str) -> bool:
     address = SSH_ADDRESS.match(value)
     if address:
         return address.group(1).lower() != GITHUB_HOST
+    if HOST_WITH_PORT.match(value):
+        return True
     return value.count("/") >= HOST_PATH_SLASHES and value.split("/", 1)[0].lower() != GITHUB_HOST
 
 
@@ -480,7 +485,7 @@ def is_read_only_piece(command: str) -> bool:
     if program == "git":
         return is_read_only_git(arguments)
     if words[0] == GH_PROGRAM:
-        return is_read_only_gh(arguments)
+        return is_read_only_gh(arguments) and not has_shell_expansion(command)
     if follows_links_or_writes(program, arguments):
         return False
     if program == "find":
@@ -518,6 +523,15 @@ def named_paths(command: str) -> list[str]:
 def is_directory_stack_form(path: str) -> bool:
     head = path.split("/", 1)[0]
     return head.startswith(SHELL_DIRECTORY_STACK) and head != "~+"
+
+
+def has_shell_expansion(text: str) -> bool:
+    return bool(SHELL_EXPANDING_CHARACTERS & set(QUOTED_OR_ESCAPED.sub("", text)))
+
+
+def may_match_parent_folder(path: str) -> bool:
+    return any(part.startswith(".") and GLOB_CHARACTERS & set(part) and fnmatch.fnmatchcase(PARENT_FOLDER, part)
+               for part in path.replace("\\", "/").split("/"))
 
 
 def has_bash_only_wildcard(text: str) -> bool:
@@ -896,6 +910,8 @@ class Gate:
     def reaches_outside(self, path: str, folder: Path) -> bool:
         if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path) or names_a_provider_drive(path):
             return True
+        if may_match_parent_folder(path):
+            return True
         expanded = with_tilde_expanded(path, folder)
         try:
             return not all(self.holds_only_here(found) for found in shell_matches(expanded, folder))
@@ -1152,7 +1168,7 @@ class Gate:
             return self.confirm(f"Look outside the project: {command}?", remember=command,
                                 rule=self.command_rule(command))
         runs_git = any(words_of(text)[0].lower() in PROGRAMS_RUNNING_GIT for text in pieces)
-        if runs_git and git_settings_run_programs(self.workspace.root):
+        if runs_git and git_settings_run_programs(folder):
             return self.confirm(f"This repository's git settings name a program that git would run. Run: {command}?",
                                 remember=command, rule=self.command_rule(command))
         return None

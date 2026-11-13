@@ -1426,6 +1426,7 @@ ASKING_GH = [
     "gh pr view {1,--web}", "gh pr view 1 #'\ntouch made.txt\n#'", "GH_PAGER=sh gh pr diff 1", "env gh pr view 1",
     "sudo gh pr view 1", "gh pr view -[w]", "gh pr view 1 \"--web\"", "gh pr view 1 '-w'",
     "g\\h pr view 1 --web", "gh pr view 1\rtouch x",
+    "gh pr list -R evil.example:443/r", "gh repo view evil.example:443/r", "gh pr list --repo=evil.example:8080/r",
 ]
 
 
@@ -1499,3 +1500,118 @@ def test_on_windows_look_only_gh_needs_no_ok(monkeypatch):
 
 def test_a_remembered_gh_prefix_is_offered_for_a_changing_gh_command(workspace):
     assert permissions.Gate(workspace, Asker()).prefixes_for("gh pr merge 12 --squash") == ["gh pr merge"]
+
+
+@pytest.fixture
+def expansion_bait(workspace):
+    (workspace.root / "env").write_text("x\n")
+    (workspace.root / "env.HOME").write_text("x\n")
+    address_folder = workspace.root / "git@127.0.0.1:o"
+    address_folder.mkdir()
+    (address_folder / "r").write_text("x\n")
+    return workspace
+
+
+GH_WITH_SHELL_EXPANSION = [
+    "gh pr view 1 -R cli/cli --json n -q en?", "gh pr view 1 -R cli/cli --json n --jq=en?.HOME",
+    "gh pr view 1 -R cli/cli --json n -qen?", "gh pr view 1 --json n -q e*.HOME", "gh pr view 1 -q en[v]",
+    "gh pr list -R gi*/r", "gh pr list --repo=gi*/r", "gh repo view gi*/r", "gh pr list -R g*/*", "gh pr list -R */o/r",
+    "gh pr view 1 -q .title?", "gh pr list -L 5 *", "gh pr view ~", "gh pr list -R ~+/r", "gh pr list -R ~octo/demo",
+    "gh pr list | grep x && gh pr view 1 -q en?",
+]
+
+
+@pytest.mark.parametrize("command", GH_WITH_SHELL_EXPANSION)
+def test_a_shell_wildcard_or_tilde_in_a_gh_command_asks_and_is_refused_in_plan_mode(expansion_bait, command):
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(expansion_bait, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(expansion_bait, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@needs_git
+@pytest.mark.parametrize("command", ["gh pr view 1 -q '.title?'", "gh pr list --jq \".[] | .title?\"",
+                                     "gh pr list --json title --jq '.[0]'", "gh pr list --search 'fix*'"])
+def test_quoted_wildcards_in_a_gh_command_stay_quiet(expansion_bait, command):
+    ask = Asker()
+    assert permissions.Gate(expansion_bait, ask, mode=permissions.PLAN).check("run_command", {"command": command}) is None
+    assert ask.questions == []
+
+
+@pytest.fixture
+def project_beside_a_secret(tmp_path):
+    (tmp_path / "secret.txt").write_text("s\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "a.py").write_text("x = 1\n")
+    return tools.Workspace(project)
+
+
+@pytest.mark.parametrize("command", ["cat .*/secret.txt", "cat .?/secret.txt", "cat .[.]/secret.txt",
+                                     "cat .[!x]/secret.txt", "cat ./.*/secret.txt", "ls .*", "grep -r s .?",
+                                     "grep -f.*/secret.txt a.py", "grep --file=.*/secret.txt a.py",
+                                     "git diff --no-index a.py .*/secret.txt", "git log | grep s .*/secret.txt"])
+def test_a_wildcard_some_shells_expand_to_the_parent_folder_asks(project_beside_a_secret, command):
+    ask = Asker("n")
+    assert not permissions.Gate(project_beside_a_secret, ask).allows("run_command", {"command": command})
+    assert "outside" in ask.questions[0][0]
+
+
+@pytest.mark.parametrize("command", ["ls *.py", "cat a*", "ls -d .git*", "grep -n x .a*", "ls ?.py", "cat [a].py"])
+def test_wildcards_that_cannot_match_the_parent_folder_stay_quiet(project_beside_a_secret, command):
+    ask = Asker()
+    assert permissions.Gate(project_beside_a_secret, ask).allows("run_command", {"command": command})
+    assert ask.questions == []
+
+
+def nested_repo(workspace, *settings):
+    import subprocess
+    nested = workspace.root / "vendor" / "lib"
+    (nested / "src").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(nested)], check=True)
+    for key, value in settings:
+        subprocess.run(["git", "-C", str(nested), "config", key, value], check=True)
+    return nested
+
+
+@needs_git
+@pytest.mark.parametrize("key", ["core.fsmonitor", "core.sshCommand", "core.pager", "diff.external"])
+@pytest.mark.parametrize("command", ["git status", "gh pr status", "git log --oneline"])
+@pytest.mark.parametrize("cwd", ["vendor/lib", "vendor/lib/src"])
+def test_the_git_settings_guard_reads_the_nested_repository_the_command_runs_in(workspace, key, command, cwd):
+    git_repo(workspace)
+    nested_repo(workspace, (key, "./run.sh"))
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command, "cwd": cwd})
+    assert "program" in ask.questions[0][0]
+
+
+@needs_git
+def test_the_git_settings_guard_reads_a_nested_repository_inside_a_folder_that_is_not_a_repository(workspace):
+    nested_repo(workspace, ("core.fsmonitor", "./run.sh"))
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": "git status", "cwd": "vendor/lib"})
+    assert "program" in ask.questions[0][0]
+
+
+@needs_git
+def test_a_plain_nested_repository_inside_a_plain_project_stays_quiet(workspace):
+    git_repo(workspace, ("user.name", "x"))
+    nested_repo(workspace, ("core.fsmonitor", "false"))
+    ask = Asker()
+    for command in ("git status", "gh pr status"):
+        assert permissions.Gate(workspace, ask).allows("run_command", {"command": command, "cwd": "vendor/lib"})
+    assert ask.questions == []
+
+
+@needs_git
+@pytest.mark.parametrize("command", ["cd vendor/lib && git status", "git -C vendor/lib status",
+                                     "git --git-dir=vendor/lib/.git status"])
+def test_reaching_a_nested_repository_any_other_way_than_cwd_is_not_look_only(workspace, command):
+    git_repo(workspace)
+    nested_repo(workspace, ("core.fsmonitor", "./run.sh"))
+    assert not permissions.is_read_only_command(command)
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
