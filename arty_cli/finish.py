@@ -1,10 +1,21 @@
 import re
+import shlex
 import threading
 from dataclasses import dataclass, field
 
-TEST_COMMAND = re.compile(r"\b(pytest|py\.test|unittest|tox|nox|jest|vitest|mocha|rspec|phpunit|ctest)\b|"
-                          r"\b(npm|yarn|pnpm|bun|deno|go|cargo|make|dotnet|mvn|gradle|gradlew|mix|swift)\s+"
-                          r"(?:run\s+)?test\b")
+TEST_PROGRAMS = {"pytest", "py.test", "tox", "nox", "jest", "vitest", "mocha", "rspec", "phpunit", "ctest"}
+TEST_MODULES = {"pytest", "unittest", "tox", "nox"}
+TEST_TASK_RUNNERS = {"npm", "yarn", "pnpm", "bun", "deno", "go", "cargo", "make", "dotnet", "mvn", "gradle",
+                     "gradlew", "mix", "swift"}
+TEST_TASK = re.compile(r"test\b")
+PYTHON_PROGRAM = re.compile(r"(?:python[\d.]*|py)$")
+LAUNCHERS = {"env", "time", "command", "exec", "nice", "nohup", "npx", "bunx", "pnpx", "xvfb-run", "timeout"}
+TWO_WORD_LAUNCHERS = {("uv", "run"), ("poetry", "run"), ("pipenv", "run"), ("pdm", "run"), ("rye", "run"),
+                      ("hatch", "run"), ("bundle", "exec"), ("pnpm", "exec"), ("yarn", "exec"), ("npm", "exec")}
+PIECE_SEPARATORS = re.compile(r"&&|\|\||(?<![<>&])&(?![>&])|[;|\n()]")
+ENVIRONMENT_SETTING = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+DURATION = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
+WINDOWS_PROGRAM_ENDINGS = (".exe", ".bat", ".cmd")
 EXIT_CODE_AT_THE_END = re.compile(r"\[(?:job \S+ finished with )?exit code (-?\d+)\]\s*$")
 FAILURE_COUNTS = re.compile(r"\b(\d+) (?:failed|failures?|errors?)\b", re.I)
 UNITTEST_COUNTS = re.compile(r"(?:failures|errors)=(\d+)")
@@ -66,7 +77,67 @@ class GoodRun:
 
 
 def is_test_command(command: str) -> bool:
-    return bool(TEST_COMMAND.search(command or ""))
+    return any(runs_tests(command_words(piece)) for piece in PIECE_SEPARATORS.split(command or ""))
+
+
+def command_words(piece: str) -> list[str]:
+    try:
+        return shlex.split(piece.replace("\\", "/"))
+    except ValueError:
+        return piece.split()
+
+
+def bare_program(word: str) -> str:
+    name = re.split(r"[\\/]", word)[-1].lower()
+    for ending in WINDOWS_PROGRAM_ENDINGS:
+        name = name.removesuffix(ending)
+    return name
+
+
+def without_duration(words: list[str]) -> list[str]:
+    return words[1:] if words and DURATION.match(words[0]) else words
+
+
+def without_launchers(words: list[str]) -> list[str]:
+    while words:
+        program = bare_program(words[0])
+        if ENVIRONMENT_SETTING.match(words[0]) or words[0].startswith("-"):
+            words = words[1:]
+        elif program == "timeout":
+            words = without_duration(words[1:])
+        elif program in LAUNCHERS:
+            words = words[1:]
+        elif tuple(word.lower() for word in words[:2]) in TWO_WORD_LAUNCHERS:
+            words = words[2:]
+        else:
+            return words
+    return words
+
+
+def python_module_of(arguments: list[str]) -> str:
+    for index, word in enumerate(arguments):
+        if word == "-m":
+            return arguments[index + 1] if index + 1 < len(arguments) else ""
+        if word.startswith("-m"):
+            return word[2:]
+        if not word.startswith("-"):
+            return ""
+    return ""
+
+
+def runs_tests(words: list[str]) -> bool:
+    words = without_launchers(words)
+    if not words:
+        return False
+    program, rest = bare_program(words[0]), words[1:]
+    if program in TEST_PROGRAMS:
+        return True
+    if PYTHON_PROGRAM.match(program):
+        return python_module_of(rest) in TEST_MODULES
+    if program in TEST_TASK_RUNNERS:
+        task = rest[1:] if rest[:1] == ["run"] else rest
+        return bool(task) and bool(TEST_TASK.match(task[0]))
+    return False
 
 
 def counted_failures(line: str) -> int | None:

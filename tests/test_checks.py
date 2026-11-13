@@ -226,11 +226,17 @@ def test_a_failing_test_run_is_not_a_check_and_is_remembered(tmp_path):
     assert turn_state.checked_at > turn_state.changed_at and turn_state.failing_run is None
 
 
-FAILING_PYTEST = python_call("-c", "print('=== 2 failed, 3 passed ==='); raise SystemExit(1)") + " # pytest"
+FAILING_PYTEST = python_call("-m", "pytest")
+FAKE_FAILING_PYTEST = "print('=== 2 failed, 3 passed ===')\nraise SystemExit(1)\n"
+
+
+def failing_pytest_workspace(tmp_path):
+    (tmp_path / "pytest.py").write_text(FAKE_FAILING_PYTEST)
+    return ruled_workspace(tmp_path)
 
 
 def test_finishing_on_failing_tests_is_sent_back_with_the_failure_when_there_is_no_finish_check(tmp_path):
-    workspace = ruled_workspace(tmp_path)
+    workspace = failing_pytest_workspace(tmp_path)
     answer, messages, _scripted = turn(
         workspace,
         ("", [call("write_file", path="app.py", content="x = 1\n")]),
@@ -246,7 +252,7 @@ def test_finishing_on_failing_tests_is_sent_back_with_the_failure_when_there_is_
 
 def test_with_the_finish_check_on_failing_tests_are_left_to_it(tmp_path):
     from arty_cli import finish
-    workspace = ruled_workspace(tmp_path)
+    workspace = failing_pytest_workspace(tmp_path)
     workspace.finish_check = finish.FinishCheck()
     answer, messages, _scripted = turn(
         workspace,

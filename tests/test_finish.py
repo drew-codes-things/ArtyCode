@@ -20,6 +20,26 @@ def test_other_commands_are_not_test_runs(command):
     assert not finish.is_test_command(command)
 
 
+@pytest.mark.parametrize("command", ["uv run pytest -q", "PYTHONPATH=. pytest tests", "cd app && npm test",
+                                     ".venv/bin/python -m pytest", "bundle exec rspec", "timeout 300 pytest -x",
+                                     "time cargo test", "npm run test:unit", "python3.12 -m pytest", "py -m pytest",
+                                     ".\\gradlew.bat test", "env CI=1 npx vitest run", "ls; pytest",
+                                     "python3 -B -m pytest -q", "python -mpytest"])
+def test_test_commands_behind_launchers_and_settings_are_recognised(command):
+    assert finish.is_test_command(command)
+
+
+@pytest.mark.parametrize("command", ["pip install pytest", "cat pytest.ini", "grep -rn jest package.json",
+                                     "git log --grep=mocha", "echo make test", "vim tox.ini", "rg unittest src",
+                                     "npm install --save-dev jest", "python3 -m pip install pytest"])
+def test_a_test_tool_named_as_an_argument_is_not_a_test_run(command):
+    assert not finish.is_test_command(command)
+
+
+def test_a_grep_with_no_match_is_not_recorded_as_a_failing_test_run():
+    assert finish.test_run_of("grep -rn jest package.json", "[exit code 1]") is None
+
+
 def test_a_pipe_that_hides_the_exit_code_still_shows_pytest_failures():
     run = finish.test_run_of("python3 -m pytest 2>&1 | tail -40", PYTEST_FAILING)
     assert run.failed and run.failures == 13
