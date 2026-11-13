@@ -19,8 +19,9 @@ YES, NO, ALWAYS, SAVE = "y", "n", "a", "s"
 AGREEING = (YES, ALWAYS, SAVE)
 RULE_WILDCARDS = re.compile(r"([*?\[])")
 MAX_PREVIEW_CHARS = 6_000
+POWERSHELL_READ_ONLY = {"get-childitem", "get-content", "select-string", "get-location"}
 READ_ONLY_PROGRAMS = {"ls", "pwd", "cat", "head", "tail", "wc", "grep", "rg", "find", "tree", "which", "file", "stat",
-                      "du", "diff", "dir", "type", "get-childitem", "get-content", "select-string", "get-location"}
+                      "du", "diff", "dir", "type"} | POWERSHELL_READ_ONLY
 READ_ONLY_GIT = {"status", "diff", "log", "show", "branch", "blame", "rev-parse", "ls-files"}
 FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 RG_RUNNING_OPTIONS = ("--pre", "--hostname-bin")
@@ -157,6 +158,11 @@ def refuse(question: str, preview: str = "", scope: str = "") -> str:
 
 def program_name(word: str) -> str:
     return Path(word).name.lower().removesuffix(".exe")
+
+
+def looked_up_name(word: str) -> str:
+    lowered = word.lower()
+    return lowered if sys.platform == "win32" or lowered in POWERSHELL_READ_ONLY else word
 
 
 def discards_output(command: str, index: int) -> int:
@@ -392,7 +398,7 @@ def is_read_only_piece(command: str) -> bool:
     words = words_of(command)
     if not words:
         return False
-    program, arguments = words[0].lower(), words[1:]
+    program, arguments = looked_up_name(words[0]), words[1:]
     if program == "git":
         return is_read_only_git(arguments)
     if follows_links_or_writes(program, arguments):
@@ -861,7 +867,7 @@ class Gate:
         return [prefix for prefix in found if not launches_anything(prefix)]
 
     def is_quiet_filter(self, words: list[str], folder: Path) -> bool:
-        program, arguments = program_name(words[0]), words[1:]
+        program, arguments = looked_up_name(words[0]), words[1:]
         if program not in FILTER_PROGRAMS or follows_links_or_writes(program, arguments):
             return False
         if program == "cat":

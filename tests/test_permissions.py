@@ -176,6 +176,31 @@ def test_ordinary_looking_around_still_needs_no_ok(command):
     assert permissions.is_read_only_command(command)
 
 
+@pytest.mark.parametrize("command", ["CAT a.py", "LS -la", "Git status", "Grep -n x a.py", "Find . -name x"])
+def test_off_windows_a_look_only_name_in_other_letters_is_another_program(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert not permissions.is_read_only_command(command)
+
+
+@pytest.mark.parametrize("command", ["CAT a.py", "Get-Content a.py", "GET-CHILDITEM", "DIR"])
+def test_on_windows_look_only_names_match_in_any_letters(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.is_read_only_command(command)
+
+
+@pytest.mark.parametrize("command", ["npm test | ./cat", "npm test | bin/grep x", "npm test | GREP x",
+                                     "npm test | /usr/bin/grep x", "npm test | Tail -5"])
+def test_after_a_pipe_only_a_filter_named_plainly_counts_as_look_only(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "linux")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "npm test")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    assert gate.allows("run_command", {"command": "npm test | grep x"})
+    assert len(ask.questions) == 1
+
+
 @pytest.mark.parametrize("command", ["cat ~/.ssh/id_rsa", "cat /etc/passwd", "grep -r token ~/.config",
                                      "cat ../secret.txt", "head -n 5 /home/someone/.netrc", "ls ..",
                                      "rg --file=/etc/shadow x", "cat sub/../../x"])
