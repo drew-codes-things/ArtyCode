@@ -248,7 +248,7 @@ The GitHub CLI's look-only commands run without a question too: `gh pr view`, `g
 by those words; any other gh command asks, and so does one gh doesn't know itself, since it could be an alias or an
 extension. They ask when they open a browser (`--web`, `-w`), write files (`--output`, `-O`, `--dir`, `-D`), keep
 watching (`--watch`), name a host other than github.com (`-R host/owner/repo`, `-R host:port/repo`, a URL or
-`git@host:` address), have a wildcard or `~` outside quotes (the shell would swap it for file names first), or have a
+`git@host:` address, also behind leading dashes), have a tab, line break, non-breaking space or other unusual space, have a wildcard or `~` outside quotes (the shell would swap it for file names first), or have a
 word containing `env`, `import`, `include` or `input` (the jq words for environment variables, modules and
 inputs, which `--jq` passes on). `-R owner/repo` (with a space) and github.com URLs are fine; a word with two or more
 `/` that doesn't start with `github.com` asks, so a jq `//` does too. Like git, they ask when the repository's git
