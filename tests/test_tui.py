@@ -11,7 +11,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.output import DummyOutput
 
-from arty_cli import permissions, prompt_line, tui
+from arty_cli import context, permissions, prompt_line, tui
 
 COMMANDS = {"/model": "switch model", "/mode": "how much is asked", "/help": "this list"}
 MODELS = {"arty/qwen3:14b": "14B, all tools", "arty/mimo-v2.6:9b": "9B, sees images"}
@@ -445,23 +445,32 @@ def test_queued_lines_can_be_taken_mid_turn_leaving_commands_for_later(started):
     assert interface.next_message() == "/status"
 
 
-def test_the_footer_names_the_model_branch_and_context_left_and_drops_extras_when_narrow():
-    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/qwen3:14b", "main", 62, 110)
+def test_the_footer_names_the_model_branch_and_context_room_and_drops_extras_when_narrow():
+    room = context.ContextRoom(8_400, 19_600)
+    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/qwen3:14b", "main", room, 120)
     assert plain(left) == "  default mode (shift+tab to cycle) · ? for shortcuts"
-    assert plain(right) == "arty/qwen3:14b · ⎇ main · 62% context left"
-    left, right = tui.footer_pieces(permissions.AUTO_EDIT, True, "arty/qwen3:14b", "main", 62, 46)
-    assert plain(left) + "  " + plain(right) == "  auto-edit mode · remote  62% context left"
+    assert plain(right) == "arty/qwen3:14b · ⎇ main · 8.4k / 19.6k · 57% context left"
+    left, right = tui.footer_pieces(permissions.AUTO_EDIT, True, "arty/qwen3:14b", "main", room, 46)
+    assert plain(left) + "  " + plain(right) == "  auto-edit mode · remote  57% context left"
     assert tui.fragment_width(left) + tui.fragment_width(right) <= 46
-    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/demo-coder", "shell-look", 90, 79)
-    assert plain(left) == "  default mode · ? for shortcuts" and plain(right) == "⎇ shell-look · 90% context left"
+    small = context.ContextRoom(1_200, 12_000)
+    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/demo-coder", "shell-look", small, 80)
+    assert plain(left) == "  default mode · ? for shortcuts" and plain(right) == "⎇ shell-look · 1.2k / 12.0k · 90% context left"
+    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/demo-coder", "shell-look", small, 79)
+    assert plain(right) == "1.2k / 12.0k · 90% context left"
+
+
+def test_the_footer_shows_no_context_when_it_is_unknown():
+    left, right = tui.footer_pieces(permissions.DEFAULT, False, "arty/qwen3:14b", "main", None, 120)
+    assert plain(right) == "arty/qwen3:14b · ⎇ main"
 
 
 def test_the_footer_shows_what_the_host_reports(started, monkeypatch):
     interface, _typed = started
     monkeypatch.setattr(interface, "room", lambda: 110)
-    interface.host.details = ("arty/mimo-v2.6:9b", "shell-look", 87)
+    interface.host.details = ("arty/mimo-v2.6:9b", "shell-look", context.ContextRoom(3_100, 24_000))
     shown = plain(interface.bar_text())
-    assert shown.rstrip().endswith("arty/mimo-v2.6:9b · ⎇ shell-look · 87% context left")
+    assert shown.rstrip().endswith("arty/mimo-v2.6:9b · ⎇ shell-look · 3.1k / 24.0k · 87% context left")
 
 
 def test_a_question_mark_in_an_empty_box_opens_the_shortcuts_and_escape_closes_them(started):

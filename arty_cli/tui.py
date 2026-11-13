@@ -28,7 +28,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import SearchToolbar
 
-from arty_cli import look, permissions, prompt_line, remote, suggest, tools, waiting, wrap
+from arty_cli import context, look, permissions, prompt_line, remote, suggest, tools, waiting, wrap
 
 HISTORY_FOLDER = "history"
 PROJECT_KEY_CHARS = 16
@@ -74,6 +74,7 @@ SHORTCUTS_LABEL = "? for shortcuts"
 HELP_COMMAND = "/help"
 MODE_HINT = "(shift+tab to cycle)"
 CONTEXT_LEFT = "{}% context left"
+CONTEXT_USED = "{} / {}"
 BRANCH_MARK = "⎇ "
 FOOTER_GAP = "  "
 JOIN = " · "
@@ -370,20 +371,25 @@ def status_parts(frame: int, seconds: float, label: str, tokens: int, room: int)
     return spinner, look.clipped(label, space - len(choices[-1])), choices[-1]
 
 
-def footer_pieces(mode: str, shared: bool, model: str, branch: str, left_percent: int | None, width: int):
+def context_used_text(room: context.ContextRoom) -> str:
+    return CONTEXT_USED.format(waiting.tokens_text(room.used), waiting.tokens_text(room.limit))
+
+
+def footer_pieces(mode: str, shared: bool, model: str, branch: str, room: context.ContextRoom | None, width: int):
     mode_part = [(MODE_STYLES.get(mode, "class:accent"), f"{mode} mode")]
     hint = [("class:dim", f" {MODE_HINT}")]
     remote_part = [("class:accent", prompt_line.REMOTE_MARK)] if shared else []
     shortcuts = [("class:dim", JOIN + SHORTCUTS_LABEL)]
-    context_part = [("class:dim", CONTEXT_LEFT.format(left_percent))] if left_percent is not None else []
+    context_part = [("class:dim", CONTEXT_LEFT.format(room.left_percent))] if room else []
+    used_part = [("class:dim", context_used_text(room))] if room else []
     branch_part = [("class:dim", BRANCH_MARK + branch)] if branch else []
     model_part = [("class:dim", model)] if model else []
-    optional = {"model": model_part, "branch": branch_part, "shortcuts": shortcuts, "hint": hint}
-    for dropped in (None, "hint", "model", "branch", "shortcuts"):
+    optional = {"model": model_part, "branch": branch_part, "used": used_part, "shortcuts": shortcuts, "hint": hint}
+    for dropped in (None, "hint", "model", "branch", "used", "shortcuts"):
         if dropped:
             optional[dropped] = []
         left = [("", prompt_line.BAR_INDENT), *mode_part, *optional["hint"], *remote_part, *optional["shortcuts"]]
-        right = joined([optional["model"], optional["branch"], context_part])
+        right = joined([optional["model"], optional["branch"], optional["used"], context_part])
         if fragment_width(left) + len(FOOTER_GAP) + fragment_width(right) <= width:
             return left, right
     return left, []
@@ -955,9 +961,9 @@ class Interface:
         if self.shortcuts_open:
             return [("class:dim", fitted_hint(SHORTCUTS_HINT, SHORT_SHORTCUTS_HINT, room))]
         details = getattr(self.host, "footer_details", lambda: ("", "", None))
-        model, branch, left_percent = details()
+        model, branch, context_room = details()
         width = self.room()
-        left, right = footer_pieces(self.host.mode(), self.host.shared(), model, branch, left_percent, width)
+        left, right = footer_pieces(self.host.mode(), self.host.shared(), model, branch, context_room, width)
         filler = " " * max(width - fragment_width(left) - fragment_width(right), 0)
         return left + [("", filler)] + right
 

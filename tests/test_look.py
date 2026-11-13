@@ -18,14 +18,14 @@ DETAILS = [("model", "arty/qwen3:14b"), ("folder", "~/projects/demo"), ("context
 
 
 def header(width, theme=PLAIN):
-    return look.header("ArtyCode", "0.1.0", DETAILS, width, theme)
+    return look.header("ArtyCode", "1.0.0", DETAILS, width, theme)
 
 
 def test_a_wide_header_draws_the_block_letter_logo_with_the_name_beside_it_and_the_details_under_it():
     lines = header(110)
     logo_rows = len(look.LOGO)
     assert [line.strip() for line in lines[:logo_rows]][0] == look.LOGO[0].strip()
-    assert "ArtyCode 0.1.0" in lines[logo_rows - 3] and lines[logo_rows - 3].startswith("  " + look.LOGO[logo_rows - 3])
+    assert "ArtyCode 1.0.0" in lines[logo_rows - 3] and lines[logo_rows - 3].startswith("  " + look.LOGO[logo_rows - 3])
     assert lines[logo_rows] == "" and lines[logo_rows + 1] == "  model    arty/qwen3:14b"
     assert "  context  24,576 tokens" in lines and "  rules    off" in lines
     assert all(len(line) <= 110 for line in lines)
@@ -47,12 +47,12 @@ def test_the_logo_is_drawn_in_the_accent_red_and_the_labels_dim():
 def test_under_sixty_columns_the_header_uses_the_compact_logo():
     lines = header(52)
     assert lines[0] == "  " + look.SMALL_LOGO[0] and look.LOGO[1] not in "\n".join(lines)
-    assert all(len(line) <= 52 for line in lines) and any("ArtyCode 0.1.0" in line for line in lines)
+    assert all(len(line) <= 52 for line in lines) and any("ArtyCode 1.0.0" in line for line in lines)
 
 
 def test_under_forty_columns_the_logo_is_one_line_and_long_values_are_cut():
     lines = header(30)
-    assert lines[0] == "  ◆ ArtyCode 0.1.0" and not any("█" in line for line in lines)
+    assert lines[0] == "  ◆ ArtyCode 1.0.0" and not any("█" in line for line in lines)
     assert all(len(line) <= 30 for line in lines)
     assert any(line.endswith("…") for line in lines)
 

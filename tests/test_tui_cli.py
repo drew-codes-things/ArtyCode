@@ -411,11 +411,12 @@ def test_the_footer_gets_the_model_branch_and_context_left(interactive, tmp_path
     host = cli.SessionHost(session)
     assert host.footer_details() == ("arty/qwen3:14b", "main", None)
     host.measure()
-    model, branch, left = host.footer_details()
-    assert 50 <= left < 100
+    model, branch, room = host.footer_details()
+    assert 50 <= room.left_percent < 100
+    assert 0 < room.used < room.limit == session.compact_limit()
     session.messages.append({"role": "user", "content": "x" * 200_000})
     host.measure()
-    assert host.footer_details()[2] == 0
+    assert host.footer_details()[2].left_percent == 0
 
 
 def test_slash_last_prefers_the_last_step_with_output_over_a_later_checklist(interactive, tmp_path):

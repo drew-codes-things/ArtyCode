@@ -19,7 +19,7 @@ Resume this chat: arty --resume 20261113-101500-123456
      ▄████▄
     ██▀  ▀██               ██
    ██   ▄▄▄██▄ ██▄████   ███████  ██    ██
-  ██▄▄██▀▀  ██ ██▀         ██     ██    ██   ArtyCode 0.1.0
+  ██▄▄██▀▀  ██ ██▀         ██     ██    ██   ArtyCode 1.0.0
   ██▀       ██ ██          ▀█▄▄▄  ▀██▄▄███   coding
                                   ▄▄▄▄▄▄█▀
 
@@ -98,7 +98,7 @@ Worked for 12s · 6 steps · ↓ 2.1k tokens
 ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ › Ask Arty to fix, explain or build something                                                              │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  default mode (shift+tab to cycle) · ? for shortcuts                       arty/qwen3:14b · 90% context left
+  default mode (shift+tab to cycle) · ? for shortcuts        arty/qwen3:14b · 2.0k / 19.6k · 90% context left
 ```
 
 - **Header.** The Arty logo in block letters, in Arty's red, with `ArtyCode` and the version beside it, then the
@@ -121,8 +121,9 @@ Worked for 12s · 6 steps · ↓ 2.1k tokens
 - **Status.** One line above the box shows a spinner, what is happening (`Thinking…` or the step), for how long, the
   tokens so far and that Esc interrupts. On a narrow window the details shorten before the label does.
 - **The box** has a border and a placeholder, and grows as you type several lines. Under it the footer shows the mode,
-  `? for shortcuts`, and on the right the model, the git branch and how much of the context is left before the
-  conversation gets summarised; on a narrow window the extras drop away first.
+  `? for shortcuts`, and on the right the model, the git branch, the tokens used out of the point where the
+  conversation gets summarised (`2.0k / 19.6k`) and how much is left before that happens; on a narrow window the
+  extras drop away first.
 - **Shortcuts.** `?` in an empty box opens a panel of keys under it; Enter there shows `/help`, Esc or `?` closes it,
   and typing anything else closes it and keeps what you typed.
 - **Typing while Arty works.** The box is always live. Enter while a request runs queues your message (shown as

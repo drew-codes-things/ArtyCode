@@ -68,3 +68,9 @@ def test_a_prompt_near_the_window_is_reported():
     assert context.near_window(Client(24_576), {"usage": {"prompt_tokens": 23_000}})
     assert not context.near_window(Client(24_576), {"usage": {"prompt_tokens": 12_000}})
     assert not context.near_window(Client(24_576), {})
+
+
+def test_context_room_reports_the_share_left_before_summarising():
+    assert context.ContextRoom(8_400, 19_600).left_percent == 57
+    assert context.ContextRoom(0, 19_600).left_percent == 100
+    assert context.ContextRoom(30_000, 19_600).left_percent == 0
