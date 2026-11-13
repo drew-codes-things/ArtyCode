@@ -85,7 +85,7 @@ Resume this chat: arty --resume 20261113-101500-123456
     ██▀  ▀██               ██
    ██   ▄▄▄██▄ ██▄████   ███████  ██    ██
   ██▄▄██▀▀  ██ ██▀         ██     ██    ██   ArtyCode 0.1.0
-  ██▀       ██ ██          ▀█▄▄▄  ▀██▄▄███   coding on your own Arty
+  ██▀       ██ ██          ▀█▄▄▄  ▀██▄▄███   coding
                                   ▄▄▄▄▄▄█▀
 
   model    arty/qwen3:14b

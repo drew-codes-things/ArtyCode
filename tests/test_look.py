@@ -31,6 +31,13 @@ def test_a_wide_header_draws_the_block_letter_logo_with_the_name_beside_it_and_t
     assert all(len(line) <= 110 for line in lines)
 
 
+def test_the_line_under_the_name_beside_the_logo_just_says_coding():
+    lines = header(110)
+    logo_rows = len(look.LOGO)
+    assert lines[logo_rows - 2].rstrip().endswith("  coding")
+    assert not any("own Arty" in line for line in lines)
+
+
 def test_the_logo_is_drawn_in_the_accent_red_and_the_labels_dim():
     lines = header(110, COLOURED)
     assert lines[0].startswith("  \033[38;2;229;56;59m") and bare(lines[0]).strip() == look.LOGO[0].strip()
