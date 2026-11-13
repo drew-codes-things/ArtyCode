@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-prompt__toolkit%20%7C%20pygments-success?style=flat-square)
-[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-red?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [Project home](https://github.com/drew-codes-things/ArtyCode) · [Arty, the assistant it belongs to](https://github.com/drew-codes-things/Arty)
 
@@ -874,3 +874,9 @@ python -m venv .venv && .venv/bin/pip install -e . pytest
 ```
 
 The tests run against small local stand-in servers; no API key or network is used.
+
+## License
+
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) - see [LICENSE](LICENSE) and [NOTICE](NOTICE). You
+can use, change and share ArtyCode, including commercially; if you share it or anything built from it, keep the LICENSE
+and NOTICE files, which credit ArtyCode's author, and say what you changed.

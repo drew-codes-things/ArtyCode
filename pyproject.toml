@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,7 @@ name = "arty-cli"
 dynamic = ["version"]
 description = "ArtyCode: a coding assistant in your terminal that reads, edits and runs code in the current folder, asking first. Runs on your own Arty."
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = ["prompt_toolkit>=3.0.36", "pygments>=2.12"]
 
