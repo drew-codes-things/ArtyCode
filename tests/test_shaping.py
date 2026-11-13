@@ -9,8 +9,8 @@ from tests.test_follow_ups import BRAINS_FOLLOW_UP
 
 assert project
 
-SECTIONS = ("Looking:", "Changing files:", "Tests:", "Commands:", "Working through a job:", "Finishing:")
-OLD_PROMPT_CHARS = 3006
+SECTIONS = ("Looking:", "Knowing:", "Changing files:", "Tests:", "Commands:", "Working through a job:", "Finishing:")
+PROMPT_BUDGET_CHARS = 3300
 LONGEST_PROMPT_LINE = 240
 
 
@@ -36,7 +36,7 @@ def test_the_system_prompt_comes_in_short_labelled_sections(tmp_path):
     lines = prompt.splitlines()
     assert all(section in lines for section in SECTIONS)
     assert max(len(line) for line in lines) <= LONGEST_PROMPT_LINE
-    assert len(prompt) < OLD_PROMPT_CHARS
+    assert len(prompt) < PROMPT_BUDGET_CHARS
 
 
 def test_the_system_prompt_does_not_name_tools_that_are_only_offered_sometimes(tmp_path):

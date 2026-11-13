@@ -23,6 +23,11 @@ def system_prompt(workspace, notes: str = "") -> str:
                 "inside files, read_file before any edit.",
                 "When you need a function or file and don't know where it is, search for it before guessing a path.",
                 "explore hands a long search to a helper; web_fetch reads documentation."),
+        section("Knowing:",
+                "Check a function, flag, package, error message or version you haven't seen documented, even one "
+                "the user names: web_search, then web_fetch its docs, before writing code. No versions from memory.",
+                "If a search finds nothing, it doesn't exist: say so plainly and use a real one; never write code "
+                "that calls it."),
         section("Changing files:",
                 "Use edit_file for changes: copy old_text exactly as read_file showed it, without the line numbers. "
                 "Once an edit succeeds, don't repeat it. multi_edit makes several changes to one file.",
