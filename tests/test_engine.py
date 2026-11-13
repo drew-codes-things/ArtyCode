@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from arty_cli import agent, checks, cli, context, prune, rules, sessions, tools
+from arty_cli import agent, checks, cli, context, conversation, prune, rules, sessions, tools
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
 
@@ -149,7 +149,7 @@ def forced_summary(project, monkeypatch):
     copy_of_arty_cli_source(project, "big2.py")
     monkeypatch.setattr(cli.Session, "compact_limit", lambda self: 6_000)
     monkeypatch.setattr(cli.Session, "refresh_budget", lambda self: setattr(self.workspace, "result_chars", 60_000))
-    monkeypatch.setattr(cli.prune, "prune", lambda *given: None)
+    monkeypatch.setattr(conversation.prune, "prune", lambda *given: None)
     brain = ScriptedBrain([
         [("write_file", {"path": "calc.py", "content": "def add(a, b):\n    return a + b\n"})],
         [("run_command", {"command": "echo 1 failed, 2 passed; exit 1"})],
@@ -160,7 +160,7 @@ def forced_summary(project, monkeypatch):
     session = session_for(project, brain)
     session.ask("make calc.py")
     carried = next(prompt[1]["content"] for prompt in brain.prompts
-                   if len(prompt) > 1 and str(prompt[1]["content"]).startswith(cli.COMPACTED_LEAD))
+                   if len(prompt) > 1 and str(prompt[1]["content"]).startswith(conversation.COMPACTED_LEAD))
     return session, brain, carried
 
 
@@ -191,7 +191,7 @@ def test_stopping_keeps_every_finished_round_and_drops_only_the_unfinished_one(p
     assert session.ask("look around") is False
     roles = [message["role"] for message in session.messages[1:]]
     assert roles == ["user", "assistant", "tool", "assistant", "tool", "assistant"]
-    assert session.messages[-1]["content"].startswith(cli.STOPPED)
+    assert session.messages[-1]["content"].startswith(conversation.STOPPED)
     assert "alpha" in session.messages[3]["content"]
 
 

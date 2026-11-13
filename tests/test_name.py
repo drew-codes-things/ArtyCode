@@ -2,7 +2,7 @@ import io
 
 import pytest
 
-from arty_cli import agent, authorise, cli, permissions, prompts, tools
+from arty_cli import agent, authorise, cli, login_flow, permissions, prompts, tools
 from arty_cli import __version__
 
 
@@ -38,7 +38,7 @@ def test_the_model_and_its_helpers_are_told_they_work_inside_artycode(tmp_path):
 
 
 def test_what_the_user_reads_names_artycode_and_keeps_the_commands():
-    said = (cli.NO_ADDRESS, cli.NOTIFICATION_LEADS[cli.PERMISSION_PROMPT], cli.NOTIFICATION_LEADS[cli.PLAN_APPROVAL],
+    said = (login_flow.NO_ADDRESS, cli.NOTIFICATION_LEADS[cli.PERMISSION_PROMPT], cli.NOTIFICATION_LEADS[cli.PLAN_APPROVAL],
             permissions.PROTECTED_NOTE, authorise.device_name())
     assert all("ArtyCode" in text and "Arty CLI" not in text for text in said)
-    assert "arty-cli login" in cli.NO_ADDRESS
+    assert "arty-cli login" in login_flow.NO_ADDRESS

@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from arty_cli import cli, permissions, settings
+from arty_cli import cli, permissions, screen, settings
 from tests.test_cli import FakeBrain, ready
 
 assert ready
@@ -79,7 +79,7 @@ class FakeInterface:
 
 @pytest.fixture
 def interactive(ready, monkeypatch):
-    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(screen, "is_interactive", lambda: True)
     monkeypatch.setenv("NO_COLOR", "1")
     return ready
 
@@ -197,14 +197,14 @@ def test_refusing_in_the_interface_then_saying_what_to_do_instead_uses_its_box(i
     console.answers = ["n", "use tabs"]
     assert terminal.ask("Run: rm -rf build") == permissions.NO
     assert terminal.instead() == "use tabs"
-    assert console.asked_lines == [cli.INSTEAD_QUESTION]
+    assert console.asked_lines == [screen.INSTEAD_QUESTION]
 
 
 def test_a_plan_is_reviewed_in_the_interface(interactive):
     terminal, console = console_terminal()
     console.answers = ["n", "smaller steps"]
     assert terminal.review_plan("1. Do it") == (permissions.NO, "smaller steps")
-    assert console.opened[0][0] == cli.PLAN_QUESTION and console.asked_lines == [cli.PLAN_FEEDBACK_QUESTION]
+    assert console.opened[0][0] == screen.PLAN_QUESTION and console.asked_lines == [screen.PLAN_FEEDBACK_QUESTION]
 
 
 def test_with_the_interface_the_status_goes_to_it_and_no_key_watcher_is_started(interactive):
@@ -213,7 +213,7 @@ def test_with_the_interface_the_status_goes_to_it_and_no_key_watcher_is_started(
         pass
     with terminal.thinking():
         pass
-    assert console.statuses == ["Run pytest -q", cli.waiting.LABEL]
+    assert console.statuses == ["Run pytest -q", screen.waiting.LABEL]
     with terminal.interruptible():
         assert terminal.stop_key is None
     assert terminal.err.getvalue() == ""

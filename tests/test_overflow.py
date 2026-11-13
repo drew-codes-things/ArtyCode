@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from arty_cli import agent, brain, cli, settings
+from arty_cli import agent, brain, cli, conversation, settings
 from tests.fake_servers import serving
 from tests.scripted import ScriptedBrain, project, session_for
 from tests.test_follow_ups import BRAINS_FOLLOW_UP
@@ -163,7 +163,7 @@ def test_a_turn_still_too_long_after_compacting_ends_with_the_clear_error(projec
     assert not session.ask("hello")
     shown = session.terminal.err.getvalue()
     assert len(refusals) == 2 and "still" in shown and "/clear" in shown
-    assert cli.ASK_AGAIN not in shown
+    assert conversation.ASK_AGAIN not in shown
     assert client.steps == ["Never sent."]
 
 
