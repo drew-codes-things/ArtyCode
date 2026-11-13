@@ -1892,6 +1892,7 @@ def test_an_older_prefix_for_a_powershell_command_that_runs_code_covers_nothing(
     ("run_command(Copy-Item:*)", "cp a b"), ("run_command(Move-Item:*)", "mv a b"),
     ("run_command(Stop-Process:*)", "kill 4"), ("run_command(Get-Content:*)", "type a.py"),
     ("run_command(Tee-Object:*)", "tee x.txt"), ("run_command(New-Item:*)", "md build"),
+    ("run_command(rm:*)", "C:rm x"), ("run_command(Remove-Item:*)", "FileSystem::C:\\tools\\rm.exe x"),
 ])
 def test_on_windows_a_deny_rule_matches_any_letters_and_the_built_in_aliases(workspace, monkeypatch, deny, command):
     monkeypatch.setattr(sys, "platform", "win32")
