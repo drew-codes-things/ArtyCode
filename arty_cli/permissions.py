@@ -38,6 +38,7 @@ GH_ASKING_OPTIONS = {"--web", "--output", "--dir", "--watch"}
 GH_ASKING_LETTERS = set("wOD")
 GH_REPO_SHORT = "-R"
 GH_FILTER_SHORTS = ("-q", "-t")
+GH_FILTER_OPTIONS = {"--jq", "--template"}
 GH_FILTER_REACHING_WORDS = ("env", "import", "include", "input")
 GITHUB_HOST = "github.com"
 URL_MARK = "://"
@@ -425,6 +426,18 @@ def gh_word_asks(word: str) -> bool:
     return names_another_host(gh_value(word)) or names_another_host(word.lstrip("-"))
 
 
+def gh_option_reaches_further(arguments: list[str]) -> bool:
+    filters_output = any(gh_filter_option(word) for word in arguments)
+    return any(gh_option_opens_writes_or_waits(word) or names_another_host(gh_value(word))
+               or names_another_host(word.lstrip("-")) or has_unusual_spacing(word)
+               or (filters_output and any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS))
+               for word in arguments)
+
+
+def gh_filter_option(word: str) -> bool:
+    return option_name(word) in GH_FILTER_OPTIONS or word.startswith(GH_FILTER_SHORTS)
+
+
 def has_unusual_spacing(word: str) -> bool:
     return any(not character.isprintable() or (character.isspace() and character != " ") for character in word)
 
@@ -468,6 +481,8 @@ def option_runs_or_writes(words: list[str]) -> bool:
     program = program_name(words[0])
     if program == "git":
         return git_option_runs_or_writes(words[1:])
+    if program == GH_PROGRAM:
+        return gh_option_reaches_further(words[1:])
     if program in READ_ONLY_PROGRAMS or program == "find":
         return not is_read_only_piece(shlex.join(words))
     return False
