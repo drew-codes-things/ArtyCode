@@ -1,4 +1,5 @@
 import json
+from typing import NamedTuple
 
 CHARS_PER_TOKEN = 3.5
 SMALLEST_CHARS_PER_TOKEN = 2.0
@@ -12,6 +13,15 @@ SMALLEST_SHARE = 0.25
 RESULT_SHARE = 0.25
 SMALLEST_RESULT_CHARS = 2_000
 CUT_RESULT_SHARE = 0.9
+
+
+class ContextRoom(NamedTuple):
+    used: int
+    limit: int
+
+    @property
+    def left_percent(self) -> int:
+        return max(0, min(100, round(100 * (1 - self.used / self.limit))))
 
 
 def counted_part(message: dict):
