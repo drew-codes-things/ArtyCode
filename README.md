@@ -284,7 +284,7 @@ Arty works without the other two. ArtyCode needs Arty. starfire.ai works with ot
 
 ## Install
 
-Python 3.11 or newer. The installers (and pipx) also fetch prompt_toolkit, the one library ArtyCode needs, from PyPI.
+Python 3.11 or newer. The installers (and pipx) also fetch prompt_toolkit and Pygments, the two libraries ArtyCode needs, from PyPI.
 
 **Debian (and other Linux), one line:**
 
@@ -676,7 +676,7 @@ middle of one, so the brain can keep reusing what it already read.
 
 Addresses on this computer (`localhost`, `127.0.0.1`, `::1`) and files in the project need no OK. Home-network and
 public addresses ask like `web_fetch` (**a** covers that site for that tool until you quit, **s** saves a rule such
-as `http_check(http://192.168.1.16:5003/*)`), and a file outside the project asks too. Deny rules are matched
+as `http_check(http://your-arty-host:8000/*)`), and a file outside the project asks too. Deny rules are matched
 against the full address, so `screenshot(http://localhost:9000/*)` also stops `localhost:9000/admin`.
 
 ## Skills

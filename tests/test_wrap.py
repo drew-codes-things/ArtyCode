@@ -55,8 +55,8 @@ def test_code_blocks_are_left_exactly_as_written():
 
 
 def test_a_word_longer_than_the_line_is_not_broken_up():
-    assert flowed("see /home/drew/projects/very/long/path/file.py now") == [
-        "see ", "/home/drew/projects/very/long/path/file.py", "now"]
+    assert flowed("see /home/user/projects/very/long/path/file.py now") == [
+        "see ", "/home/user/projects/very/long/path/file.py", "now"]
 
 
 def test_a_note_wraps_at_words_and_keeps_its_indent():

@@ -174,7 +174,7 @@ def test_secret_looking_and_session_variables_are_left_out_and_the_rest_kept():
                                          "ARTY_API_KEY": "k", "GITHUB_TOKEN": "t", "AWS_SECRET_ACCESS_KEY": "s",
                                          "DB_PASSWORD": "p", "SSH_AUTH_SOCK": "/a", "SSH_AGENT_PID": "1",
                                          "DBUS_SESSION_BUS_ADDRESS": "unix:path=/b", "GPG_AGENT_INFO": "/c",
-                                         "OPENAIAPIKEY": "o", "XDG_RUNTIME_DIR": "/run/user/1"})
+                                         "EXAMPLEAPIKEY": "o", "XDG_RUNTIME_DIR": "/run/user/1"})
     assert kept == {"PATH": "/usr/bin", "HOME": "/home/x", "GIT_AUTHOR_NAME": "x", "XDG_RUNTIME_DIR": "/run/user/1"}
 
 

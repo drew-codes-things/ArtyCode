@@ -57,7 +57,7 @@ def test_addresses_files_and_bare_local_addresses_are_understood(tmp_path):
     (tmp_path / "site" / "index.html").write_text("<p>hi</p>")
     assert eyes.page_address("https://example.com/a", tmp_path) == "https://example.com/a"
     assert eyes.page_address("localhost:8000/app", tmp_path) == "http://localhost:8000/app"
-    assert eyes.page_address("192.168.1.16:5003", tmp_path) == "http://192.168.1.16:5003"
+    assert eyes.page_address("192.168.0.50:8000", tmp_path) == "http://192.168.0.50:8000"
     assert eyes.page_address("site/index.html", tmp_path) == (tmp_path / "site" / "index.html").as_uri()
     for wrong in ("", "ftp://example.com/x", "file://server/share/x.html", "site/missing.html"):
         with pytest.raises(tools.ToolError):
@@ -65,7 +65,7 @@ def test_addresses_files_and_bare_local_addresses_are_understood(tmp_path):
 
 
 @pytest.mark.parametrize("host, local", [("localhost", True), ("127.0.0.5", True), ("::1", True),
-                                         ("app.localhost", True), ("192.168.1.16", False),
+                                         ("app.localhost", True), ("192.168.0.50", False),
                                          ("example.com", False), ("", False)])
 def test_this_computer_is_told_apart_from_the_network(host, local):
     assert eyes.is_this_computer(host) is local

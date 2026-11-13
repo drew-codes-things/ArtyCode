@@ -649,10 +649,10 @@ def test_looking_at_this_computer_or_a_project_file_needs_no_ok_in_any_mode(work
 
 
 @pytest.mark.parametrize("name, url, question", [
-    ("http_check", "http://192.168.1.16:5003/health", "Check http://192.168.1.16:5003/health?"),
+    ("http_check", "http://192.168.0.50:8000/health", "Check http://192.168.0.50:8000/health?"),
     ("http_check", "https://example.com/", "Check https://example.com/?"),
     ("screenshot", "https://example.com/", "Open https://example.com/ in a headless browser?"),
-    ("screenshot", "192.168.1.16:8080", "Open http://192.168.1.16:8080 in a headless browser?"),
+    ("screenshot", "192.168.0.50:8080", "Open http://192.168.0.50:8080 in a headless browser?"),
 ])
 def test_looking_at_the_network_asks_like_a_fetch(workspace, name, url, question):
     ask = Asker("n")
@@ -671,16 +671,16 @@ def test_a_page_file_outside_the_project_asks(workspace, tmp_path_factory):
 def test_always_for_a_checked_host_covers_that_host_and_that_tool_only(workspace):
     ask = Asker("a", "n")
     gate = permissions.Gate(workspace, ask)
-    assert gate.allows("http_check", {"url": "http://192.168.1.16:5003/health"})
-    assert gate.allows("http_check", {"url": "http://192.168.1.16:5003/other"})
-    assert not gate.allows("screenshot", {"url": "http://192.168.1.16:5003/"})
+    assert gate.allows("http_check", {"url": "http://192.168.0.50:8000/health"})
+    assert gate.allows("http_check", {"url": "http://192.168.0.50:8000/other"})
+    assert not gate.allows("screenshot", {"url": "http://192.168.0.50:8000/"})
     assert len(ask.questions) == 2
 
 
 def test_saving_a_check_allows_that_site_and_deny_rules_see_the_full_address(workspace):
     gate, _told = saving_gate(workspace, permissions.SAVE)
-    assert gate.allows("http_check", {"url": "192.168.1.16:5003/health"})
-    assert saved_allow_rules(workspace) == ["http_check(http://192.168.1.16:5003/*)"]
+    assert gate.allows("http_check", {"url": "192.168.0.50:8000/health"})
+    assert saved_allow_rules(workspace) == ["http_check(http://192.168.0.50:8000/*)"]
     gate.rules.deny.append("screenshot(http://localhost:9000/*)")
     assert not gate.allows("screenshot", {"url": "localhost:9000/admin"})
 
