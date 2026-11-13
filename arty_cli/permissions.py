@@ -45,6 +45,7 @@ WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
+SHELL_PATTERN = re.compile(r"[*?]|\[.*\]")
 BASH_ONLY_BRACKETS = re.compile(r"\[(?:\^|!?\[[:=.])")
 END_OF_OPTIONS = "--"
 QUOTED_OR_ESCAPED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.", re.DOTALL)
@@ -72,6 +73,11 @@ REFUSED_INSTEAD = (REFUSED_LEAD + " They said what to do instead: {said}. Do tha
                    "what they refused.")
 RULE_DENIED = ("A permission rule in the settings forbids this, so it wasn't done. Don't try another way round it; "
                "tell the user.")
+UNCHECKABLE_COMMAND = ("A permission rule in the settings forbids some commands, and this command hides which "
+                       "programs it runs from that rule (a $ or backtick expansion, brackets or braces, a < or a > "
+                       "into a file, a # comment, or a wildcard where a program's name goes), so it wasn't run. If it "
+                       "is allowed, write it again as plain words without those; don't try another way round the rule.")
+UNCHECKABLE_QUESTION = "Run: {command}? (allow-all still asks: ArtyCode can't tell which programs this runs)"
 RULE_SHAPE = re.compile(r"^([A-Za-z0-9_*?\[\]-]+)(?:\((.*)\))?$", re.DOTALL)
 COMMAND_PARTS = re.compile(r"[;&|\n]+")
 SETTINGS_FILE = "settings.json"
@@ -567,6 +573,25 @@ def rough_words(part: str) -> list[str]:
     return [word.strip(UNREADABLE_WORD_EDGES) for word in part.split() if word.strip(UNREADABLE_WORD_EDGES)]
 
 
+def hides_its_programs(command: str) -> bool:
+    if not command.strip():
+        return False
+    pieces = command_pieces(command)
+    return not pieces or any(piece_hides_programs(words_of(text) or text.split()) for _joiner, text in pieces)
+
+
+def piece_hides_programs(words: list[str]) -> bool:
+    words = without_settings_and_keywords(words)
+    if not words:
+        return False
+    if SHELL_PATTERN.search(words[0]):
+        return True
+    program = program_name(words[0].lstrip("\\"))
+    if program not in WRAPPER_PROGRAMS and program not in SHELL_PROGRAMS:
+        return False
+    return any(hides_its_programs(word) for word in words[1:] if not word.startswith("-"))
+
+
 def prefix_covers_an_option(rule: str, name: str, target: str) -> bool:
     parts = rule_parts(rule)
     words = words_of(target)
@@ -586,6 +611,13 @@ class Rules:
         targets = [target] + ([part.strip() for part in COMMAND_PARTS.split(target) if part.strip()]
                               + program_runs(target) if name == "run_command" else [])
         return any(rule_matches(rule, name, targets) for rule in self.deny)
+
+    def denies_commands(self) -> bool:
+        return any(parts is not None and parts[1] is not None and fnmatch.fnmatchcase("run_command", parts[0])
+                   for parts in map(rule_parts, self.deny))
+
+    def cannot_check(self, name: str, target: str) -> bool:
+        return name == "run_command" and self.denies_commands() and hides_its_programs(target)
 
     def allows(self, name: str, target: str) -> bool:
         if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)
@@ -711,7 +743,10 @@ class Gate:
         return REFUSED_INSTEAD.format(said=said) if said else REFUSED
 
     def rule_refusal(self, name: str, arguments: dict) -> str | None:
-        return RULE_DENIED if self.rules.denies(name, call_target(self.workspace, name, arguments)) else None
+        target = call_target(self.workspace, name, arguments)
+        if self.rules.denies(name, target):
+            return RULE_DENIED
+        return UNCHECKABLE_COMMAND if self.rules.cannot_check(name, target) else None
 
     def rule_allows(self, name: str, arguments: dict) -> bool:
         return self.rules.allows(name, call_target(self.workspace, name, arguments))
@@ -877,6 +912,8 @@ class Gate:
             return denied
         if self.mode != PLAN and rules.is_record_change(self.workspace, name, arguments):
             return rules.append_only_refusal(self.workspace, name, arguments)
+        if self.mode == ALLOW_ALL and name == "run_command":
+            return self.confirm_unreadable(str(arguments.get("command") or ""))
         if self.mode == ALLOW_ALL or name in FREE_TOOLS:
             return None
         if name in tools.CHANGING_TOOLS and self.mode != PLAN and self.protects(arguments):
@@ -903,6 +940,11 @@ class Gate:
             return self.check_command(str(arguments.get("command", "")), bool(arguments.get("background")),
                                       self.command_folder(arguments))
         return self.check_other(name, read_only=False, arguments=arguments)
+
+    def confirm_unreadable(self, command: str) -> str | None:
+        if command in self.always or not hides_its_programs(command):
+            return None
+        return self.confirm(UNCHECKABLE_QUESTION.format(command=command), remember=command)
 
     def check_other(self, name: str, read_only: bool, preview: str = "", arguments: dict | None = None) -> str | None:
         denied = self.rule_refusal(name, arguments or {})

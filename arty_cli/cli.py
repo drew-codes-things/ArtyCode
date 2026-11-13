@@ -159,7 +159,7 @@ WELCOME_LABEL_WIDTH = 8
 MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
                  permissions.AUTO_EDIT: "edits without asking, asks before commands",
                  permissions.PLAN: "looks and plans, changes nothing",
-                 permissions.ALLOW_ALL: "asks nothing"}
+                 permissions.ALLOW_ALL: "asks only before a command it can't read"}
 WELCOME_TIPS = ('Ask in plain words, e.g. "why does the login test fail?" or "add a --dry-run flag"',
                 "@file attaches a file · !command runs one yourself · # note saves a project note",
                 "? or /help for commands · Ctrl-C stops a request · Ctrl-D leaves")
@@ -617,7 +617,8 @@ def parse_arguments(argv):
     parser.add_argument("--model", help="model for this session, e.g. arty/qwen3:14b")
     parser.add_argument("--project", type=Path, default=None, help="project folder (default: here)")
     parser.add_argument("--permission-mode", choices=permissions.MODES, default=permissions.DEFAULT,
-                        help="how much to ask first (allow-all asks nothing: only in a throwaway folder)")
+                        help="how much to ask first (allow-all asks only before a command it can't read: only "
+                             "in a throwaway folder)")
     parser.add_argument("--auto-edit", action="store_true", help="same as --permission-mode auto-edit")
     parser.add_argument("--remote", action="store_true",
                         help="share the chat with Arty on your phone or starfire.ai from the start (same as /remote)")
@@ -1584,7 +1585,8 @@ def welcome(session: Session, tips: tuple = WELCOME_TIPS) -> None:
     level = rules_level(session.workspace)
     welcome_row(terminal, "Rules", f"{level}: {rules.MEANINGS[level]} (/rules to change)")
     if mode == permissions.ALLOW_ALL:
-        terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
+        terminal.note("allow-all: nothing is asked first apart from commands ArtyCode can't read. Use it only in a "
+                      "folder you can throw away.", "error")
     terminal.note("")
     for tip in tips:
         terminal.note(f"  {tip}")
@@ -1632,7 +1634,8 @@ def welcome_header(session: Session, theme: look.Theme, show_block) -> None:
     show_block(lambda width: look.header(PRODUCT_NAME, __version__, details(), width, theme))
     terminal.note("")
     if session.gate.mode == permissions.ALLOW_ALL:
-        terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
+        terminal.note("allow-all: nothing is asked first apart from commands ArtyCode can't read. Use it only in a "
+                      "folder you can throw away.", "error")
     for tip in HEADER_TIPS:
         terminal.note(f"  {tip}")
     if not memory.project_note_files(session.workspace.root):

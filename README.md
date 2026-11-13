@@ -67,7 +67,8 @@ Every tool result the model sees is cut to about a quarter of the room the conve
 without asking, apart from `.arty` and `.git` folders); `plan` (look and plan only, nothing changed or run; `/plan` switches it; when the model has a plan it
 presents it with the `present_plan` tool and you answer **y** to approve it, so plan mode ends and the work carries on
 in `default`, **a** to approve it and carry on in `auto-edit`, or **n** to keep planning, with what should change); `allow-all` (nothing asked,
-only for a folder you can throw away). **Shift+Tab** moves on to the next mode, keeping what you have typed: default,
+apart from a command ArtyCode can't read, such as one with `$` or a wildcard where the program's name goes; only for a
+folder you can throw away). **Shift+Tab** moves on to the next mode, keeping what you have typed: default,
 auto-edit, plan, then default again. allow-all is never reached with Shift+Tab, only with `/mode allow-all` or the flag.
 
 ### The terminal interface
@@ -258,7 +259,9 @@ everything, including `allow-all` and hooks, and is checked against each part of
 program each part runs, also behind a path (`/bin/rm`), a setting (`X=1 rm`), a shell keyword or a program that starts
 another (`sudo`, `xargs`, `bash -c`). It is still a match on the command's words, not on what a program does:
 `find -delete` or a script that removes files is not caught by `run_command(rm *)`, so a command deny rule stops the usual
-ways of running that program, not every way of doing what it does. A chained command
+ways of running that program, not every way of doing what it does. While any `run_command` deny rule is set, a command
+ArtyCode can't read through (a `$` or backtick expansion, brackets or braces, `<`, `>` into a file, a `#` comment, or a
+wildcard where a program's name goes) is refused, because `rm$IFS-rf` or `r$@m` would hide the denied program. A chained command
 or pipeline (`|`, `&&`, `||`, `;`, a new line) is allowed only when every part is: a part matches an allow rule or a
 prefix allowed with **a**, or, after a `|`, is only a look-only filter (`tail`, `head`, `grep`, `wc`, `sort`, `uniq`,
 or `cat` with nothing after it) that reads nothing outside the project. Nothing is allowed this way with `$`,

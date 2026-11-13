@@ -964,6 +964,62 @@ def test_a_deny_prefix_rule_for_a_launcher_still_forbids_it(workspace):
     assert gate.check("run_command", {"command": "sudo make install"}) == permissions.RULE_DENIED
 
 
+EXPANSION_HIDDEN = [("run_command(rm *)", "rm$IFS-rf$IFS/tmp/x"), ("run_command(rm:*)", "r$@m -rf build"),
+                    ("run_command(curl:*)", "curl$IFS-sSfL http://x"), ("run_command(curl:*)", "curl$'\\t'http://x"),
+                    ("run_command(curl:*)", "c$@url x"), ("run_command(*curl*)", "c$@url x"),
+                    ("run_command(rm:*)", "/bin/r[m] -rf build"), ("run_command(rm:*)", "sudo r? -rf build"),
+                    ("run_command(rm:*)", "bash -c 'r$@m -rf build'")]
+EVERY_MODE = [permissions.DEFAULT, permissions.AUTO_EDIT, permissions.PLAN, permissions.ALLOW_ALL]
+
+
+@pytest.mark.parametrize("mode", EVERY_MODE)
+@pytest.mark.parametrize("deny, command", EXPANSION_HIDDEN)
+def test_a_command_whose_programs_hide_behind_an_expansion_is_refused_under_a_deny_rule(workspace, mode, deny,
+                                                                                       command):
+    ask = Asker("y")
+    gate = permissions.Gate(workspace, ask, mode=mode)
+    gate.rules = rules(deny=[deny])
+    assert gate.check("run_command", {"command": command}) == permissions.UNCHECKABLE_COMMAND
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("command", ["echo $HOME", "make > build.log", "cat <<< x"])
+def test_any_command_deny_rule_refuses_a_command_that_cannot_be_checked(workspace, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(git push:*)"])
+    assert gate.check("run_command", {"command": command}) == permissions.UNCHECKABLE_COMMAND
+
+
+def test_a_deny_rule_for_another_tool_leaves_unreadable_commands_to_the_mode(workspace):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.rules = rules(deny=["read_file(*.env)"])
+    assert gate.check("run_command", {"command": "r$@m -rf build"}) == permissions.REFUSED
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("deny, command", EXPANSION_HIDDEN)
+def test_allow_all_asks_before_a_command_it_cannot_read_even_without_rules(workspace, deny, command):
+    ask = Asker("n", "y")
+    gate = permissions.Gate(workspace, ask, mode=permissions.ALLOW_ALL)
+    assert gate.check("run_command", {"command": command}) == permissions.REFUSED
+    assert gate.check("run_command", {"command": command}) is None
+    assert len(ask.questions) == 2
+    assert command in ask.questions[0][0]
+
+
+@pytest.mark.parametrize("command", ["ls -la", "make test", "pytest -q tests", "npm run build && npm test",
+                                     "cat a.py | grep x", "X=1 python3 -m pytest", "sudo apt-get update",
+                                     "git commit -m 'rm the old file'", "python3 -m pytest 2>&1 | tail -5"])
+@pytest.mark.parametrize("mode", [permissions.ALLOW_ALL, permissions.DEFAULT])
+def test_plain_commands_are_unaffected_by_the_expansion_check(workspace, mode, command):
+    ask = Asker("y")
+    gate = permissions.Gate(workspace, ask, mode=mode)
+    gate.rules = rules(allow=["run_command(*)"], deny=["run_command(rm:*)", "run_command(curl:*)"])
+    assert gate.check("run_command", {"command": command}) is None
+    assert ask.questions == []
+
+
 POWERSHELL_HIDDEN = [r"ls .\; rm -r src", 'dir "a\\" ; Remove-Item -Recurse src ; echo "', "dir a\\\nrm a.py",
                      "Get-Content a.py\\| Remove-Item a.py"]
 
