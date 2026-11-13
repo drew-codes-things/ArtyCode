@@ -48,6 +48,7 @@ GIT_CONFIG_SECONDS = 10
 SHELL_CONTROL = re.compile(r"[;&|<>`$\n]")
 GROUPING = set("(){}")
 QUOTES = "'\""
+COMMENT_MARK = "#"
 READING_TOOLS = ("read_file", "list_files", "search", eyes.VIEW_IMAGE)
 FREE_TOOLS = ("command_output", "stop_command", "todo_write")
 EDITS = "edits"
@@ -131,6 +132,10 @@ def discards_output(command: str, index: int) -> int:
     return found.end()
 
 
+def starts_a_word(text: str) -> bool:
+    return not text or text[-1].isspace()
+
+
 def separator_at(command: str, index: int) -> str:
     return next((separator for separator in SEPARATORS if command.startswith(separator, index)), "")
 
@@ -152,6 +157,8 @@ def command_pieces(command: str) -> list[tuple[str, str]]:
             quote = "" if character == quote else quote or character
             text, index = text + character, index + 1
             continue
+        if character == COMMENT_MARK and starts_a_word(text):
+            return []
         if character in GROUPING or character == "<" or command.startswith(SUBSTITUTIONS, index):
             return []
         if character == ">" or command.startswith("&>", index):
@@ -438,7 +445,8 @@ class Rules:
         return any(rule_matches(rule, name, targets) for rule in self.deny)
 
     def allows(self, name: str, target: str) -> bool:
-        if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)):
+        if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)
+                                      or not command_pieces(target)):
             return False
         return any(rule_matches(rule, name, [target]) for rule in self.allow)
 
