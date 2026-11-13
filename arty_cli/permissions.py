@@ -59,6 +59,7 @@ LINK_FOLLOWING_FLAGS = {"grep": GREP_LINK_FOLLOWING, "egrep": GREP_LINK_FOLLOWIN
 FIND_LINK_FOLLOWING = {"-L", "-follow"}
 SHELL_DIRECTORY_STACK = ("~+", "~-")
 WINDOWS_ABSOLUTE = re.compile(r"^([A-Za-z]:|\\\\|//)")
+WINDOWS_PATH_SEPARATORS = re.compile(r"[\\/]")
 POWERSHELL_DRIVES = {"alias", "cert", "env", "function", "hkcu", "hklm", "variable", "wsman", "temp"}
 PROVIDER_QUALIFIER = "::"
 POWERSHELL_LIST_MARK = ","
@@ -150,12 +151,15 @@ SCRIPT_RUNNING_PROGRAMS = {"make", "gmake", "bmake", "cmake", "ninja", "tar", "z
                            "vimdiff", "gvim", "emacs", "nano", "ex", "ed", "less", "more", "most", "pager", "man",
                            "tmux", "screen"}
 POWERSHELL_LAUNCHERS = {"start-process", "saps", "start", "invoke-expression", "iex", "invoke-command", "icm",
-                        "invoke-item", "ii", "start-job", "sajb"}
+                        "invoke-item", "ii", "start-job", "sajb", "start-threadjob", "invoke-cimmethod",
+                        "invoke-wmimethod", "add-type", "import-module", "ipmo", "set-alias", "sal", "new-alias", "nal"}
 POWERSHELL_CHANGING = {"remove-item", "ri", "del", "erase", "rd", "new-item", "ni", "move-item", "mi", "move",
                        "copy-item", "cpi", "copy", "rename-item", "rni", "ren", "set-content", "sc", "add-content", "ac",
                        "clear-content", "clc", "out-file", "set-item", "si", "clear-item", "new-itemproperty",
                        "set-itemproperty", "sp", "remove-itemproperty", "rp", "invoke-webrequest", "iwr",
-                       "invoke-restmethod", "irm", "stop-process", "spps"}
+                       "invoke-restmethod", "irm", "stop-process", "spps", "cli", "md", "clear-itemproperty", "clp",
+                       "move-itemproperty", "mp", "copy-itemproperty", "cpp", "rename-itemproperty", "rnp",
+                       "tee-object", "start-bitstransfer"}
 NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS | POWERSHELL_LAUNCHERS
 EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | POWERSHELL_CHANGING | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
@@ -189,7 +193,8 @@ def refuse(question: str, preview: str = "", scope: str = "") -> str:
 
 
 def program_name(word: str) -> str:
-    return Path(word).name.lower().removesuffix(".exe")
+    name = WINDOWS_PATH_SEPARATORS.split(word)[-1] if sys.platform == "win32" else Path(word).name
+    return name.lower().removesuffix(".exe")
 
 
 def looked_up_name(word: str) -> str:

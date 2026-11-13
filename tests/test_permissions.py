@@ -1813,3 +1813,63 @@ def test_on_windows_a_powershell_list_inside_the_project_is_still_look_only(work
 def test_off_windows_a_comma_is_part_of_the_file_name(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     assert permissions.paths_among(["cat", "a.py,b.py"]) == ["a.py,b.py"]
+
+
+MODULE_QUALIFIED = ["Microsoft.PowerShell.Utility\\Invoke-Expression -Command 'Get-Date'",
+                    "Microsoft.PowerShell.Management\\Remove-Item -Recurse build",
+                    "Microsoft.PowerShell.Management\\Start-Process notepad",
+                    "microsoft.powershell.utility\\IEX 'Get-Date'", "Microsoft.PowerShell.Utility/Invoke-Expression x"]
+
+
+@pytest.mark.parametrize("command", MODULE_QUALIFIED)
+def test_on_windows_a_module_qualified_command_is_never_offered_as_a_prefix(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+def test_on_windows_always_for_a_module_qualified_launcher_covers_only_that_command(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("a", "n")
+    gate = permissions.Gate(workspace, ask)
+    launcher = "Microsoft.PowerShell.Utility\\Invoke-Expression -Command "
+    assert gate.allows("run_command", {"command": launcher + "'Get-Date'"})
+    assert not gate.allows("run_command", {"command": launcher + "'Remove-Item -Recurse src'"})
+    assert len(ask.questions) == 2
+
+
+@pytest.mark.parametrize("prefix", ["Microsoft.PowerShell.Utility\\Invoke-Expression",
+                                    "Microsoft.PowerShell.Management\\Start-Process"])
+def test_on_windows_a_saved_module_qualified_launcher_prefix_covers_nothing(workspace, monkeypatch, prefix):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not gate.allows("run_command", {"command": prefix + " x"})
+    assert len(ask.questions) == 1
+
+
+POWERSHELL_MISSING_CHANGERS = [
+    "cli Env:X", "clp HKCU:/x y", "md build", "sal ls Remove-Item", "Clear-ItemProperty HKCU:/x -Name y",
+    "Move-ItemProperty HKCU:/x -Name y -Destination HKCU:/z", "mp HKCU:/x y HKCU:/z",
+    "Copy-ItemProperty HKCU:/x -Name y -Destination HKCU:/z", "cpp HKCU:/x y HKCU:/z",
+    "Rename-ItemProperty HKCU:/x -Name y -NewName z", "rnp HKCU:/x y z", "Tee-Object -FilePath x.txt",
+    "TEE-OBJECT x.txt", "Start-BitsTransfer -Source https://example.com/x -Destination x",
+    "Invoke-CimMethod -ClassName Win32_Process -MethodName Create", "Invoke-WmiMethod -Class Win32_Process -Name Create",
+    "Start-ThreadJob -FilePath job.ps1", "Set-Alias ls Remove-Item", "New-Alias ll Remove-Item", "nal ll Remove-Item",
+    "Import-Module .\\evil.psm1", "ipmo .\\evil.psm1", "Add-Type -Path x.cs", "ADD-TYPE src", "import-module tools",
+]
+
+
+@pytest.mark.parametrize("command", POWERSHELL_MISSING_CHANGERS)
+def test_more_powershell_commands_that_change_or_launch_are_only_ever_allowed_exactly(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+@pytest.mark.parametrize("prefix", ["Import-Module", "ipmo", "Add-Type", "Invoke-CimMethod", "Invoke-WmiMethod",
+                                    "Start-ThreadJob", "Set-Alias", "sal", "New-Alias", "nal"])
+def test_an_older_prefix_for_a_powershell_command_that_runs_code_covers_nothing(workspace, prefix):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not gate.allows("run_command", {"command": prefix + " x"})
+    assert len(ask.questions) == 1
