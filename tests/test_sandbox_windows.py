@@ -103,3 +103,9 @@ def test_stopping_a_sandboxed_background_job_ends_it(tmp_path):
     assert workspace.jobs["1"].process.poll() is None
     tools.stop_command(workspace, "1")
     assert workspace.jobs["1"].process.poll() is not None
+
+
+@on_windows
+def test_a_sandboxed_command_keeps_output_beyond_ascii(tmp_path):
+    text = "café ✓ →"
+    assert text in tools.run_command(sandboxed_workspace(tmp_path), f"Write-Output '{text}'")

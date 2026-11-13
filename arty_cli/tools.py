@@ -59,6 +59,7 @@ NOTHING_TO_UNDO = "There is nothing to undo."
 MAX_CHECKPOINTS = 100
 NEW_FILE_MODE = 0o666
 POWERSHELL_EXIT_CODE = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }"
+POWERSHELL_UTF8_OUTPUT = "try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch { }; "
 TEMPORARY_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL
 TRUE_WORDS = ("true", "yes", "1")
 JSON_TYPES = {"array": list, "object": dict}
@@ -698,9 +699,13 @@ def notebook_json(notebook: dict) -> str:
     return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
 
 
+def placeholders_in(text: str) -> list[str]:
+    return PLACEHOLDERS.findall(text.replace("\r\n", "\n"))
+
+
 def refuse_placeholders(before: str, after: str) -> None:
-    added = [found.group(0) for found in PLACEHOLDERS.finditer(after)]
-    if len(added) > len(PLACEHOLDERS.findall(before)):
+    added = placeholders_in(after)
+    if len(added) > len(placeholders_in(before)):
         raise ToolError(PLACEHOLDER_REFUSAL.format(placeholder=added[-1]))
 
 
@@ -902,7 +907,8 @@ def windows_powershell() -> str:
 
 
 def powershell_arguments(script: str) -> list[str]:
-    return [windows_powershell(), "-NoProfile", "-NonInteractive", "-Command", script + POWERSHELL_EXIT_CODE]
+    return [windows_powershell(), "-NoProfile", "-NonInteractive", "-Command",
+            POWERSHELL_UTF8_OUTPUT + script + POWERSHELL_EXIT_CODE]
 
 
 def shell_command(command: str) -> tuple[list[str] | str, dict]:

@@ -1536,3 +1536,28 @@ def job_is_alive(pid):
     except ProcessLookupError:
         return False
     return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z" if Path("/proc").is_dir() else True
+
+
+def test_on_windows_output_sent_to_a_file_or_pipe_is_written_as_utf8():
+    raw = io.BytesIO()
+    redirected = io.TextIOWrapper(raw, encoding="cp1252")
+    screen.write_utf8_when_redirected([redirected], "win32")
+    redirected.write(f"{screen.STEP_MARK} done ✓")
+    redirected.flush()
+    assert raw.getvalue() == f"{screen.STEP_MARK} done ✓".encode("utf-8")
+
+
+def test_away_from_windows_redirected_output_keeps_its_encoding():
+    redirected = io.TextIOWrapper(io.BytesIO(), encoding="latin-1")
+    screen.write_utf8_when_redirected([redirected], "linux")
+    assert redirected.encoding == "latin-1"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows writes redirected output in its ANSI code page")
+def test_doctor_with_its_output_in_a_file_on_windows_does_not_crash(tmp_path):
+    kept = {name: value for name, value in os.environ.items()
+            if not name.startswith(("ARTY_", "PYTHONIOENCODING", "PYTHONUTF8"))}
+    finished = subprocess.run([sys.executable, "-m", "arty_cli", "doctor"], capture_output=True, cwd=tmp_path,
+                              env={**kept, "APPDATA": str(tmp_path), "LOCALAPPDATA": str(tmp_path)}, timeout=120)
+    assert b"Traceback" not in finished.stderr, finished.stderr.decode("utf-8", "replace")
+    assert "✗".encode("utf-8") in finished.stdout

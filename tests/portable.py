@@ -21,3 +21,9 @@ def python_call(*arguments) -> str:
 
 def file_making_call(name: str) -> str:
     return f"New-Item -ItemType File {name}" if ON_WINDOWS else f"touch {name}"
+
+
+def plain_python_call(*arguments) -> str:
+    if ON_WINDOWS and not any(character.isspace() for character in sys.executable):
+        return " ".join([sys.executable, *(str(argument) for argument in arguments)])
+    return python_call(*arguments)
