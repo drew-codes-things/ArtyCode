@@ -93,9 +93,18 @@ MODULE_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 MODULE_FLAG = "-m"
 RUNNER = re.compile(r"^(python[0-9.]*|pypy[0-9.]*|py|node|nodejs|deno|bun|bunx|npx|pnpx|uvx|ruby|perl|php|lua|java|"
                     r"sh|bash|zsh|dash|ksh|fish|pwsh|powershell|cmd)$")
+LAUNCHER_PROGRAMS = {"systemd-run", "systemd-inhibit", "stdbuf", "setsid", "flock", "strace", "ltrace", "chroot",
+                     "unshare", "nsenter", "script", "gdb", "lldb", "valgrind", "xvfb-run", "busybox", "toybox",
+                     "parallel", "chrt", "taskset", "runuser", "pkexec", "fakeroot", "unbuffer", "dbus-run-session",
+                     "ssh-agent", "firejail", "bwrap", "proot", "torsocks", "proxychains", "proxychains4", "faketime",
+                     "sg", "newgrp", "start-stop-daemon", "daemonize", "catchsegv", "nocache"}
 WRAPPER_PROGRAMS = {"sudo", "su", "doas", "env", "xargs", "eval", "exec", "source", ".", "nohup", "time", "timeout",
-                    "nice", "ionice", "watch", "command", "builtin"}
-EXACT_ONLY_PROGRAMS = WRAPPER_PROGRAMS | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
+                    "nice", "ionice", "watch", "command", "builtin"} | LAUNCHER_PROGRAMS
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "case", "esac", "in",
+                  "function", "coproc", "select", "!", "[[", "]]", "{", "}"}
+LAUNCHING_SUBCOMMANDS = {"run", "x", "dlx"}
+NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS
+EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
                                           "ssh", "curl", "wget", "kill", "pkill", "killall", "find", "sed", "awk",
                                           "gawk", "trap", "alias", "export", "unset", "set", "crontab"}
@@ -212,7 +221,19 @@ def prefix_words(words: list[str]) -> list[str]:
     following = subcommand_words(words[1 + len(target):])
     if following is None or (program in SUBCOMMAND_PROGRAMS and not following):
         return []
+    if following and following[-1] in LAUNCHING_SUBCOMMANDS:
+        return []
     return [words[0], *target, *following]
+
+
+def launches_anything(prefix: str) -> bool:
+    words = prefix.split()
+    return bool(words) and program_name(words[0]) in NEVER_PREFIXED
+
+
+def is_honoured_allow(rule: str) -> bool:
+    parts = rule_parts(rule)
+    return parts is None or not launches_anything(command_prefix_of(*parts))
 
 
 def starts_with_words(words: list[str], prefix: str) -> bool:
@@ -448,11 +469,11 @@ class Rules:
         if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)
                                       or not command_pieces(target)):
             return False
-        return any(rule_matches(rule, name, [target]) for rule in self.allow)
+        return any(rule_matches(rule, name, [target]) for rule in self.allow if is_honoured_allow(rule))
 
     def command_prefixes(self) -> list[str]:
         found = [command_prefix_of(*parts) for parts in map(rule_parts, self.allow) if parts]
-        return [prefix for prefix in found if prefix]
+        return [prefix for prefix in found if prefix and not launches_anything(prefix)]
 
 
 def rules_in(path: Path) -> tuple[dict, list[str]]:
@@ -669,7 +690,8 @@ class Gate:
         return None if answer in AGREEING else self.refused()
 
     def session_prefixes(self) -> list[str]:
-        return [mark.removeprefix(SESSION_PREFIX_MARK) for mark in self.always if mark.startswith(SESSION_PREFIX_MARK)]
+        found = [mark.removeprefix(SESSION_PREFIX_MARK) for mark in self.always if mark.startswith(SESSION_PREFIX_MARK)]
+        return [prefix for prefix in found if not launches_anything(prefix)]
 
     def is_quiet_filter(self, words: list[str]) -> bool:
         program, arguments = program_name(words[0]), words[1:]
