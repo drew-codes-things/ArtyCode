@@ -37,8 +37,24 @@ BULLET = "•"
 ELLIPSIS = "…"
 HUNK_GAP = "⋮"
 BOX = {"top_left": "╭", "top_right": "╮", "bottom_left": "╰", "bottom_right": "╯", "side": "│", "line": "─"}
-CARD_PADDING = 1
-CARD_LABEL_GAP = 2
+LOGO = ("   ▄████▄",
+        "  ██▀  ▀██               ██",
+        " ██   ▄▄▄██▄ ██▄████   ███████  ██    ██",
+        "██▄▄██▀▀  ██ ██▀         ██     ██    ██",
+        "██▀       ██ ██          ▀█▄▄▄  ▀██▄▄███",
+        "                                ▄▄▄▄▄▄█▀")
+SMALL_LOGO = (" ▄█▀▀█▄         ▄▄",
+              "██  ▄▄██ ██▄▀▀ ▀██▀ ██  ██",
+              "██▀▀▀ ██ ██     ▀█▄ ▀█▄▄██",
+              "                     ▄▄▄▄█▀")
+LOGO_COLUMNS = 60
+SMALL_LOGO_COLUMNS = 40
+HEADER_INDENT = "  "
+LOGO_GAP = "   "
+TITLE_ROW_FROM_END = 3
+TAGLINE_ROW_FROM_END = 2
+TAGLINE = "coding on your own Arty"
+DETAIL_LABEL_GAP = 2
 FENCE = re.compile(r"^\s*(```+|~~~+)\s*([\w+#.-]*)")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 RULE_LINE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
@@ -118,33 +134,50 @@ def clipped(text: str, room: int) -> str:
     return text if len(text) <= room else text[:room - 1] + ELLIPSIS
 
 
-def card(title: str, rows: list[tuple[str, str]], width: int, theme: Theme) -> list[str]:
-    label_width = max((len(label) for label, _value in rows), default=0) + CARD_LABEL_GAP
-    widest = max([len(title) + 2] + [label_width + len(value) for _label, value in rows])
-    inner = max(min(widest, width - 2 - 2 * CARD_PADDING), 1)
-    side = theme.paint(BOX["side"], "dim")
-    pad = " " * CARD_PADDING
-    shown_title = clipped(title, inner - 1)
-    top_line = BOX["line"] * max(inner + 2 * CARD_PADDING - len(shown_title) - 3, 0)
-    top = (theme.paint(f"{BOX['top_left']}{BOX['line']} ", "dim") + titled(shown_title, theme)
-           + theme.paint(f" {top_line}{BOX['top_right']}", "dim"))
-    lines = [top]
-    for label, value in rows:
-        shown_label = clipped(label, inner).ljust(min(label_width, inner))
-        shown_value = clipped(value, inner - len(shown_label))
-        filler = " " * (inner - len(shown_label) - len(shown_value))
-        lines.append(f"{side}{pad}{theme.paint(shown_label, 'dim')}{shown_value}{filler}{pad}{side}")
-    lines.append(theme.paint(f"{BOX['bottom_left']}{BOX['line'] * (inner + 2 * CARD_PADDING)}{BOX['bottom_right']}",
-                             "dim"))
+def logo_for(width: int) -> tuple[str, ...]:
+    if width >= LOGO_COLUMNS:
+        return LOGO
+    if width >= SMALL_LOGO_COLUMNS:
+        return SMALL_LOGO
+    return ()
+
+
+def header(title: str, version: str, details: list[tuple[str, str]], width: int, theme: Theme) -> list[str]:
+    named = f"{title} {version}"
+    painted_name = f"{theme.paint(title, 'bold')} {theme.paint(version, 'dim')}"
+    logo = logo_for(width)
+    if not logo:
+        lines = [HEADER_INDENT + theme.paint(clipped(f"{MARK} {title}", width - len(HEADER_INDENT)), "accent")
+                 + (" " + theme.paint(version, "dim") if len(HEADER_INDENT) + len(named) + 2 <= width else "")]
+    else:
+        lines = logo_lines(logo, named, painted_name, width, theme)
+    return lines + [""] + detail_lines(details, width, theme)
+
+
+def logo_lines(logo: tuple[str, ...], named: str, painted_name: str, width: int, theme: Theme) -> list[str]:
+    logo_width = max(len(row) for row in logo)
+    beside = width - len(HEADER_INDENT) - logo_width - len(LOGO_GAP)
+    side = {}
+    if beside >= len(named):
+        side[len(logo) - TITLE_ROW_FROM_END] = painted_name
+        if beside >= len(TAGLINE):
+            side[len(logo) - TAGLINE_ROW_FROM_END] = theme.paint(TAGLINE, "dim")
+    lines = []
+    for number, row in enumerate(logo):
+        line = HEADER_INDENT + theme.paint(row, "accent")
+        if number in side:
+            line += " " * (logo_width - len(row)) + LOGO_GAP + side[number]
+        lines.append(line)
+    if not side:
+        lines.append(HEADER_INDENT + painted_name)
     return lines
 
 
-def titled(title: str, theme: Theme) -> str:
-    if not title.startswith(MARK):
-        return theme.paint(title, "bold")
-    name, _space, version = title[len(MARK) + 1:].partition(" ")
-    return (theme.paint(MARK, "accent") + " " + theme.paint(name, "bold")
-            + (" " + theme.paint(version, "dim") if version else ""))
+def detail_lines(details: list[tuple[str, str]], width: int, theme: Theme) -> list[str]:
+    label_width = max((len(label) for label, _value in details), default=0) + DETAIL_LABEL_GAP
+    room = width - len(HEADER_INDENT) - label_width
+    return [HEADER_INDENT + theme.paint(label.ljust(label_width), "dim") + clipped(value, room)
+            for label, value in details]
 
 
 def user_block(text: str, width: int, theme: Theme) -> list[str]:

@@ -134,6 +134,7 @@ TRUE_COLOUR_NAMES = ("truecolor", "24bit")
 ERROR_STYLE = "\033[1;33m"
 COLOURS = {"dim": "\033[2m", "error": ERROR_STYLE, "removed": "\033[31m", "green": "\033[32m", "reset": "\033[0m"}
 WORDMARK = "◆ ArtyCode"
+PRODUCT_NAME = "ArtyCode"
 STEP_MARK = "●"
 THOUGHT_MARK = "✻"
 ANSWER_ARROW = "→"
@@ -152,7 +153,7 @@ MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
 WELCOME_TIPS = ('Ask in plain words, e.g. "why does the login test fail?" or "add a --dry-run flag"',
                 "@file attaches a file · !command runs one yourself · # note saves a project note",
                 "? or /help for commands · Ctrl-C stops a request · Ctrl-D leaves")
-CARD_TIPS = ("Esc stops a request · Enter while Arty works queues your next message",
+HEADER_TIPS = ("Esc stops a request · Enter while Arty works queues your next message",
              "? for shortcuts · /help for every command · @ attaches a file")
 BRANCH_CHECK_SECONDS = 5.0
 NO_NOTES_TIP = "No ARTY.md here yet: /init looks through the project and writes notes Arty reads every time."
@@ -1544,17 +1545,31 @@ def rules_summary(level: str) -> str:
     return level if meaning == level else f"{level}: {meaning}"
 
 
-def welcome_card(session: Session, theme: look.Theme, width: int) -> None:
-    terminal = session.terminal
+def context_window(session: Session) -> int | None:
+    try:
+        return context.window_tokens(session.client)
+    except providers.ERRORS:
+        return None
+
+
+def header_details(session: Session) -> list[tuple[str, str]]:
     mode = session.gate.mode
-    level = rules_level(session.workspace)
-    rows = [("model", session.client.model), ("folder", shown_folder(session.workspace.root, Path.home())),
-            ("mode", f"{mode}: {MODE_MEANINGS.get(mode, '')}"), ("rules", rules_summary(level))]
-    for line in look.card(f"{WORDMARK} {__version__}", rows, width, theme):
-        terminal.err.write(line + "\n")
-    if mode == permissions.ALLOW_ALL:
+    details = [("model", session.client.model), ("folder", shown_folder(session.workspace.root, Path.home()))]
+    window = context_window(session)
+    if window:
+        details.append(("context", f"{window:,} tokens"))
+    return details + [("mode", f"{mode}: {MODE_MEANINGS.get(mode, '')}"),
+                      ("rules", rules_summary(rules_level(session.workspace)))]
+
+
+def welcome_header(session: Session, theme: look.Theme, show_block) -> None:
+    terminal = session.terminal
+    details = header_details(session)
+    show_block(lambda width: look.header(PRODUCT_NAME, __version__, details, width, theme))
+    terminal.note("")
+    if session.gate.mode == permissions.ALLOW_ALL:
         terminal.note("allow-all: nothing is asked first. Use it only in a folder you can throw away.", "error")
-    for tip in CARD_TIPS:
+    for tip in HEADER_TIPS:
         terminal.note(f"  {tip}")
     if not memory.project_note_files(session.workspace.root):
         terminal.note(f"  {NO_NOTES_TIP}")
@@ -1643,7 +1658,7 @@ def chat_in_interface(session: Session, interface, share: bool) -> None:
                                   interface_notifier(session, interface), room=getattr(interface, "room", wrap.room))
         terminal.view.partial = getattr(interface, "show_partial", None)
         terminal.measure = host.measure
-        welcome_card(session, host.theme, terminal.view.room())
+        welcome_header(session, host.theme, interface.show_block)
         host.measure()
         if share:
             session.start_remote()

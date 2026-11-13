@@ -8,6 +8,7 @@ from arty_cli import cli, permissions, settings
 from tests.test_cli import FakeBrain, ready
 
 assert ready
+BLOCK_WIDTH = 80
 
 
 class Tty(io.StringIO):
@@ -24,6 +25,7 @@ class FakeInterface:
         self.scroll, self.stray = Tty(), Tty()
         self.question = None
         self.failure = None
+        self.blocks = []
 
     def next_message(self):
         item = self.lines.pop(0) if self.lines else None
@@ -66,6 +68,10 @@ class FakeInterface:
 
     def answer_lines(self):
         return "console answers"
+
+    def show_block(self, render):
+        self.blocks.append(render)
+        self.scroll.write("\n".join(render(BLOCK_WIDTH)) + "\n")
 
     def stop(self):
         self.stopped = True
@@ -263,22 +269,41 @@ def test_sharing_from_the_interface_answers_through_it_and_writes_no_prompt_of_i
     assert bridge.write_prompt("Choose y: ") is None and bridge.write_prompt is not print
 
 
-def test_in_the_interface_the_welcome_goes_above_the_box_and_names_its_own_keys(interactive, tmp_path):
+def test_in_the_interface_the_header_comes_first_with_the_logo_details_and_its_own_keys(interactive, tmp_path):
     session = session_for(tmp_path)
     interface = FakeInterface()
     cli.chat_in_interface(session, interface, share=False)
     shown = interface.scroll.getvalue()
-    assert shown.startswith("╭─ ◆ ArtyCode") and "│ model   arty/qwen3:14b" in shown
+    assert shown.startswith("  " + cli.look.LOGO[0] + "\n") and "ArtyCode " + cli.__version__ in shown
+    assert "  model    arty/qwen3:14b\n" in shown and "  context  " in shown
     assert "Esc stops a request" in shown and "Enter while Arty works queues" in shown
-    assert "Ctrl-C stops a request" not in shown
+    assert "Ctrl-C stops a request" not in shown and "╭" not in shown
 
 
-def test_the_card_says_rules_off_once(interactive, tmp_path):
+def test_the_header_says_rules_off_once(interactive, tmp_path):
     session = session_for(tmp_path)
     interface = FakeInterface()
     cli.chat_in_interface(session, interface, share=False)
     shown = interface.scroll.getvalue()
-    assert "│ rules   off " in shown and "off: off" not in shown
+    assert "  rules    off\n" in shown and "off: off" not in shown
+
+
+def test_the_header_is_handed_over_as_a_block_drawn_for_each_width(interactive, tmp_path):
+    session = session_for(tmp_path)
+    interface = FakeInterface()
+    cli.chat_in_interface(session, interface, share=False)
+    render = interface.blocks[0]
+    assert render(110)[0] == "  " + cli.look.LOGO[0] and render(30)[0].startswith("  ◆ ArtyCode")
+
+
+def test_a_crash_in_the_interface_still_puts_the_terminal_back(interactive, tmp_path):
+    session = session_for(tmp_path)
+    out, err = session.terminal.out, session.terminal.err
+    interface = FakeInterface(RuntimeError("boom"))
+    with pytest.raises(RuntimeError, match="boom"):
+        cli.chat_in_interface(session, interface, share=False)
+    assert interface.stopped and (session.terminal.out, session.terminal.err) == (out, err)
+    assert sys.stdout is not interface.stray
 
 
 def test_help_names_the_keys_of_the_interface(interactive, tmp_path):

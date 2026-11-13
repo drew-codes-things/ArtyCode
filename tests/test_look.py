@@ -13,22 +13,48 @@ def bare(text):
     return COLOUR_CODE.sub("", text)
 
 
-def test_the_welcome_card_has_a_border_a_title_and_labelled_rows_that_fit_the_width():
-    lines = look.card("◆ ArtyCode 0.1.0", [("model", "arty/qwen3:14b"), ("folder", "~/projects/demo")], 80, PLAIN)
-    assert lines[0].startswith("╭─ ◆ ArtyCode 0.1.0 ") and lines[0].endswith("╮")
-    assert lines[1] == "│ model   arty/qwen3:14b  │" and lines[-1].startswith("╰") and lines[-1].endswith("╯")
-    assert len({len(line) for line in lines}) == 1
+DETAILS = [("model", "arty/qwen3:14b"), ("folder", "~/projects/demo"), ("context", "24,576 tokens"),
+           ("mode", "default: asks before it changes anything"), ("rules", "off")]
 
 
-def test_a_narrow_card_cuts_long_values_with_an_ellipsis_and_never_overflows():
-    lines = look.card("◆ ArtyCode 0.1.0", [("folder", "~/" + "deep/" * 20)], 30, PLAIN)
+def header(width, theme=PLAIN):
+    return look.header("ArtyCode", "0.1.0", DETAILS, width, theme)
+
+
+def test_a_wide_header_draws_the_block_letter_logo_with_the_name_beside_it_and_the_details_under_it():
+    lines = header(110)
+    logo_rows = len(look.LOGO)
+    assert [line.strip() for line in lines[:logo_rows]][0] == look.LOGO[0].strip()
+    assert "ArtyCode 0.1.0" in lines[logo_rows - 3] and lines[logo_rows - 3].startswith("  " + look.LOGO[logo_rows - 3])
+    assert lines[logo_rows] == "" and lines[logo_rows + 1] == "  model    arty/qwen3:14b"
+    assert "  context  24,576 tokens" in lines and "  rules    off" in lines
+    assert all(len(line) <= 110 for line in lines)
+
+
+def test_the_logo_is_drawn_in_the_accent_red_and_the_labels_dim():
+    lines = header(110, COLOURED)
+    assert lines[0].startswith("  \033[38;2;229;56;59m") and bare(lines[0]).strip() == look.LOGO[0].strip()
+    assert "\033[2mmodel" in lines[len(look.LOGO) + 1]
+
+
+def test_under_sixty_columns_the_header_uses_the_compact_logo():
+    lines = header(52)
+    assert lines[0] == "  " + look.SMALL_LOGO[0] and look.LOGO[1] not in "\n".join(lines)
+    assert all(len(line) <= 52 for line in lines) and any("ArtyCode 0.1.0" in line for line in lines)
+
+
+def test_under_forty_columns_the_logo_is_one_line_and_long_values_are_cut():
+    lines = header(30)
+    assert lines[0] == "  ◆ ArtyCode 0.1.0" and not any("█" in line for line in lines)
     assert all(len(line) <= 30 for line in lines)
-    assert lines[1].rstrip("│ ").endswith("…")
+    assert any(line.endswith("…") for line in lines)
 
 
-def test_the_card_title_is_painted_in_the_accent_and_the_border_dim():
-    top = look.card("◆ ArtyCode 0.1.0", [("model", "m")], 80, COLOURED)[0]
-    assert "\033[38;2;229;56;59m◆" in top and "\033[2m╭" in top and bare(top).startswith("╭─ ◆ ArtyCode")
+def test_every_logo_row_is_only_plain_terminal_characters():
+    allowed = set(" ▀▄█")
+    assert all(set(row) <= allowed for row in look.LOGO + look.SMALL_LOGO)
+    assert max(len(row) for row in look.LOGO) + 2 <= look.LOGO_COLUMNS
+    assert max(len(row) for row in look.SMALL_LOGO) + 2 <= look.SMALL_LOGO_COLUMNS
 
 
 def test_a_user_message_is_a_filled_block_and_plain_without_colour():
