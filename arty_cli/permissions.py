@@ -79,6 +79,10 @@ GIT_CONFIG_SECONDS = 10
 SHELL_CONTROL = re.compile(r"[;&|<>`$\n]")
 GROUPING = set("(){}")
 QUOTES = "'\""
+POWERSHELL_SINGLE_QUOTES = "\u2018\u2019\u201a\u201b"
+POWERSHELL_DOUBLE_QUOTES = "\u201c\u201d\u201e"
+POWERSHELL_DASHES = "\u2013\u2014\u2015"
+PLAIN_SPACING = " \t\n"
 COMMENT_MARK = "#"
 LINE_CONTINUATION = "\\\n"
 CARRIAGE_RETURN = "\r"
@@ -219,12 +223,25 @@ def separator_at(command: str, index: int) -> str:
     return next((separator for separator in SEPARATORS if command.startswith(separator, index)), "")
 
 
+def powershell_reads_differently(character: str, quote: str) -> bool:
+    if sys.platform != "win32":
+        return False
+    if quote == "'":
+        return character in POWERSHELL_SINGLE_QUOTES
+    if quote == '"':
+        return character in POWERSHELL_DOUBLE_QUOTES
+    lookalikes = POWERSHELL_SINGLE_QUOTES + POWERSHELL_DOUBLE_QUOTES + POWERSHELL_DASHES
+    return character in lookalikes or (character.isspace() and character not in PLAIN_SPACING)
+
+
 def command_pieces(command: str) -> list[tuple[str, str]]:
     if CARRIAGE_RETURN in command:
         return []
     pieces, text, joiner, quote, index = [], "", "", "", 0
     while index < len(command):
         character = command[index]
+        if powershell_reads_differently(character, quote):
+            return []
         if quote == "'":
             quote = "" if character == "'" else quote
             text, index = text + character, index + 1

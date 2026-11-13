@@ -1679,3 +1679,62 @@ def test_reaching_a_nested_repository_any_other_way_than_cwd_is_not_look_only(wo
     assert not permissions.is_read_only_command(command)
     plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
     assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+POWERSHELL_SINGLE_QUOTES = ["\u2018", "\u2019", "\u201a", "\u201b"]
+POWERSHELL_DOUBLE_QUOTES = ["\u201c", "\u201d", "\u201e"]
+POWERSHELL_LOOKALIKE_HIDING = (
+    [f"Get-Content 'a{quote}; Remove-Item -Recurse -Force x #'" for quote in POWERSHELL_SINGLE_QUOTES]
+    + [f'Get-Content "a{quote}; Remove-Item -Recurse -Force x #"' for quote in POWERSHELL_DOUBLE_QUOTES]
+    + [f"Get-Content {quote}a; Remove-Item x; {quote}" for quote in POWERSHELL_SINGLE_QUOTES + POWERSHELL_DOUBLE_QUOTES]
+    + ["Get-Content \u2013Path:Env:ARTY_API_KEY", "Get-Content \u2014Path a.py", "Get-Content \u2015Path a.py",
+       "Get-Content a.py\u00a0..\\secret.txt", "Get-Content a.py\u2007b.py", "Get-Content a.py\u3000b.py",
+       "Get-Content a.py\x0b..\\secret.txt", "Get-Content a.py\x0c..\\secret.txt", "Get-Content a.py\x85b.py"]
+)
+
+
+@pytest.mark.parametrize("command", POWERSHELL_LOOKALIKE_HIDING)
+def test_on_windows_powershell_lookalike_quotes_dashes_and_spaces_make_a_command_unreadable(workspace, monkeypatch,
+                                                                                            command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.command_pieces(command) == []
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+    allow_all = Asker("n")
+    gate = permissions.Gate(workspace, allow_all, mode=permissions.ALLOW_ALL)
+    assert not gate.allows("run_command", {"command": command})
+    assert len(allow_all.questions) == 1
+
+
+@pytest.mark.parametrize("command", POWERSHELL_LOOKALIKE_HIDING)
+def test_on_windows_a_prefix_never_covers_a_command_with_powershell_lookalikes(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "Get-Content")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("command", ['Get-Content "it\u2019s.txt"', "Get-Content 'say \u201chi\u201d.txt'",
+                                     "Get-Content 'a\u00a0b.txt'", 'Get-Content "notes \u2013 v2.txt"'])
+def test_on_windows_a_lookalike_powershell_reads_as_text_inside_other_quotes_stays_look_only(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.is_read_only_command(command)
+
+
+def test_on_windows_a_commit_message_with_a_curly_apostrophe_is_still_offered_its_prefix(workspace, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    command = 'git commit -m "it\u2019s fixed \u2013 really"'
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == ["git commit"]
+
+
+@pytest.mark.parametrize("command", ["cat 'a\u2018; rm x #'", "cat a\u00a0b", "grep \u2013n x a.py"])
+def test_off_windows_lookalike_quotes_dashes_and_spaces_are_ordinary_letters(monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert permissions.command_pieces(command) == [("", command)]

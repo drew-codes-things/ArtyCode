@@ -46,6 +46,11 @@ links out of the project (`rg --pre`, `find -fprint`, `find -L`, `grep -R`, `ls 
 repository it runs in (the project, or a repository inside it reached through `cwd`) name a program git would run (an
 fsmonitor, an external diff, a textconv or filter driver, a gpg program).
 
+On Windows, PowerShell also reads the curly quotes (U+2018 to U+201E) as quote marks, the en dash, em dash and
+horizontal bar as a parameter's dash, and the non-breaking space and other Unicode spaces as spaces. A command with one
+of these outside quotes, or with a curly quote that would end the quoted text it sits in, can't be read: it asks (in
+allow-all too) and is only ever remembered exactly.
+
 The GitHub CLI's look-only commands run without a question too: `gh pr view`, `gh pr list`, `gh pr diff`,
 `gh pr checks`, `gh pr status`, `gh issue view`, `gh issue list`, `gh issue status`, `gh run view` (with `--log` or
 `--log-failed` as well), `gh run list`, `gh release view`, `gh release list`, `gh repo view`, `gh workflow view`,
