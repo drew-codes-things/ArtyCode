@@ -6,9 +6,9 @@ from contextlib import contextmanager
 
 import pytest
 from prompt_toolkit.application import create_app_session
-from prompt_toolkit.data_structures import Point, Size
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.input import create_pipe_input
-from prompt_toolkit.layout.screen import Char, Screen
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.output import DummyOutput
 
 from arty_cli import permissions, prompt_line, tui
@@ -60,6 +60,32 @@ def until(condition, seconds=3.0):
 
 def plain(fragments):
     return "".join(text for _style, text, *_rest in fragments)
+
+
+def rows_text(rows):
+    return [plain(row) for row in rows]
+
+
+def shown_rows(interface, width, height):
+    content = tui.TranscriptControl(interface.transcript, interface.live_lines).create_content(width, height)
+    return [plain(content.get_line(number)) for number in range(content.line_count)]
+
+
+def wheel(direction):
+    return MouseEvent(Point(x=0, y=0), direction, MouseButton.NONE, frozenset())
+
+
+def transcript_of(count):
+    transcript = tui.Transcript()
+    transcript.add_block(lambda width: [f"logo at {width}"])
+    for number in range(1, count + 1):
+        transcript.add_line(f"line {number}")
+    return transcript
+
+
+def shown_by(transcript, width=40, height=5):
+    return rows_text(tui.TranscriptControl(transcript, list).create_content(width, height).get_line(number)
+                     for number in range(min(height, len(transcript.rows_for(width)))))
 
 
 @contextmanager
@@ -502,7 +528,8 @@ def test_a_request_after_earlier_output_gets_a_blank_line_before_it(started):
 def test_a_live_answer_line_is_shown_until_it_is_finished(started):
     interface, _typed = started
     interface.show_partial("● The fix is")
-    assert plain(interface.pending_text().__pt_formatted_text__()) == "● The fix is"
+    assert interface.live_lines() == ["● The fix is"]
+    assert rows_text(interface.transcript.rows_for(80)) == [] and shown_rows(interface, 80, 10)[-1] == "● The fix is"
 
 
 def test_the_bell_rings_through_the_interface_output(started):
@@ -513,39 +540,113 @@ def test_the_bell_rings_through_the_interface_output(started):
     assert until(lambda: rung == [True])
 
 
-def test_rows_that_the_terminal_rewraps_when_it_narrows_are_counted():
-    assert tui.reflowed_rows([86, 86, 10], 3, 4, 46) == 2
-    assert tui.reflowed_rows([86, 0, 30], 2, 50, 46) == 2
-    assert tui.reflowed_rows([40, 40], 2, 2, 46) == 0
-
-
-class Recording:
-    def __init__(self, columns):
-        self.columns, self.moved = columns, []
-
-    def get_size(self):
-        return Size(rows=40, columns=self.columns)
-
-    def cursor_up(self, rows):
-        self.moved.append(rows)
-
-
-def test_shrinking_the_window_climbs_over_the_rows_it_rewrapped_before_redrawing():
-    screen = Screen()
-    for row, text in enumerate(["╭" + "─" * 84 + "╮", "│ Run: pytest" + " " * 72 + "│", "short"]):
-        for column, character in enumerate(text):
-            screen.data_buffer[row][column] = Char(character)
-    renderer = type("Renderer", (), {"_last_screen": screen, "_last_size": Size(rows=40, columns=86),
-                                     "_cursor_pos": Point(x=3, y=3)})()
-    app = type("App", (), {"renderer": renderer, "output": Recording(46)})()
-    assert tui.ReflowingApplication.climb_reflowed_rows(app) == 2 and app.output.moved == [2]
-    app.output = Recording(120)
-    assert tui.ReflowingApplication.climb_reflowed_rows(app) == 0 and app.output.moved == []
-
-
 def test_a_narrow_status_line_drops_details_before_it_cuts_the_label():
     spinner, label, details = tui.status_parts(0, 65, "Run python3 -m pytest -q tests", 1234, 45)
     assert label == "Run python3 -m pytest -q tests" and details == " (1m 05s)"
     spinner, label, details = tui.status_parts(0, 65, "Run pytest -q", 1234, 100)
     assert details == " (1m 05s · ↓ 1.2k tokens · esc to interrupt)"
     assert len(spinner) + 1 + len(label) + len(details) <= 100
+
+
+def test_the_interface_takes_the_alternate_screen_with_the_mouse_and_puts_it_back_when_it_stops(started):
+    interface, _typed = started
+    assert interface.app.full_screen and interface.app.mouse_support()
+
+
+def test_a_short_conversation_starts_at_the_top_with_its_header_first():
+    transcript = transcript_of(2)
+    assert shown_by(transcript, height=10) == ["logo at 40", "line 1", "line 2"]
+
+
+def test_a_long_conversation_follows_the_newest_lines_so_the_header_scrolls_away():
+    transcript = transcript_of(20)
+    assert shown_by(transcript) == ["line 16", "line 17", "line 18", "line 19", "line 20"]
+    transcript.add_line("line 21")
+    assert shown_by(transcript)[-1] == "line 21" and not transcript.is_scrolled()
+
+
+def test_paging_up_holds_the_view_while_new_lines_arrive_and_paging_down_returns_to_the_newest():
+    transcript = transcript_of(20)
+    shown_by(transcript)
+    transcript.page(-1)
+    assert shown_by(transcript) == ["line 13", "line 14", "line 15", "line 16", "line 17"]
+    transcript.add_line("line 21")
+    assert shown_by(transcript)[0] == "line 13" and transcript.rows_below() == 4
+    transcript.page(1)
+    transcript.page(1)
+    assert shown_by(transcript)[-1] == "line 21" and not transcript.is_scrolled()
+
+
+def test_scrolling_stops_at_the_header_and_never_goes_past_it():
+    transcript = transcript_of(20)
+    shown_by(transcript)
+    for _page in range(20):
+        transcript.page(-1)
+    assert shown_by(transcript)[0] == "logo at 40"
+
+
+def test_the_mouse_wheel_scrolls_the_conversation_three_rows_at_a_time():
+    transcript = transcript_of(20)
+    control = tui.TranscriptControl(transcript, list)
+    control.create_content(40, 5)
+    assert control.mouse_handler(wheel(MouseEventType.SCROLL_UP)) is None
+    assert shown_by(transcript)[-1] == "line 17"
+    control.mouse_handler(wheel(MouseEventType.SCROLL_DOWN))
+    assert shown_by(transcript)[-1] == "line 20"
+    assert control.mouse_handler(wheel(MouseEventType.MOUSE_UP)) is NotImplemented
+
+
+def test_a_block_is_drawn_again_for_the_new_width_and_long_lines_wrap_to_it():
+    transcript = transcript_of(0)
+    transcript.add_line("x" * 30)
+    assert rows_text(transcript.rows_for(40)) == ["logo at 40", "x" * 30]
+    assert rows_text(transcript.rows_for(12)) == ["logo at 12", "x" * 12, "x" * 12, "x" * 6]
+
+
+def test_colours_and_wide_characters_and_tabs_are_kept_when_a_line_is_cut():
+    rows = tui.screen_rows("\033[31mred\033[0m\tend", 40)
+    assert plain(rows[0]) == "red     end" and rows[0][0][0] != ""
+    assert rows_text(tui.screen_rows("日本語", 4)) == ["日本", "語"]
+
+
+def test_page_keys_scroll_the_conversation_and_enter_brings_it_back_to_the_newest(started):
+    interface, typed = started
+    for number in range(60):
+        interface.scroll.write(f"line {number}\n")
+    assert until(lambda: interface.transcript.total == 60)
+    typed.send_text("\x1b[5~")
+    assert until(interface.transcript.is_scrolled)
+    assert until(lambda: "more lines below" in plain(interface.scrolled_text()))
+    typed.send_text("next\r")
+    assert until(lambda: not interface.transcript.is_scrolled())
+
+
+def test_a_question_brings_the_conversation_back_to_the_newest_lines(started):
+    interface, _typed = started
+    interface.transcript.top = 0
+    interface.open_question("Edit a.py?", [("y", "Yes"), ("n", "No")])
+    assert not interface.transcript.is_scrolled()
+    interface.close_question()
+
+
+def test_printed_output_and_the_header_land_in_the_conversation(started):
+    interface, _typed = started
+    interface.show_block(lambda width: [f"header {width}"])
+    interface.stray.write("printed by a library\n")
+    assert rows_text(interface.transcript.rows_for(50)) == ["header 50", "printed by a library"]
+
+
+def test_a_stuck_interface_still_leaves_the_alternate_screen(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(tui, "JOIN_SECONDS", 0.05)
+    with create_pipe_input() as typed, create_app_session(input=typed, output=DummyOutput()):
+        interface = tui.Interface(Host(tmp_path), commit=lambda line: None)
+        interface.start()
+        output = interface.app.output
+        for name in ("disable_mouse_support", "quit_alternate_screen", "reset_attributes", "show_cursor", "flush"):
+            monkeypatch.setattr(output, name, lambda name=name: calls.append(name))
+        monkeypatch.setattr(interface, "leave", lambda: None)
+        interface.stop()
+        assert {"disable_mouse_support", "quit_alternate_screen", "show_cursor", "flush"} <= set(calls)
+        interface.app.loop.call_soon_threadsafe(interface.app.exit)
+        interface.thread.join(2)

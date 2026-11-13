@@ -13,17 +13,19 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer, Completion, ThreadedCompleter
 from prompt_toolkit.filters import Condition, is_searching
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VSplit, Window
-from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.layout.processors import Processor, Transformation
-from prompt_toolkit.patch_stdout import StdoutProxy
+from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import SearchToolbar
 
 from arty_cli import look, permissions, prompt_line, remote, suggest, tools, waiting, wrap
@@ -38,9 +40,12 @@ MOST_PATHS = 50
 MENU_ROWS = 8
 CHOICE_ROWS = 10
 REFRESH_SECONDS = 0.15
-WRITE_PAUSE_SECONDS = 0.03
 POLL_SECONDS = 0.2
 START_SECONDS = 5.0
+WHEEL_ROWS = 3
+PAGE_OVERLAP_ROWS = 2
+TAB_STOP = 8
+SCROLLED_HINT = "  ↓ {} more lines below · pgdn or the mouse wheel to scroll down"
 JOIN_SECONDS = 2.0
 QUIT_SECONDS = 2.0
 KEY_PREFIX_SECONDS = 0.15
@@ -207,37 +212,100 @@ def window_around(selected: int, count: int, rows: int) -> range:
     return range(start, min(start + rows, count))
 
 
-def reflowed_rows(widths: list[int], cursor_row: int, cursor_column: int, columns: int) -> int:
-    columns = max(columns, 1)
-    above = sum(max(-(-width // columns), 1) - 1 for width in widths[:cursor_row])
-    return above + cursor_column // columns
+def screen_rows(line: str, width: int) -> list[list]:
+    width = max(width, 1)
+    rows, row, used = [], [], 0
+    for style, text, *_rest in to_formatted_text(ANSI(line)):
+        for character in text:
+            shown = " " * (TAB_STOP - used % TAB_STOP) if character == "\t" else character
+            size = len(shown) if character == "\t" else get_cwidth(character)
+            if row and used + size > width:
+                rows.append(row)
+                row, used = [], 0
+            row.append((style, shown))
+            used += size
+    rows.append(row)
+    return rows
 
 
-def used_widths(screen, rows: int) -> list[int]:
-    widths = []
-    for row in range(rows):
-        cells = screen.data_buffer.get(row, {})
-        written = [column for column, cell in cells.items() if cell.char not in (" ", "")]
-        widths.append(max(written) + 1 if written else 0)
-    return widths
+class Transcript:
+    def __init__(self):
+        self.entries = []
+        self.lock = threading.Lock()
+        self.width = None
+        self.rows = []
+        self.drawn = 0
+        self.top = None
+        self.height = 1
+        self.total = 0
+
+    def add_line(self, line: str) -> None:
+        with self.lock:
+            self.entries.append(line)
+
+    def add_block(self, render) -> None:
+        with self.lock:
+            self.entries.append(render)
+
+    def rows_for(self, width: int) -> list[list]:
+        with self.lock:
+            if width != self.width:
+                self.width, self.rows, self.drawn = width, [], 0
+            for entry in self.entries[self.drawn:]:
+                for line in entry(width) if callable(entry) else [entry]:
+                    self.rows.extend(screen_rows(line, width))
+            self.drawn = len(self.entries)
+            return list(self.rows)
+
+    def last_top(self) -> int:
+        return max(self.total - self.height, 0)
+
+    def shown(self, rows: list[list], height: int) -> list[list]:
+        self.height, self.total = max(height, 1), len(rows)
+        if self.top is not None and self.top >= self.last_top():
+            self.top = None
+        top = self.last_top() if self.top is None else self.top
+        return rows[top:top + self.height]
+
+    def scroll(self, step: int) -> None:
+        current = self.last_top() if self.top is None else self.top
+        wanted = min(max(current + step, 0), self.last_top())
+        self.top = None if wanted >= self.last_top() else wanted
+
+    def page(self, direction: int) -> None:
+        self.scroll(direction * max(self.height - PAGE_OVERLAP_ROWS, 1))
+
+    def follow(self) -> None:
+        self.top = None
+
+    def is_scrolled(self) -> bool:
+        return self.top is not None
+
+    def rows_below(self) -> int:
+        return 0 if self.top is None else max(self.total - self.top - self.height, 0)
 
 
-class ReflowingApplication(Application):
-    def _on_resize(self) -> None:
-        self.climb_reflowed_rows()
-        super()._on_resize()
+class TranscriptControl(UIControl):
+    def __init__(self, transcript: Transcript, live_lines):
+        self.transcript = transcript
+        self.live_lines = live_lines
 
-    def climb_reflowed_rows(self) -> int:
-        renderer = self.renderer
-        screen, size = renderer._last_screen, renderer._last_size
-        columns = self.output.get_size().columns
-        if screen is None or size is None or columns >= size.columns:
-            return 0
-        cursor = renderer._cursor_pos
-        extra = reflowed_rows(used_widths(screen, cursor.y), cursor.y, cursor.x, columns)
-        if extra:
-            self.output.cursor_up(extra)
-        return extra
+    def create_content(self, width: int, height: int) -> UIContent:
+        rows = self.transcript.rows_for(width)
+        for line in self.live_lines():
+            rows.extend(screen_rows(line, width))
+        shown = self.transcript.shown(rows, height)
+        return UIContent(get_line=lambda number: shown[number], line_count=len(shown),
+                         cursor_position=Point(x=0, y=max(len(shown) - 1, 0)), show_cursor=False)
+
+    def mouse_handler(self, mouse_event):
+        if mouse_event.event_type == MouseEventType.SCROLL_UP:
+            self.transcript.scroll(-WHEEL_ROWS)
+            return None
+        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+            self.transcript.scroll(WHEEL_ROWS)
+            return None
+        return NotImplemented
 
 
 class Placeholder(Processor):
@@ -358,19 +426,24 @@ class Interface:
         self.quit_armed_at = None
         self.failure = None
         self.started = threading.Event()
-        self.stray = None
         self.commit_line = commit
+        self.transcript = Transcript()
         self.scroll = Scroll(self.committed, self.redraw)
+        self.stray = Scroll(self.committed, self.redraw)
         self.partial = ""
         self.shortcuts_open = False
         self.app = None
         self.thread = None
 
     def committed(self, line: str) -> None:
+        self.transcript.add_line(line)
         if self.commit_line is not None:
             self.commit_line(line)
-        else:
-            self.stray.write(line + "\n")
+
+    def show_block(self, render) -> None:
+        self.scroll.finish()
+        self.transcript.add_block(render)
+        self.redraw()
 
     def redraw(self) -> None:
         if self.app is not None and self.app.is_running:
@@ -392,7 +465,8 @@ class Interface:
         choosing = Condition(self.is_choosing)
         shortcuts_open = Condition(lambda: self.shortcuts_open)
         rows = [
-            self.shown_when(self.pending_text, lambda: bool(self.scroll.pending or self.partial), wraps=True),
+            Window(TranscriptControl(self.transcript, self.live_lines)),
+            self.shown_when(self.scrolled_text, self.transcript.is_scrolled),
             self.shown_when(self.queued_text, lambda: bool(self.queued)),
             self.shown_when(self.status_text, lambda: self.status is not None),
             self.shown_when(self.question_text, lambda: self.question is not None, wraps=True),
@@ -405,9 +479,9 @@ class Interface:
             ConditionalContainer(Window(FormattedTextControl(self.bar_text), height=1),
                                  filter=~menu_open & ~is_searching),
         ]
-        self.app = ReflowingApplication(layout=Layout(HSplit(rows), focused_element=typed),
-                                        key_bindings=self.bindings(), style=STYLE, full_screen=False,
-                                        erase_when_done=True, refresh_interval=REFRESH_SECONDS)
+        self.app = Application(layout=Layout(HSplit(rows), focused_element=typed), key_bindings=self.bindings(),
+                               style=STYLE, full_screen=True, mouse_support=True,
+                               enable_page_navigation_bindings=False, refresh_interval=REFRESH_SECONDS)
         self.app.timeoutlen = KEY_PREFIX_SECONDS
         self.app.ttimeoutlen = ESCAPE_SECONDS
 
@@ -450,6 +524,8 @@ class Interface:
         keys.add("c-c", filter=~is_searching)(lambda event: self.control_c())
         keys.add("c-d", filter=typing & nothing_typed)(lambda event: self.quit())
         keys.add("c-o", filter=~is_searching)(lambda event: self.expand())
+        keys.add("pageup", filter=~is_searching)(lambda event: self.transcript.page(-1))
+        keys.add("pagedown", filter=~is_searching)(lambda event: self.transcript.page(1))
         shortcuts_open = Condition(lambda: self.shortcuts_open)
         composing = typing & Condition(lambda: not self.wants_line)
         keys.add(SHORTCUTS_MARK, filter=composing & nothing_typed & ~shortcuts_open)(lambda event: self.open_shortcuts())
@@ -465,8 +541,6 @@ class Interface:
     def start(self) -> None:
         try:
             self.build()
-            if self.commit_line is None:
-                self.stray = StdoutProxy(sleep_between_writes=WRITE_PAUSE_SECONDS, raw=True)
         except Exception as error:
             raise InterfaceError(str(error) or type(error).__name__) from None
         context = contextvars.copy_context()
@@ -491,9 +565,18 @@ class Interface:
         self.in_loop(self.leave)
         if self.thread is not None:
             self.thread.join(JOIN_SECONDS)
+            if self.thread.is_alive():
+                self.put_terminal_back()
         self.scroll.finish()
-        if self.stray is not None:
-            self.stray.close()
+        self.stray.finish()
+
+    def put_terminal_back(self) -> None:
+        output = self.app.output
+        output.disable_mouse_support()
+        output.quit_alternate_screen()
+        output.reset_attributes()
+        output.show_cursor()
+        output.flush()
 
     def leave(self) -> None:
         if self.app.is_running and not self.app.is_done:
@@ -521,6 +604,7 @@ class Interface:
         if not text.strip():
             return
         self.buffer.reset(append_to_history=True)
+        self.transcript.follow()
         self.submit(text)
 
     def accepts_completion(self) -> bool:
@@ -641,6 +725,7 @@ class Interface:
 
     def open_question(self, text: str, choices) -> None:
         self.question = Question(text, list(choices))
+        self.transcript.follow()
         self.redraw()
 
     def wait_answer(self, seconds: float | None = None) -> str | None:
@@ -747,8 +832,12 @@ class Interface:
             return ""
         return BUSY_PLACEHOLDER if self.busy else PLACEHOLDER
 
-    def pending_text(self):
-        return ANSI(self.scroll.pending or self.partial)
+    def live_lines(self) -> list[str]:
+        live = self.scroll.pending or self.partial
+        return [live] if live else []
+
+    def scrolled_text(self):
+        return [("class:dim", SCROLLED_HINT.format(self.transcript.rows_below())[:self.room()])]
 
     def queued_text(self):
         room = self.room()
