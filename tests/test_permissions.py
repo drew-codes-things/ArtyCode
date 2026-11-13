@@ -1040,3 +1040,28 @@ def test_an_older_saved_undo_rule_no_longer_skips_the_question(workspace):
     assert gate.check(finish.UNDO_TOOL, {}) is not None and len(gate.ask.questions) == 1
     assert permissions.Gate(workspace, Asker(), mode=permissions.PLAN).check(finish.UNDO_TOOL, {}) == \
         permissions.PLAN_REFUSAL
+
+
+LINE_CONTINUED_OPTIONS = ["git diff --out\\\nput=made.txt", "file --comp\\\nile a.txt",
+                          "grep --dereference-rec\\\nursive x .", "rg --pr\\\ne cat x a.txt",
+                          "rg --hostname-b\\\nin sh x a.txt", "ls --deref\\\nerence -R",
+                          "git diff \"--out\\\nput=made.txt\""]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a backslash is not an escape on Windows")
+@pytest.mark.parametrize("command", LINE_CONTINUED_OPTIONS)
+def test_a_line_continuation_inside_an_option_is_joined_as_bash_joins_it(workspace, command):
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a backslash is not an escape on Windows")
+def test_a_line_continuation_between_words_still_reads_as_one_look_only_command():
+    assert permissions.command_pieces("ls \\\n-la") == [("", "ls -la")]
+    assert permissions.command_pieces("echo 'a\\\nb'") == [("", "echo 'a\\\nb'")]
+    assert permissions.is_read_only_command("ls \\\n-la")
+

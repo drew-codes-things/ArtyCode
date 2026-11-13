@@ -51,6 +51,7 @@ SHELL_CONTROL = re.compile(r"[;&|<>`$\n]")
 GROUPING = set("(){}")
 QUOTES = "'\""
 COMMENT_MARK = "#"
+LINE_CONTINUATION = "\\\n"
 READING_TOOLS = ("read_file", "list_files", "search", eyes.VIEW_IMAGE)
 FREE_TOOLS = ("command_output", "stop_command", "todo_write")
 EDITS = "edits"
@@ -169,7 +170,8 @@ def command_pieces(command: str) -> list[tuple[str, str]]:
             text, index = text + character, index + 1
             continue
         if character == "\\" and backslash_escapes():
-            text, index = text + command[index:index + 2], index + 2
+            escaped = command[index:index + 2]
+            text, index = text + ("" if escaped == LINE_CONTINUATION else escaped), index + 2
             continue
         if character in EXPANSIONS:
             return []
