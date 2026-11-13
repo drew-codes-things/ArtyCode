@@ -55,9 +55,13 @@ STUCK_FAILING_NOTE = ("You have made the same tool calls several times and they 
                       "whole function or rewrite the file), or say what is blocking you.")
 EDITING_TOOLS = ("edit_file", "multi_edit")
 SMALL_FILE_LINES = 200
-REPEATED_MISS = ("\nThat is miss {count} on {path}. Stop copying small pieces: read it again and replace the whole "
-                 "function or block in one edit_file, with old_text copied from that read")
+REPEATED_MISS = ("\nThat is miss {count} on {path}. Stop copying small pieces from memory: copy old_text from the "
+                 "lines below exactly, without the line numbers, and replace the whole function or block in one "
+                 "edit_file")
 SMALL_FILE_WAY = ", or, as {path} is short ({lines} lines), rewrite it with write_file and overwrite: true"
+WHOLE_FILE_LEAD = "The whole of {path} as it is now ({lines} lines):"
+PART_LEAD = "The part of {path} around the closest match, as it is now ({lines} lines in the whole file):"
+VIEW_LEADS = {"whole": WHOLE_FILE_LEAD, "part": PART_LEAD}
 HOOK_BLOCKED = "A hook stopped this call:"
 HOOK_FEEDBACK = "Hook feedback:"
 HOOK_CONTEXT = "Note from a hook:"
@@ -550,17 +554,44 @@ def repeated_failure(window: list[set]) -> str | None:
     return next((signature for signature, count in counted.items() if count >= STUCK_REPEATS), None)
 
 
-def file_lines_of(workspace, path: str) -> int:
+def current_text(workspace, path: str) -> str | None:
     try:
-        return len(tools.read_text(workspace.resolve(path)).splitlines())
+        target = workspace.resolve(path)
+        return tools.read_text(target)
     except (tools.ToolError, OSError, ValueError):
-        return 0
+        return None
 
 
-def miss_advice(workspace, path: str, count: int) -> str:
-    lines = file_lines_of(workspace, path)
+def mark_read_after_miss(workspace, path: str, text: str) -> None:
+    workspace.note_seen(workspace.resolve(path), text)
+
+
+def missed_old_text(arguments: dict) -> str:
+    edits = arguments.get("edits")
+    first = edits[0] if isinstance(edits, list) and edits and isinstance(edits[0], dict) else {}
+    return str(arguments.get("old_text") or first.get("old_text") or "")
+
+
+def miss_advice(path: str, count: int, text: str, old_text: str, room: int) -> str:
+    lines = len(text.splitlines())
     small = SMALL_FILE_WAY.format(path=path, lines=lines) if 0 < lines <= SMALL_FILE_LINES else ""
-    return REPEATED_MISS.format(count=count, path=path) + small + "."
+    advice = REPEATED_MISS.format(count=count, path=path) + small + "."
+    longest_lead = f"\n{PART_LEAD.format(path=path, lines=lines)}\n"
+    kind, view = tools.current_view(text, old_text, room - len(advice) - len(longest_lead))
+    return f"{advice}\n{VIEW_LEADS[kind].format(path=path, lines=lines)}\n{view}" if view else advice
+
+
+def advised_result(result: str, arguments: dict, misses: dict, workspace) -> str:
+    path = str(arguments.get("path") or "")
+    text = current_text(workspace, path)
+    if text is None:
+        return result
+    mark_read_after_miss(workspace, path, text)
+    misses[path] = misses.get(path, 0) + 1
+    if misses[path] < 2:
+        return result
+    return result + miss_advice(path, misses[path], text, missed_old_text(arguments),
+                                workspace.result_chars - len(result))
 
 
 def advised_results(calls: list[dict], results: list[str], misses: dict, workspace) -> list[str]:
@@ -568,12 +599,7 @@ def advised_results(calls: list[dict], results: list[str], misses: dict, workspa
     for call, result in zip(calls, results):
         name, arguments, _problem = call_parts(call)
         is_miss = name in EDITING_TOOLS and result.startswith(ERROR_LEAD) and tools.NOT_FOUND in result
-        if not is_miss or arguments is None:
-            advised.append(result)
-            continue
-        path = str(arguments.get("path") or "")
-        misses[path] = misses.get(path, 0) + 1
-        advised.append(result + miss_advice(workspace, path, misses[path]) if misses[path] >= 2 else result)
+        advised.append(advised_result(result, arguments, misses, workspace) if is_miss and arguments else result)
     return advised
 
 

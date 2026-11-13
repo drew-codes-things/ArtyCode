@@ -111,3 +111,58 @@ def test_past_arguments_are_shortened_once_with_the_real_count(project):
     twice = prune.with_short_arguments(once)
     assert once == twice
     assert "4800 characters dropped" in json.loads(twice["function"]["arguments"])["content"]
+
+
+def miss_results(brain) -> list[str]:
+    return [result for result in brain.tool_results() if result.startswith("Error") and tools.NOT_FOUND in result]
+
+
+def test_a_miss_whose_new_text_is_already_in_the_file_says_the_change_is_already_made(project):
+    (project / "calc.py").write_text(STRIPPED_CALC)
+    brain = ScriptedBrain([[("read_file", {"path": "calc.py"})], [FLAPPING_EDIT], "Already done."])
+    session_for(project, brain).ask("make evaluate strip the input")
+    missed = miss_results(brain)[-1]
+    assert tools.ALREADY_MADE_LEAD in missed
+    assert "lines 6-7" in missed and "6\t    tokens = _tokenize(source.strip())" in missed
+
+
+def test_after_a_miss_the_file_counts_as_read_so_the_corrected_edit_applies(project):
+    (project / "calc.py").write_text(FIXTURE_CALC)
+    guessed = ("edit_file", {"path": "calc.py", "old_text": "    tokens = source.split(' ')",
+                             "new_text": "    tokens = source.strip().split()"})
+    copied = ("edit_file", {"path": "calc.py", "old_text": "    tokens = source.split()",
+                            "new_text": "    tokens = source.strip().split()"})
+    brain = ScriptedBrain([[guessed], [copied], "Done."])
+    session_for(project, brain).ask("make evaluate strip the input")
+    assert brain.tool_results()[-1].startswith("Edited calc.py"), brain.tool_results()[-1]
+    assert "source.strip().split()" in (project / "calc.py").read_text()
+
+
+def test_the_second_miss_on_a_file_carries_the_whole_file_and_a_direct_instruction(project):
+    (project / "calc.py").write_text(FIXTURE_CALC)
+    first = ("edit_file", {"path": "calc.py", "old_text": "    tokens = source.split(' ')", "new_text": "x"})
+    second = ("edit_file", {"path": "calc.py", "old_text": "    return int(tokens[1])", "new_text": "y"})
+    brain = ScriptedBrain([[("read_file", {"path": "calc.py"})], [first], [second], "Stuck."])
+    session_for(project, brain).ask("fix evaluate")
+    once, twice = miss_results(brain)
+    whole = [f"{number}\t{line}" for number, line in enumerate(FIXTURE_CALC.splitlines(), start=1)]
+    assert agent.WHOLE_FILE_LEAD.format(path="calc.py", lines=len(whole)) not in once
+    assert agent.WHOLE_FILE_LEAD.format(path="calc.py", lines=len(whole)) in twice
+    assert all(line in twice for line in whole)
+    assert "miss 2 on calc.py" in twice and "copy old_text from" in twice
+
+
+def test_the_second_miss_on_a_big_file_carries_the_function_around_the_closest_match(project):
+    filler = [f"def helper_{number}(value):\n    return value + {number}\n" for number in range(300)]
+    target = "def evaluate(source):\n    tokens = source.split()\n    total = 0\n    for token in tokens:\n" \
+             "        total += int(token)\n    return total\n"
+    (project / "calc.py").write_text("\n".join(filler[:150] + [target] + filler[150:]))
+    first = ("edit_file", {"path": "calc.py", "old_text": "    for token in token_list:", "new_text": "x"})
+    second = ("edit_file", {"path": "calc.py", "old_text": "        total += int(tokens)", "new_text": "y"})
+    brain = ScriptedBrain([[("read_file", {"path": "calc.py", "limit": 20})], [first], [second], "Stuck."])
+    session = session_for(project, brain)
+    session.ask("fix evaluate")
+    twice = miss_results(brain)[-1]
+    assert "def evaluate(source):" in twice and "        total += int(token)" in twice
+    assert "def helper_0(value)" not in twice
+    assert len(twice) <= session.workspace.result_chars
