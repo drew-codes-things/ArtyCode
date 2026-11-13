@@ -742,13 +742,15 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         if waits_on_running_jobs(calls, results):
             continue
         signature = signature_of(calls, raw_results)
-        failures = (failures + [failing_signatures(calls, raw_results)])[-STUCK_WINDOW:]
-        failing = repeated_failure(failures)
-        if signature == steered_from or (failing is not None and failing in steered_failures):
+        failing_now = failing_signatures(calls, raw_results)
+        if signature == steered_from or failing_now & steered_failures:
             return stopped_as_stuck(messages, screen)
+        failures = (failures + [failing_now])[-STUCK_WINDOW:]
+        failing = repeated_failure(failures)
         if failing is not None:
             messages.append({"role": "user", "content": STUCK_FAILING_NOTE})
             steered_failures.add(failing)
+            failures = []
             continue
         recent = (recent + [signature])[-STUCK_REPEATS:]
         if len(recent) == STUCK_REPEATS and len(set(recent)) == 1:
