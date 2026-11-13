@@ -35,6 +35,10 @@ LAUNCH_FLAGS = ("--headless=new", "--remote-debugging-port=0", "--no-first-run",
                 "--disable-component-update", "--disable-default-apps", "--mute-audio", "--hide-scrollbars",
                 "--password-store=basic", "--use-mock-keychain")
 ROOT_ONLY_FLAGS = ("--no-sandbox",)
+NOWHERE_PROXY = "http://127.0.0.1:9"
+OFFLINE_FLAGS = (f"--proxy-server={NOWHERE_PROXY}", "--proxy-bypass-list=<-loopback>",
+                 "--host-resolver-rules=MAP * ~NOTFOUND", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                 "--dns-prefetch-disable")
 FIRST_PAGE = "about:blank"
 PROFILE_PREFIX = "arty-browser-"
 PROFILE_FOLDER = "profile"
@@ -116,8 +120,8 @@ def runs_as_root() -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
-def launch_command(program: str, profile: Path) -> list[str]:
-    extra = ROOT_ONLY_FLAGS if runs_as_root() else ()
+def launch_command(program: str, profile: Path, offline: bool = False) -> list[str]:
+    extra = (ROOT_ONLY_FLAGS if runs_as_root() else ()) + (OFFLINE_FLAGS if offline else ())
     return [program, *LAUNCH_FLAGS, *extra, f"--user-data-dir={profile}", FIRST_PAGE]
 
 
@@ -458,8 +462,9 @@ def removed(folder: Path) -> str:
 
 
 class Browser:
-    def __init__(self, program: str):
+    def __init__(self, program: str, offline: bool = False):
         self.program = program
+        self.offline = offline
         self.home = None
         self.process = None
         self.websocket = None
@@ -480,7 +485,7 @@ class Browser:
         profile, log = self.home / PROFILE_FOLDER, self.home / LOG_FILE
         with open(log, "wb") as log_file:
             try:
-                self.process = subprocess.Popen(launch_command(self.program, profile), stdin=subprocess.DEVNULL,
+                self.process = subprocess.Popen(launch_command(self.program, profile, self.offline), stdin=subprocess.DEVNULL,
                                                 stdout=subprocess.DEVNULL, stderr=log_file, **detached())
             except OSError as error:
                 raise HeadlessError(f"couldn't start the browser {self.program}: {error}") from None

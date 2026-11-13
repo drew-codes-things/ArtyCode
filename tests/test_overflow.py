@@ -180,3 +180,15 @@ def test_a_real_streamed_refusal_never_reaches_the_screen_and_the_request_is_sen
     shown = session.terminal.out.getvalue() + session.terminal.err.getvalue()
     assert "All done." in shown and "context window" not in shown
     assert session.messages[-1]["content"] == "All done."
+
+
+@pytest.mark.parametrize("text", ["upload exceeds the 5 MB picture limit", "the model took too long to load",
+                                  "busy right now (queue too long)", "too many tokens per minute, slow down"])
+def test_an_error_that_only_says_too_long_or_exceeds_is_not_an_overflow(text):
+    assert not agent.is_window_overflow(brain.BrainError(text))
+
+
+@pytest.mark.parametrize("text", ["This model's maximum context length is 8192 tokens",
+                                  "prompt is longer than the context window", "input exceeds the context size"])
+def test_an_error_naming_the_context_window_is_an_overflow(text):
+    assert agent.is_window_overflow(brain.BrainError(text))

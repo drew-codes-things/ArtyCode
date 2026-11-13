@@ -45,6 +45,7 @@ START_SECONDS = 5.0
 WHEEL_ROWS = 3
 PAGE_OVERLAP_ROWS = 2
 TAB_STOP = 8
+MAX_KEPT_ENTRIES = 10_000
 ZERO_WIDTH_ESCAPE = "[ZeroWidthEscape]"
 SCROLLED_HINT = "  ↓ {} more lines below · pgdn or the mouse wheel to scroll down"
 JOIN_SECONDS = 2.0
@@ -216,6 +217,13 @@ def window_around(selected: int, count: int, rows: int) -> range:
     return range(start, min(start + rows, count))
 
 
+def with_text_added(row: list, style: str, text: str) -> None:
+    if row and row[-1][0] == style:
+        row[-1] = (style, row[-1][1] + text)
+    else:
+        row.append((style, text))
+
+
 def screen_rows(line: str, width: int) -> list[list]:
     width = max(width, 1)
     rows, row, used = [], [], 0
@@ -228,7 +236,7 @@ def screen_rows(line: str, width: int) -> list[list]:
             if row and used + size > width:
                 rows.append(row)
                 row, used = [], 0
-            row.append((style, shown))
+            with_text_added(row, style, shown)
             used += size
     rows.append(row)
     return rows
@@ -240,6 +248,7 @@ class Transcript:
         self.lock = threading.Lock()
         self.width = None
         self.rows = []
+        self.entry_rows = []
         self.drawn = 0
         self.top = None
         self.height = 1
@@ -248,18 +257,35 @@ class Transcript:
     def add_line(self, line: str) -> None:
         with self.lock:
             self.entries.append(line)
+            self.forget_the_oldest()
 
     def add_block(self, render) -> None:
         with self.lock:
             self.entries.append(render)
+            self.forget_the_oldest()
+
+    def forget_the_oldest(self) -> None:
+        extra = len(self.entries) - MAX_KEPT_ENTRIES
+        if extra <= 0:
+            return
+        del self.entries[:extra]
+        drawn_gone = min(extra, self.drawn)
+        rows_gone = sum(self.entry_rows[:drawn_gone])
+        del self.entry_rows[:drawn_gone]
+        del self.rows[:rows_gone]
+        self.drawn -= drawn_gone
+        if self.top is not None:
+            self.top = max(self.top - rows_gone, 0)
 
     def rows_for(self, width: int) -> list[list]:
         with self.lock:
             if width != self.width:
-                self.width, self.rows, self.drawn = width, [], 0
+                self.width, self.rows, self.entry_rows, self.drawn = width, [], [], 0
             for entry in self.entries[self.drawn:]:
-                for line in entry(width) if callable(entry) else [entry]:
-                    self.rows.extend(screen_rows(line, width))
+                made = [row for line in (entry(width) if callable(entry) else [entry])
+                        for row in screen_rows(line, width)]
+                self.rows.extend(made)
+                self.entry_rows.append(len(made))
             self.drawn = len(self.entries)
             return list(self.rows)
 

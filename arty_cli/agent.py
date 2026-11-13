@@ -46,7 +46,7 @@ ANCHOR_CHECKLIST_LEAD = "Your checklist so far:"
 TODO_TOOL = "todo_write"
 NEAR_WINDOW_NOTE = ("The last prompt used {used} of the model's {window} tokens, near the end of the model's context "
                     "window; older results will be hidden to make room.")
-WINDOW_OVERFLOW = re.compile(r"context (?:window|length|size)|too long|too many tokens|exceeds", re.I)
+WINDOW_OVERFLOW = re.compile(r"context (?:window|length|size)", re.I)
 STILL_TOO_LONG = ("The conversation is still longer than {model} context window{size} after compacting it, so the "
                   "model didn't read it. Start a fresh conversation with /clear, or pick a model with a bigger "
                   "window with /model.")

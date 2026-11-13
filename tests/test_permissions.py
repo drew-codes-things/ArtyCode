@@ -701,7 +701,7 @@ def test_a_bad_address_is_refused_before_anything_is_asked(workspace):
     ("pytest -q tests/test_calc.py", ["pytest"]),
     ("python3 calc.py add 2 3", ["python3 calc.py add"]),
     ("uv run python -m pytest -x", ["uv run python -m pytest"]),
-    ("make && make install", ["make"]),
+    ("make && make install", []),
     ("cd tests && npm test", ["cd tests", "npm test"]),
 ])
 def test_a_command_is_offered_as_its_program_and_subcommand_words(workspace, command, prefixes):
@@ -739,6 +739,8 @@ def test_always_for_a_command_covers_its_variants_and_the_question_says_which(wo
     "python3 -m pytest | tail -5 /etc/passwd", "python3 -m pytest | grep -f /etc/shadow", "python3 -m pip install x",
     "python3 -m pytest\nrm -rf build", "python3 -m pytest & rm -rf build", "(python3 -m pytest)",
     "python3 -m pytest | grep x > found.txt", "python3 -c 'import os' -m pytest", "python3 -m pytest < /etc/passwd",
+    "python3 -m pytest | egrep -R token .", "python3 -m pytest | fgrep -R token .",
+    "python3 -m pytest | egrep --dereference-recursive token .",
 ])
 def test_a_command_prefix_never_covers_anything_else_hidden_in_the_command(workspace, command):
     ask = Asker("a")
@@ -901,6 +903,61 @@ def test_an_older_launcher_or_keyword_prefix_no_longer_covers_anything(workspace
     assert len(ask.questions) == 2
 
 
+SCRIPT_RUNNERS = ["make test", "make", "gmake all", "cmake --build .", "ninja", "vim -c ':!sh' f", "vi f", "nvim f",
+                  "view f", "emacs --batch f", "nano f", "ex f", "less file", "more file", "most file", "man ls",
+                  "tar -cf a.tar --to-command=sh .", "tar -tf a.tar", "zip -TT sh a.zip f", "tmux new", "screen -d"]
+
+
+@pytest.mark.parametrize("command", SCRIPT_RUNNERS)
+def test_programs_that_run_scripts_or_commands_through_an_option_are_never_offered_as_a_prefix(workspace, command):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == []
+
+
+@pytest.mark.parametrize("prefix, command", [("make test", "make test install"), ("make", "make deploy"),
+                                             ("vim", "vim -c ':!sh' f"), ("less", "less file"),
+                                             ("tar", "tar -cf a.tar --to-command=sh .")])
+def test_an_older_prefix_for_a_script_runner_no_longer_covers_anything(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+RM_HIDDEN_FROM_TEXT_MATCHING = ["/bin/rm -rf build", "if true; then rm -rf build; fi", "command rm -rf build",
+                                "X=1 rm -rf build", "echo $(rm -rf build)", "sudo rm -rf build", "(rm -rf build)",
+                                "{ rm -rf build; }", "ls | xargs -0 rm -f", "bash -c 'rm -rf build'",
+                                "\\rm -rf build", "eval 'rm -rf build'", "echo `rm -rf build`",
+                                "timeout 5 rm -rf build", "env A=1 rm -rf build", "sh -c \"cd src && rm -rf x\"",
+                                "ls\rrm -rf build"]
+
+
+@pytest.mark.parametrize("deny", ["run_command(rm:*)", "run_command(rm *)"])
+@pytest.mark.parametrize("command", RM_HIDDEN_FROM_TEXT_MATCHING)
+def test_a_deny_rule_matches_the_program_however_the_command_reaches_it(workspace, deny, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=[deny])
+    assert gate.check("run_command", {"command": command}) == permissions.RULE_DENIED
+
+
+@pytest.mark.parametrize("command", ["git commit -m 'rm the old file'", "grep -n rm notes.txt", "echo rm",
+                                     "npm run format", "firmware --list", "ls -la"])
+def test_a_deny_rule_for_a_program_leaves_commands_that_only_mention_it(workspace, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(rm:*)", "run_command(rm *)"])
+    assert gate.check("run_command", {"command": command}) is None
+
+
+@pytest.mark.parametrize("command", ["/usr/bin/git push --force", "GIT_TRACE=1 git push", "env git push origin",
+                                     "cd app && command git push"])
+def test_a_two_word_deny_prefix_matches_behind_paths_settings_and_wrappers(workspace, command):
+    gate = permissions.Gate(workspace, Asker("y"), mode=permissions.ALLOW_ALL)
+    gate.rules = rules(deny=["run_command(git push:*)"])
+    assert gate.check("run_command", {"command": command}) == permissions.RULE_DENIED
+    assert gate.check("run_command", {"command": "git pull"}) is None
+
 def test_a_deny_prefix_rule_for_a_launcher_still_forbids_it(workspace):
     gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
     gate.rules = rules(deny=["run_command(sudo:*)"])
@@ -1007,3 +1064,114 @@ def test_an_older_saved_undo_rule_no_longer_skips_the_question(workspace):
     assert gate.check(finish.UNDO_TOOL, {}) is not None and len(gate.ask.questions) == 1
     assert permissions.Gate(workspace, Asker(), mode=permissions.PLAN).check(finish.UNDO_TOOL, {}) == \
         permissions.PLAN_REFUSAL
+
+
+LINE_CONTINUED_OPTIONS = ["git diff --out\\\nput=made.txt", "file --comp\\\nile a.txt",
+                          "grep --dereference-rec\\\nursive x .", "rg --pr\\\ne cat x a.txt",
+                          "rg --hostname-b\\\nin sh x a.txt", "ls --deref\\\nerence -R",
+                          "git diff \"--out\\\nput=made.txt\""]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a backslash is not an escape on Windows")
+@pytest.mark.parametrize("command", LINE_CONTINUED_OPTIONS)
+def test_a_line_continuation_inside_an_option_is_joined_as_bash_joins_it(workspace, command):
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a backslash is not an escape on Windows")
+def test_a_line_continuation_between_words_still_reads_as_one_look_only_command():
+    assert permissions.command_pieces("ls \\\n-la") == [("", "ls -la")]
+    assert permissions.command_pieces("echo 'a\\\nb'") == [("", "echo 'a\\\nb'")]
+    assert permissions.is_read_only_command("ls \\\n-la")
+
+
+
+@pytest.fixture
+def linked_out(workspace, tmp_path_factory):
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    (elsewhere / "secret.conf").write_text("secret\n")
+    (workspace.root / "link").symlink_to(elsewhere)
+    (workspace.root / "sub").mkdir()
+    (workspace.root / "sub" / "l").symlink_to(elsewhere)
+    (workspace.root / "sub" / "notes.txt").write_text("hi\n")
+    return workspace
+
+
+@pytest.mark.parametrize("command", ["cat [[:alpha:]]ink/secret.conf", "cat [^x]ink/secret.conf",
+                                     "cat [[:lower:]][[:lower:]]nk/secret.conf", "cat [[=l=]]ink/secret.conf",
+                                     "cat [[.l.]]ink/secret.conf"])
+def test_a_wildcard_bash_reads_differently_from_python_asks(linked_out, command):
+    ask = Asker("n")
+    assert not permissions.Gate(linked_out, ask).allows("run_command", {"command": command})
+    assert "outside" in ask.questions[0][0]
+
+
+@pytest.mark.parametrize("command", ["cat l/secret.conf", "cat ./l/secret.conf", "cat l*/secret.conf",
+                                     "cat ~+/l/secret.conf", "ls -la l/"])
+def test_a_relative_path_is_read_from_the_folder_the_command_runs_in(linked_out, command):
+    ask = Asker("n")
+    assert not permissions.Gate(linked_out, ask).allows("run_command", {"command": command, "cwd": "sub"})
+    assert "outside" in ask.questions[0][0]
+
+
+def test_a_quiet_filter_after_a_prefix_reads_paths_from_the_folder_the_command_runs_in(linked_out):
+    ask = Asker("n")
+    gate = permissions.Gate(linked_out, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "python3 -m pytest")
+    assert not gate.allows("run_command", {"command": "python3 -m pytest | grep x l/secret.conf", "cwd": "sub"})
+    assert len(ask.questions) == 1
+
+
+def test_a_path_inside_the_folder_the_command_runs_in_still_needs_no_question(linked_out):
+    ask = Asker()
+    assert permissions.Gate(linked_out, ask).allows("run_command", {"command": "cat notes.txt", "cwd": "sub"})
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("command", ["grep -n '[^a]' a.py", "grep -E '[[:space:]]+x' a.py", 'grep -rn "[[:upper:]]" .'])
+def test_a_quoted_or_escaped_bracket_class_is_a_pattern_not_a_wildcard(workspace, command):
+    ask = Asker()
+    assert permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("prefix, command", [
+    ("git log", "git log --ext-diff"), ("git log", "git log -p --textconv"), ("git diff", "git diff --exec-path=/tmp"),
+    ("git", "git -c core.pager=sh log"), ("git", "git --config-env=core.pager=X log"),
+    ("git grep", "git grep -Osh x"), ("git diff", "git diff --output=made.txt"),
+    ("git fetch", "git fetch --upload-pack=sh origin"), ("git grep", "git grep --open-files-in-pager=sh x"),
+    ("rg", "rg --pre cat x a.py"), ("grep", "grep -R token ."), ("find", "find . -delete"),
+])
+def test_a_remembered_prefix_never_covers_an_option_that_runs_a_program_or_writes(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+
+def test_a_remembered_git_prefix_still_covers_its_ordinary_options(workspace):
+    gate = permissions.Gate(workspace, Asker())
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "git commit")
+    assert gate.allows("run_command", {"command": "git commit -m 'fix the sum' --no-verify"})
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+@pytest.mark.parametrize("command", ["ls\rtouch x", "cat a.py\r", "git status\r\nrm a.py"])
+def test_a_carriage_return_makes_a_command_unreadable_so_it_asks(workspace, monkeypatch, platform, command):
+    monkeypatch.setattr(permissions.sys, "platform", platform)
+    assert permissions.command_pieces(command) == []
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + "git status")
+    assert not gate.allows("run_command", {"command": command})
+    assert len(ask.questions) == 1

@@ -15,8 +15,14 @@ STRENGTH = {OFF: 0, ON: 1, REQUIRED: 2}
 PROBE_SECONDS = 10
 LINUX_SHELL = "/bin/bash"
 SECRET_FOLDERS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".config/arty-cli", ".config/Arty",
-                  ".config/gh", ".password-store", ".local/share/keyrings")
-SECRET_FILES = (".netrc", ".git-credentials", ".npmrc", ".pypirc", ".arty-android.properties")
+                  ".config/gh", ".password-store", ".local/share/keyrings", ".config/gcloud", ".config/rclone",
+                  ".mozilla", ".config/chromium", ".config/BraveSoftware")
+SECRET_FILES = (".netrc", ".git-credentials", ".npmrc", ".pypirc", ".arty-android.properties",
+                ".config/git/credentials", ".cargo/credentials", ".cargo/credentials.toml", ".gradle/gradle.properties",
+                ".m2/settings.xml", ".gem/credentials", ".terraform.d/credentials.tfrc.json", ".vault-token",
+                ".android/adbkey", ".bash_history", ".zsh_history", ".python_history", ".psql_history",
+                ".mysql_history", ".node_repl_history", ".local/share/fish/fish_history")
+SECRET_PATTERNS = (".config/*chrome*", "*.jks", "*.keystore", "*.p12", "*.pfx", "*.pem", "*.key")
 GIT_FOLDER = ".git"
 PROTECTED_GIT_PARTS = ("config", "config.worktree", "hooks", "info")
 ARTY_FOLDER = ".arty"
@@ -54,7 +60,8 @@ def chosen(personal_folder: Path, project_root: Path, include_project: bool, ask
 
 def hidden_paths(home: Path, extra: tuple = ()) -> list[Path]:
     home = Path(home)
-    candidates = [home / name for name in SECRET_FOLDERS + SECRET_FILES] + [Path(path) for path in extra]
+    patterned = sorted(path for pattern in SECRET_PATTERNS for path in home.glob(pattern))
+    candidates = [home / name for name in SECRET_FOLDERS + SECRET_FILES] + patterned + [Path(path) for path in extra]
     return list(dict.fromkeys(path for path in candidates if path.exists()))
 
 

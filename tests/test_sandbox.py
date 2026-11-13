@@ -49,6 +49,31 @@ def test_the_arty_cli_config_folder_is_among_the_hidden_paths(tmp_path):
     assert tmp_path / ".config" / "arty-cli" in sandbox.hidden_paths(tmp_path)
 
 
+HOME_CREDENTIALS = [".bash_history", ".zsh_history", ".python_history", ".gradle/gradle.properties",
+                    ".config/git/credentials", ".cargo/credentials.toml", ".cargo/credentials", ".config/gcloud",
+                    ".config/rclone", ".mozilla", ".config/chromium", ".config/BraveSoftware", ".m2/settings.xml",
+                    ".gem/credentials", ".terraform.d/credentials.tfrc.json", ".vault-token", ".android/adbkey",
+                    ".local/share/fish/fish_history", ".psql_history", ".mysql_history", ".node_repl_history"]
+
+
+@pytest.mark.parametrize("name", HOME_CREDENTIALS)
+def test_other_credentials_and_shell_histories_in_the_home_folder_are_hidden(tmp_path, name):
+    place = tmp_path / name
+    place.parent.mkdir(parents=True, exist_ok=True)
+    place.write_text("secret\n")
+    assert place in sandbox.hidden_paths(tmp_path)
+
+
+def test_browser_profiles_and_keystores_at_the_top_of_home_are_hidden(tmp_path):
+    for name in (".config/some-chrome-beta", "release.jks", "upload.keystore", "cert.p12", "id.pem", "site.key"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("secret\n")
+    (tmp_path / "notes.txt").write_text("plain\n")
+    hidden = sandbox.hidden_paths(tmp_path)
+    for name in (".config/some-chrome-beta", "release.jks", "upload.keystore", "cert.p12", "id.pem", "site.key"):
+        assert tmp_path / name in hidden
+    assert tmp_path / "notes.txt" not in hidden
+
 def test_the_sandbox_is_off_unless_switched_on(tmp_path):
     choice = sandbox.chosen(tmp_path / "personal", tmp_path / "project", include_project=True, asked=False)
     assert choice.mode == sandbox.OFF

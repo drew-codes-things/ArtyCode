@@ -68,6 +68,13 @@ def test_chrome_edge_and_chromium_are_found_where_windows_installs_them(tmp_path
     assert headless.find_browser({place: str(tmp_path / place)}, platform="win32") == str(installed)
 
 
+def test_an_offline_browser_starts_with_every_outside_request_sent_nowhere(tmp_path):
+    offline = headless.launch_command("chrome", tmp_path / "profile", offline=True)
+    online = headless.launch_command("chrome", tmp_path / "profile")
+    for flag in headless.OFFLINE_FLAGS:
+        assert flag in offline and flag not in online
+    assert offline[-1] == headless.FIRST_PAGE
+
 def test_the_browser_starts_headless_with_a_throwaway_profile_and_no_sound(tmp_path):
     command = headless.launch_command("chrome", tmp_path / "profile")
     assert command[0] == "chrome" and command[-1] == headless.FIRST_PAGE

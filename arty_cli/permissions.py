@@ -1,6 +1,7 @@
 import difflib
 import fnmatch
 import glob
+import itertools
 import json
 import os
 import re
@@ -24,12 +25,17 @@ READ_ONLY_GIT = {"status", "diff", "log", "show", "branch", "blame", "rev-parse"
 FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 RG_RUNNING_OPTIONS = ("--pre", "--hostname-bin")
 GIT_WRITING_OPTIONS = ("--output", "--ext-diff", "--exec-path")
+GIT_RUNNING_OPTIONS = ("--textconv", "--upload-pack", "--receive-pack", "--exec=", "--open-files-in-pager")
+GIT_CONFIG_OPTIONS = ("-c", "--config-env")
+GIT_GREP_PAGER_OPTION = "-O"
 BRANCH_LISTING_FLAGS = {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current",
                         "--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case", "--abbrev",
                         "--no-abbrev", "--omit-empty", "-q", "--quiet"}
 BRANCH_FILTERS = {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
 BRANCH_LIST_ONLY = {"-l", "--list"}
-LINK_FOLLOWING_FLAGS = {"grep": ("R", ("--dereference-recursive",)), "rg": ("L", ("--follow",)),
+GREP_LINK_FOLLOWING = ("R", ("--dereference-recursive",))
+LINK_FOLLOWING_FLAGS = {"grep": GREP_LINK_FOLLOWING, "egrep": GREP_LINK_FOLLOWING, "fgrep": GREP_LINK_FOLLOWING,
+                        "rg": ("L", ("--follow",)),
                         "ls": ("L", ("--dereference",)), "du": ("L", ("--dereference",)),
                         "tree": ("loRH", ("--o",)), "file": ("C", ("--compile",)), "diff": ("r", ("--recursive",))}
 FIND_LINK_FOLLOWING = {"-L", "-follow"}
@@ -39,6 +45,8 @@ WINDOWS_PROVIDER_DRIVE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]+:")
 FLAG_VALUE_MARKS = ":="
 PATH_MARKS = set("/\\~")
 GLOB_CHARACTERS = set("*?[")
+BASH_ONLY_BRACKETS = re.compile(r"\[(?:\^|!?\[[:=.])")
+QUOTED_OR_ESCAPED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.", re.DOTALL)
 GIT_PROGRAM_SETTINGS = re.compile(r"^(core\.(fsmonitor|pager|sshcommand|askpass|editor)|diff\.external|"
                                   r"diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|"
                                   r"gpg(\..+)?\.program|log\.showsignature|include(if)?\..+)=", re.IGNORECASE)
@@ -49,6 +57,8 @@ SHELL_CONTROL = re.compile(r"[;&|<>`$\n]")
 GROUPING = set("(){}")
 QUOTES = "'\""
 COMMENT_MARK = "#"
+LINE_CONTINUATION = "\\\n"
+CARRIAGE_RETURN = "\r"
 READING_TOOLS = ("read_file", "list_files", "search", eyes.VIEW_IMAGE)
 FREE_TOOLS = ("command_output", "stop_command", "todo_write")
 EDITS = "edits"
@@ -103,7 +113,10 @@ WRAPPER_PROGRAMS = {"sudo", "su", "doas", "env", "xargs", "eval", "exec", "sourc
 SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "case", "esac", "in",
                   "function", "coproc", "select", "!", "[[", "]]", "{", "}"}
 LAUNCHING_SUBCOMMANDS = {"run", "x", "dlx"}
-NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS
+SCRIPT_RUNNING_PROGRAMS = {"make", "gmake", "bmake", "cmake", "ninja", "tar", "zip", "vim", "vi", "nvim", "view",
+                           "vimdiff", "gvim", "emacs", "nano", "ex", "ed", "less", "more", "most", "pager", "man",
+                           "tmux", "screen"}
+NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS | SCRIPT_RUNNING_PROGRAMS
 EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
                                           "ssh", "curl", "wget", "kill", "pkill", "killall", "find", "sed", "awk",
@@ -112,6 +125,11 @@ SUBCOMMAND_PROGRAMS = {"git", "npm", "yarn", "pnpm", "cargo", "go", "docker", "p
                        "poetry", "pipenv", "conda", "dotnet", "gradle", "gradlew", "mvn", "apt", "apt-get", "brew",
                        "systemctl", "gh", "helm", "terraform", "composer", "bundle", "gem", "rustup", "flutter",
                        "dart", "swift"}
+ENVIRONMENT_SETTING = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+SHELL_PROGRAMS = {"sh", "bash", "zsh", "dash", "ksh", "fish", "pwsh", "powershell", "cmd"}
+UNREADABLE_COMMAND_STARTS = re.compile(r"\$\(|[;&|()`{}\n\r]")
+UNREADABLE_WORD_EDGES = "\"'\\$<>"
+MAX_INNER_RUN_WORDS = 64
 PIPES = ("|", "|&")
 SEPARATORS = ("||", "&&", "|&", "|", "&", ";", "\n")
 ENDING_SEPARATORS = (";", "&", "\n")
@@ -154,6 +172,8 @@ def separator_at(command: str, index: int) -> str:
 
 
 def command_pieces(command: str) -> list[tuple[str, str]]:
+    if CARRIAGE_RETURN in command:
+        return []
     pieces, text, joiner, quote, index = [], "", "", "", 0
     while index < len(command):
         character = command[index]
@@ -162,7 +182,8 @@ def command_pieces(command: str) -> list[tuple[str, str]]:
             text, index = text + character, index + 1
             continue
         if character == "\\" and backslash_escapes():
-            text, index = text + command[index:index + 2], index + 2
+            escaped = command[index:index + 2]
+            text, index = text + ("" if escaped == LINE_CONTINUATION else escaped), index + 2
             continue
         if character in EXPANSIONS:
             return []
@@ -326,9 +347,28 @@ def is_branch_listing(arguments: list[str]) -> bool:
 def is_read_only_git(arguments: list[str]) -> bool:
     if not arguments or arguments[0] not in READ_ONLY_GIT:
         return False
-    if any(word.startswith(GIT_WRITING_OPTIONS) for word in arguments):
+    if git_option_runs_or_writes(arguments):
         return False
     return arguments[0] != "branch" or is_branch_listing(arguments[1:])
+
+
+def git_option_runs_or_writes(arguments: list[str]) -> bool:
+    leading = list(itertools.takewhile(lambda word: word.startswith("-"), arguments))
+    if any(word.startswith(GIT_CONFIG_OPTIONS) for word in leading):
+        return True
+    if any(word.startswith(GIT_WRITING_OPTIONS + GIT_RUNNING_OPTIONS) for word in arguments):
+        return True
+    subcommand = arguments[len(leading):len(leading) + 1]
+    return subcommand == ["grep"] and any(word.startswith(GIT_GREP_PAGER_OPTION) for word in arguments)
+
+
+def option_runs_or_writes(words: list[str]) -> bool:
+    program = program_name(words[0])
+    if program == "git":
+        return git_option_runs_or_writes(words[1:])
+    if program in READ_ONLY_PROGRAMS or program == "find":
+        return not is_read_only_piece(shlex.join(words))
+    return False
 
 
 def writes_tree_output(arguments: list[str]) -> bool:
@@ -387,9 +427,20 @@ def is_directory_stack_form(path: str) -> bool:
     return head.startswith(SHELL_DIRECTORY_STACK) and head != "~+"
 
 
-def with_tilde_expanded(path: str, root) -> str:
+def has_bash_only_wildcard(text: str) -> bool:
+    return bool(BASH_ONLY_BRACKETS.search(QUOTED_OR_ESCAPED.sub("", text)))
+
+
+def shell_matches(path: str, folder: Path) -> list[str]:
+    pattern = path if os.path.isabs(path) else str(Path(folder) / path)
+    if not GLOB_CHARACTERS & set(path):
+        return [pattern]
+    return glob.glob(pattern) or [pattern]
+
+
+def with_tilde_expanded(path: str, folder) -> str:
     if path == "~+" or path.startswith("~+/"):
-        return str(root) + path[2:]
+        return str(folder) + path[2:]
     return os.path.expanduser(path)
 
 
@@ -455,6 +506,52 @@ def rule_matches(rule: str, name: str, targets: list[str]) -> bool:
     return parts[1] is None or any(fnmatch.fnmatchcase(target, parts[1].strip()) for target in targets)
 
 
+def without_settings_and_keywords(words: list[str]) -> list[str]:
+    while words and (ENVIRONMENT_SETTING.match(words[0]) or words[0] in SHELL_KEYWORDS):
+        words = words[1:]
+    return words
+
+
+def run_from(words: list[str]) -> str:
+    return shlex.join([program_name(words[0].lstrip("\\")), *words[1:]])
+
+
+def inner_runs(arguments: list[str]) -> list[str]:
+    runs = []
+    for index, word in enumerate(arguments):
+        if any(character.isspace() for character in word):
+            runs += program_runs(word)
+        elif not word.startswith("-"):
+            runs.append(run_from(arguments[index:index + MAX_INNER_RUN_WORDS]))
+    return runs
+
+
+def piece_runs(words: list[str]) -> list[str]:
+    words = without_settings_and_keywords(words)
+    if not words:
+        return []
+    program = program_name(words[0].lstrip("\\"))
+    launches_others = program in WRAPPER_PROGRAMS or program in SHELL_PROGRAMS
+    return [run_from(words)] + (inner_runs(words[1:]) if launches_others else [])
+
+
+def program_runs(command: str) -> list[str]:
+    pieces = command_pieces(command)
+    if not pieces:
+        return [run for part in UNREADABLE_COMMAND_STARTS.split(command) for run in piece_runs(rough_words(part))]
+    return [run for _joiner, text in pieces for run in piece_runs(words_of(text) or text.split())]
+
+
+def rough_words(part: str) -> list[str]:
+    return [word.strip(UNREADABLE_WORD_EDGES) for word in part.split() if word.strip(UNREADABLE_WORD_EDGES)]
+
+
+def prefix_covers_an_option(rule: str, name: str, target: str) -> bool:
+    parts = rule_parts(rule)
+    words = words_of(target)
+    return bool(parts and command_prefix_of(name, parts[1]) and words and option_runs_or_writes(words))
+
+
 @dataclass
 class Rules:
     allow: list[str] = field(default_factory=list)
@@ -466,14 +563,15 @@ class Rules:
 
     def denies(self, name: str, target: str) -> bool:
         targets = [target] + ([part.strip() for part in COMMAND_PARTS.split(target) if part.strip()]
-                              if name == "run_command" else [])
+                              + program_runs(target) if name == "run_command" else [])
         return any(rule_matches(rule, name, targets) for rule in self.deny)
 
     def allows(self, name: str, target: str) -> bool:
         if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)
                                       or not command_pieces(target)):
             return False
-        return any(rule_matches(rule, name, [target]) for rule in self.allow if is_honoured_allow(rule))
+        return any(rule_matches(rule, name, [target]) and not prefix_covers_an_option(rule, name, target)
+                   for rule in self.allow if is_honoured_allow(rule))
 
     def command_prefixes(self) -> list[str]:
         found = [command_prefix_of(*parts) for parts in map(rule_parts, self.allow) if parts]
@@ -640,20 +738,23 @@ class Gate:
         question = f"{verb} {arguments.get('path')}? ({PROTECTED_NOTE})"
         return None if self.ask(question, diff_preview(self.workspace, name, arguments)) in AGREEING else self.refused()
 
-    def reaches_outside(self, path: str) -> bool:
+    def reaches_outside(self, path: str, folder: Path) -> bool:
         if is_directory_stack_form(path) or WINDOWS_ABSOLUTE.match(path) or names_a_provider_drive(path):
             return True
-        expanded = with_tilde_expanded(path, self.workspace.root)
+        expanded = with_tilde_expanded(path, folder)
         try:
-            return not all(self.workspace.contains(found) for found in self.shell_matches(expanded))
+            return not all(self.workspace.contains(found) for found in shell_matches(expanded, folder))
         except (tools.ToolError, OSError, ValueError):
             return True
 
-    def shell_matches(self, path: str) -> list[str]:
-        if not GLOB_CHARACTERS & set(path):
-            return [path]
-        pattern = path if os.path.isabs(path) else str(self.workspace.root / path)
-        return glob.glob(pattern) or [path]
+    def command_folder(self, arguments: dict) -> Path:
+        cwd = str(arguments.get("cwd") or "")
+        if not cwd:
+            return self.workspace.root
+        try:
+            return self.workspace.resolve(cwd)
+        except (tools.ToolError, OSError, ValueError):
+            return self.workspace.root
 
     def lists_outside(self, arguments: dict) -> bool:
         try:
@@ -703,7 +804,7 @@ class Gate:
         found = [mark.removeprefix(SESSION_PREFIX_MARK) for mark in self.always if mark.startswith(SESSION_PREFIX_MARK)]
         return [prefix for prefix in found if not launches_anything(prefix)]
 
-    def is_quiet_filter(self, words: list[str]) -> bool:
+    def is_quiet_filter(self, words: list[str], folder: Path) -> bool:
         program, arguments = program_name(words[0]), words[1:]
         if program not in FILTER_PROGRAMS or follows_links_or_writes(program, arguments):
             return False
@@ -713,28 +814,28 @@ class Gate:
             writes = has_flag_letters(arguments, SORT_WRITING_LETTERS) or any(
                 word.startswith(SORT_WRITING_OPTIONS) for word in arguments)
             return all(word.startswith("-") and word != "-" for word in arguments) and not writes
-        return not any(self.reaches_outside(path) for path in paths_among(words))
+        return not any(self.reaches_outside(path, folder) for path in paths_among(words))
 
-    def piece_allowed(self, joiner: str, text: str, prefixes: list[str]) -> bool:
+    def piece_allowed(self, joiner: str, text: str, prefixes: list[str], folder: Path) -> bool:
         words = words_of(text)
         if not words:
             return False
         if text in self.always or self.rules.allows("run_command", text):
             return True
-        if any(starts_with_words(words, prefix) for prefix in prefixes):
+        if any(starts_with_words(words, prefix) for prefix in prefixes) and not option_runs_or_writes(words):
             return True
-        return joiner in PIPES and self.is_quiet_filter(words)
+        return joiner in PIPES and not has_bash_only_wildcard(text) and self.is_quiet_filter(words, folder)
 
-    def pieces_allowed(self, command: str) -> bool:
+    def pieces_allowed(self, command: str, folder: Path) -> bool:
         pieces = command_pieces(command)
         prefixes = self.session_prefixes() + self.rules.command_prefixes()
-        return bool(pieces) and all(self.piece_allowed(joiner, text, prefixes) for joiner, text in pieces)
+        return bool(pieces) and all(self.piece_allowed(joiner, text, prefixes, folder) for joiner, text in pieces)
 
-    def prefixes_for(self, command: str) -> list[str]:
+    def prefixes_for(self, command: str, folder: Path | None = None) -> list[str]:
         found = []
         for joiner, text in command_pieces(command):
             words = words_of(text)
-            if joiner in PIPES and words and self.is_quiet_filter(words):
+            if joiner in PIPES and words and self.is_quiet_filter(words, folder or self.workspace.root):
                 continue
             prefix = prefix_words(words)
             if not prefix:
@@ -742,8 +843,8 @@ class Gate:
             found.append(" ".join(prefix))
         return without_covered(found)
 
-    def confirm_command(self, question: str, command: str) -> str | None:
-        prefixes = self.prefixes_for(command)
+    def confirm_command(self, question: str, command: str, folder: Path) -> str | None:
+        prefixes = self.prefixes_for(command, folder)
         if not prefixes:
             return self.confirm(question, remember=command, rule=self.command_rule(command))
         return self.confirm_scoped(question, "", [SESSION_PREFIX_MARK + prefix for prefix in prefixes],
@@ -778,7 +879,8 @@ class Gate:
         if name in tools.CHANGING_TOOLS:
             return PLAN_REFUSAL if self.mode == PLAN else self.check_change(name, arguments)
         if name == "run_command":
-            return self.check_command(str(arguments.get("command", "")), bool(arguments.get("background")))
+            return self.check_command(str(arguments.get("command", "")), bool(arguments.get("background")),
+                                      self.command_folder(arguments))
         return self.check_other(name, read_only=False, arguments=arguments)
 
     def check_other(self, name: str, read_only: bool, preview: str = "", arguments: dict | None = None) -> str | None:
@@ -868,21 +970,22 @@ class Gate:
         return self.confirm(f"{verb} {arguments.get('path')}?", preview, remember=EDITS,
                             rule=self.rule_for(name, arguments))
 
-    def check_command(self, command: str, background: bool) -> str | None:
+    def check_command(self, command: str, background: bool, folder: Path) -> str | None:
         if is_read_only_command(command) and not background:
-            return self.check_looking(command)
+            return self.check_looking(command, folder)
         if self.mode == PLAN:
             return PLAN_REFUSAL
-        if command in self.always or self.pieces_allowed(command):
+        if command in self.always or self.pieces_allowed(command, folder):
             return None
         label = "Start in the background" if background else "Run"
-        return self.confirm_command(f"{label}: {command}", command)
+        return self.confirm_command(f"{label}: {command}", command, folder)
 
-    def check_looking(self, command: str) -> str | None:
+    def check_looking(self, command: str, folder: Path) -> str | None:
         if command in self.always:
             return None
         pieces = [text for _joiner, text in command_pieces(command)]
-        if any(self.reaches_outside(path) for text in pieces for path in named_paths(text)):
+        if any(has_bash_only_wildcard(text) or any(self.reaches_outside(path, folder) for path in named_paths(text))
+               for text in pieces):
             return self.confirm(f"Look outside the project: {command}?", remember=command,
                                 rule=self.command_rule(command))
         runs_git = any(words_of(text)[0].lower() == "git" for text in pieces)

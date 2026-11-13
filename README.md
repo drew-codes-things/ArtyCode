@@ -53,6 +53,8 @@ command the program and its subcommand words, which the question names (`Yes, an
 `python3 -m pytest | grep -E "FAILED|ERROR"` are covered too. A command whose words decide what it touches or runs
 (`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like), one that starts another
 program (`systemd-run`, `stdbuf`, `xvfb-run`, `strace`, `timeout`, `nice`, `uv run --with ...` and the like), one that
+runs a script or a command through an option (`make`, `cmake`, `tar`, `zip`, `vim`, `emacs`, `less`, `man`, `tmux`
+and the like), one that
 starts with a shell keyword (`if`, `then`, `do`), or one with `$`, backticks, `(`, `<`, a `#` comment or output written
 to a file is only ever remembered exactly, as before. A prefix rule for such a program or keyword in the settings is not
 followed as an allow rule (it would cover any command); as a deny rule it still forbids. In a trusted project there is also
@@ -221,7 +223,8 @@ Worked for 12s · 6 steps · ↓ 2.1k tokens
 `--plain` keeps the line-at-a-time prompt instead: a `›` between two rules with the mode bar under it, read with
 readline on Linux (arrow keys and history work) and key by key on Windows. The plain prompt is also what you get
 when output isn't a terminal, with `-p`, and when the interface can't start (it says why). It prints the same
-`Resume this chat:` line when you leave.
+`Resume this chat:` line when you leave, with the name you started ArtyCode as. Anything typed before a question is
+shown there is thrown away when the question appears, so only an answer typed after it counts.
 
 ### Look-only commands
 
@@ -251,7 +254,11 @@ Saved rules skip or forbid questions. Put them in `settings.json` in the config 
 A rule is a tool name, or a tool name with a wildcard pattern in brackets that is matched against the path (relative
 to the project), the command, the address or the list pattern. A command pattern ending in `:*`, such as
 `run_command(npm test:*)`, is a prefix: it matches any command whose first words are those words. Deny wins over
-everything, including `allow-all` and hooks, and is checked against each part of a chained command. A chained command
+everything, including `allow-all` and hooks, and is checked against each part of a chained command and against the
+program each part runs, also behind a path (`/bin/rm`), a setting (`X=1 rm`), a shell keyword or a program that starts
+another (`sudo`, `xargs`, `bash -c`). It is still a match on the command's words, not on what a program does:
+`find -delete` or a script that removes files is not caught by `run_command(rm *)`, so a command deny rule stops the usual
+ways of running that program, not every way of doing what it does. A chained command
 or pipeline (`|`, `&&`, `||`, `;`, a new line) is allowed only when every part is: a part matches an allow rule or a
 prefix allowed with **a**, or, after a `|`, is only a look-only filter (`tail`, `head`, `grep`, `wc`, `sort`, `uniq`,
 or `cat` with nothing after it) that reads nothing outside the project. Nothing is allowed this way with `$`,
@@ -514,11 +521,18 @@ usual:
 - Linux: bubblewrap (`bwrap`, install it with your package manager). The system is read-only, the project folder is
   writable except the parts that make programs run later (`.git/config`, `.git/hooks`, `.git/info` and the `.arty`
   folder stay read-only, so change git settings or hooks outside the sandbox), `/tmp` is private, and secrets in your home folder (`~/.ssh`, `~/.gnupg`, cloud and `gh` logins,
-  `.netrc`, `.git-credentials`, ArtyCode's own config folder with your API key, and others) look empty. Your
+  `.netrc`, `.git-credentials`, ArtyCode's own config folder with your API key, shell histories, cargo, gradle, maven
+  and git credential files, browser profiles, keystores and key files at the top of your home folder, and others)
+  look empty. Your
   runtime folder (`/run/user/<uid>`, with the session bus and keyring and agent sockets) is empty too, the SSH agent
   socket is hidden wherever it lives, and environment variables that look secret (names with KEY, TOKEN, SECRET,
   PASSWORD, AUTH and the like) or point at the session bus or an agent are left out. The rest of your home folder
   stays readable so toolchains keep working.
+  A project with no `.git` or `.arty` yet has nothing to protect: a sandboxed command can run `git init` or make
+  `.arty` and write hooks or settings into them, and git run outside the sandbox (your shell prompt, a hook) would
+  then run what was planted. Keeping a name that doesn't exist yet read-only would need bubblewrap to make a
+  placeholder for it in your real project folder, which ArtyCode doesn't do. In a folder where a sandboxed command
+  made a new repository, look at `.git/config` and `.git/hooks` before you run git there yourself.
 - Windows: an AppContainer and a Job Object. The command can change only the project folder (it starts in a
   `Project:` drive there), can't read your user folder, and everything it started ends with it. A project folder that
   holds your whole user folder is refused. Programs installed only for you (under `AppData`) can't be run inside it.
@@ -527,7 +541,8 @@ usual:
 It is off by default. When it can't run (no `bwrap`, or a container that blocks it) ArtyCode says so and runs commands
 without it; `"sandbox": "required"` refuses commands instead. A trusted project's `.arty/settings.json` can switch
 the sandbox on or make it required, never off, and can't turn the network on. Helpers' commands and the ones you type
-after `!` run in the sandbox too; hooks and MCP servers don't.
+after `!` run in the sandbox too; hooks, MCP servers, the headless browser for `screenshot` and the checks after
+edits don't.
 
 ### Built-in working rules
 
@@ -666,7 +681,11 @@ middle of one, so the brain can keep reusing what it already read.
   The pictures go to `.arty/screenshots/` (that folder ignores itself in git), and the result gives the HTTP status,
   the title, console errors, uncaught errors, failed or 4xx/5xx requests and the start of the visible text. With
   `question`, each screenshot also goes through `view_image`. The browser runs with a throwaway profile in the temp
-  folder, never your own, with no extensions or sound, and the profile is deleted when the shot is done. The browser
+  folder, never your own, with no extensions or sound, and the profile is deleted when the shot is done. An HTML file
+  is opened with every network request sent nowhere, this computer's addresses included (the result lists them as
+  failed requests), so a project page can't send anything out; a page from a local server loads what it asks for,
+  as in a normal browser.
+  The browser
   is found on the PATH (Chrome, `chromium`, `microsoft-edge` and others), where Windows and macOS install Chrome,
   Edge and Chromium, or at `ARTY_BROWSER`; without one, `screenshot` isn't offered.
 - `http_check` sends a GET or HEAD (no request body, no saved headers or keys) and returns the status, the time,
