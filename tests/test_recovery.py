@@ -430,3 +430,24 @@ def test_missed_edits_inside_the_project_still_ask_nothing_and_show_the_file_on_
     results = results_of_two_misses(gate, "calc.py")
     assert ask.questions == []
     assert agent.WHOLE_FILE_LEAD.format(path="calc.py", lines=len(FIXTURE_CALC.splitlines())) in results[-1]
+
+
+def test_one_repeat_after_other_work_does_not_trip_the_stuck_stop(project):
+    (project / "config.py").write_text("A = 1\n")
+    (project / "other.py").write_text("B = 1\n")
+    read = [("read_file", {"path": "config.py"})]
+    brain = ScriptedBrain([read, read, read, [("read_file", {"path": "other.py"})],
+                           [("edit_file", {"path": "other.py", "old_text": "B = 1", "new_text": "B = 2"})],
+                           [("run_command", {"command": "echo checked"})], read, "All finished."])
+    session = session_for(project, brain)
+    session.ask("tidy the config")
+    assert session.messages[-1]["content"] == "All finished."
+
+
+def test_the_same_step_right_after_the_warning_still_stops(project):
+    (project / "config.py").write_text("A = 1\n")
+    read = [("read_file", {"path": "config.py"})]
+    brain = ScriptedBrain([read] * (agent.STUCK_REPEATS + 1) + ["never reached"])
+    session = session_for(project, brain)
+    session.ask("tidy the config")
+    assert session.messages[-1]["content"] == agent.STUCK_STOPPED

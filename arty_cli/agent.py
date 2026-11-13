@@ -804,6 +804,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         failing_now = failing_signatures(calls, raw_results)
         if signature == steered_from or failing_now & steered_failures:
             return stopped_as_stuck(messages, screen)
+        steered_from = None
         failures = (failures + [failing_now])[-STUCK_WINDOW:]
         failing = repeated_failure(failures)
         if failing is not None:
