@@ -314,6 +314,14 @@ def test_help_names_the_keys_of_the_interface(interactive, tmp_path):
         assert wanted in shown
 
 
+def test_help_and_the_shortcut_panel_say_how_to_scroll_the_conversation(interactive, tmp_path):
+    session = session_for(tmp_path)
+    session.command("/help")
+    row = next(line for line in session.terminal.err.getvalue().splitlines() if "PageUp, PageDown" in line)
+    assert "scroll the conversation, as the mouse wheel does" in row
+    assert ("pgup pgdn", "scroll the chat") in cli.look.SHORTCUTS
+
+
 def test_the_answer_is_noted_after_an_arrow(interactive):
     terminal, console = console_terminal()
     console.answers = ["y"]

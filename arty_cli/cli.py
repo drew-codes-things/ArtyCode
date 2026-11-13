@@ -124,6 +124,7 @@ HELP_GROUPS = (
         "Up, Down, Ctrl-R": "earlier requests in this project, and searching them",
         "Tab, Enter": "take the highlighted /command, model or @file from the menu",
         "Ctrl-O": "everything the last step gave back, like /last",
+        "PageUp, PageDown": "scroll the conversation, as the mouse wheel does (Shift+drag selects text)",
         "?, /help": "this list",
     }),
 )

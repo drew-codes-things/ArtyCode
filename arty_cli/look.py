@@ -78,6 +78,7 @@ SHORTCUTS = (("/", "commands"), ("@", "attach a file"), ("!", "run a command you
              ("enter", "send, or queue while Arty works"), ("alt+enter", "new line"), ("\\ enter", "new line"),
              ("tab", "complete"), ("shift+tab", "change mode"), ("esc", "stop a request"),
              ("ctrl+o", "the last step in full"), ("ctrl+r", "search earlier requests"),
+             ("pgup pgdn", "scroll the chat"),
              ("ctrl+c", "clear, twice to quit"), ("ctrl+d", "quit"))
 GIT_FOLDER = ".git"
 GIT_LINK = "gitdir:"
