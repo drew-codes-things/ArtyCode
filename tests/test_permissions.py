@@ -1296,6 +1296,31 @@ def test_a_remembered_git_prefix_still_covers_its_ordinary_options(workspace):
     assert gate.allows("run_command", {"command": "git commit -m 'fix the sum' --no-verify"})
 
 
+@pytest.mark.parametrize("command, prefixes", [
+    ("npx eslint .", ["npx eslint"]), ("pipx run black .", ["pipx run black"]),
+    ("uvx ruff check .", ["uvx ruff check"]), ("bunx prettier --check .", ["bunx prettier"]),
+    ("npx --package=other eslint .", []), ("npx -p other eslint .", []), ("npx -y eslint .", []),
+    ("pipx run --spec other black .", []), ("uvx --from other ruff check .", []),
+])
+def test_a_package_runner_is_offered_only_together_with_its_package(workspace, command, prefixes):
+    assert permissions.Gate(workspace, Asker()).prefixes_for(command) == prefixes
+
+
+@pytest.mark.parametrize("prefix, covered, not_covered", [
+    ("npx eslint", "npx eslint --fix src", "npx --package=other eslint src"),
+    ("npx eslint", "npx eslint --fix src", "npx -p other eslint src"),
+    ("pipx run black", "pipx run black --check .", "pipx run --spec other black ."),
+    ("uvx ruff check", "uvx ruff check --fix .", "uvx --from other ruff check ."),
+])
+def test_a_remembered_package_runner_never_covers_a_different_package(workspace, prefix, covered, not_covered):
+    ask = Asker("n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert gate.allows("run_command", {"command": covered})
+    assert not gate.allows("run_command", {"command": not_covered})
+    assert len(ask.questions) == 1
+
+
 @pytest.mark.parametrize("platform", ["linux", "win32"])
 @pytest.mark.parametrize("command", ["ls\rtouch x", "cat a.py\r", "git status\r\nrm a.py"])
 def test_a_carriage_return_makes_a_command_unreadable_so_it_asks(workspace, monkeypatch, platform, command):
