@@ -37,6 +37,10 @@ READ_ONLY_GH_ALONE = {"status"}
 GH_ASKING_OPTIONS = {"--web", "--output", "--dir", "--watch"}
 GH_ASKING_LETTERS = set("wOD")
 GH_REPO_SHORT = "-R"
+GH_REPO_LETTER = "R"
+GH_REPO_OPTION = "--repo"
+GH_HOSTNAME_OPTION = "--hostname"
+GH_REPO_GROUP = "repo"
 GH_FILTER_SHORTS = ("-q", "-t")
 GH_FILTER_OPTIONS = {"--jq", "--template"}
 GH_FILTER_REACHING_WORDS = ("env", "import", "include", "input")
@@ -458,7 +462,7 @@ def gh_options(arguments: list[str]) -> list[str] | None:
 
 def is_read_only_gh(arguments: list[str]) -> bool:
     options = gh_options(arguments)
-    return options is not None and not gh_option_asks(options)
+    return options is not None and not gh_option_asks(options) and not gh_names_another_host(arguments)
 
 
 def gh_option_asks(words: list[str]) -> bool:
@@ -468,17 +472,48 @@ def gh_option_asks(words: list[str]) -> bool:
 def gh_word_asks(word: str) -> bool:
     if any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS) or has_unusual_spacing(word):
         return True
-    if gh_option_opens_writes_or_waits(word):
-        return True
-    return names_another_host(gh_value(word)) or names_another_host(word.lstrip("-"))
+    return gh_option_opens_writes_or_waits(word)
 
 
 def gh_option_reaches_further(arguments: list[str]) -> bool:
     filters_output = any(gh_filter_option(word) for word in arguments)
-    return any(gh_option_opens_writes_or_waits(word) or names_another_host(gh_value(word))
-               or names_another_host(word.lstrip("-")) or has_unusual_spacing(word)
-               or (filters_output and any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS))
-               for word in arguments)
+    return gh_names_another_host(arguments) or any(
+        gh_option_opens_writes_or_waits(word) or has_unusual_spacing(word)
+        or (filters_output and any(reaching in word.lower() for reaching in GH_FILTER_REACHING_WORDS))
+        for word in arguments)
+
+
+def gh_option_values(arguments: list[str], option: str, letter: str = "") -> list[str]:
+    values = []
+    for index, word in enumerate(arguments):
+        following = arguments[index + 1:index + 2]
+        if word == option:
+            values += following
+        elif word.startswith(option + "="):
+            values.append(word.partition("=")[2])
+        elif letter and letter in short_flags(word):
+            glued = short_flags(word).partition(letter)[2].removeprefix("=")
+            values += [glued] if glued else following
+    return values
+
+
+def gh_repositories(arguments: list[str]) -> list[str]:
+    if arguments[:1] == [GH_REPO_GROUP]:
+        return arguments[1:]
+    return gh_option_values(arguments, GH_REPO_OPTION, GH_REPO_LETTER)
+
+
+def names_a_url_elsewhere(word: str) -> bool:
+    return URL_MARK in word and url_host(word.strip()) != GITHUB_HOST
+
+
+def gh_names_another_host(arguments: list[str]) -> bool:
+    if any(names_a_url_elsewhere(word) for word in arguments):
+        return True
+    if any(value.strip().lower() != GITHUB_HOST for value in gh_option_values(arguments, GH_HOSTNAME_OPTION)):
+        return True
+    return any(names_another_host(value) or names_another_host(value.lstrip("-"))
+               for value in gh_repositories(arguments))
 
 
 def gh_filter_option(word: str) -> bool:
@@ -495,14 +530,6 @@ def gh_option_opens_writes_or_waits(word: str) -> bool:
     if not word.startswith("-") or word.startswith((GH_REPO_SHORT, *GH_FILTER_SHORTS)):
         return False
     return bool(GH_ASKING_LETTERS & set(word[1:]))
-
-
-def gh_value(word: str) -> str:
-    if word.startswith("--"):
-        return word.partition("=")[2]
-    if word.startswith(GH_REPO_SHORT):
-        return word.removeprefix(GH_REPO_SHORT).removeprefix("=")
-    return word
 
 
 def names_another_host(value: str) -> bool:

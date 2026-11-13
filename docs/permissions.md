@@ -65,8 +65,11 @@ extension. They ask when they open a browser (`--web`, `-w`), write files (`--ou
 watching (`--watch`), name a host other than github.com (`-R host/owner/repo`, `-R host:port/repo`, a URL or
 `git@host:` address, also behind leading dashes), have a tab, line break, non-breaking space or other unusual space, have a wildcard or `~` outside quotes (the shell would swap it for file names first), or have a
 word containing `env`, `import`, `include` or `input` (the jq words for environment variables, modules and
-inputs, which `--jq` passes on). `-R owner/repo` (with a space) and github.com URLs are fine; a word with two or more
-`/` that doesn't start with `github.com` asks, so a jq `//` does too. Like git, they ask when the repository's git
+inputs, which `--jq` passes on). `-R owner/repo` (with a space) and github.com URLs are fine. A host is looked for only
+where gh takes one: a URL anywhere, `--hostname`, and the repository of `-R`/`--repo` (also inside a bundle such as
+`-cR`) or of `gh repo`, where `host/owner/repo` names a host other than github.com. Other words with slashes (an API
+path, a branch, a title naming a file, a jq `//`) are fine, so a yes to `gh api repos/o/r/pulls` covers
+`gh api repos/o/r/issues`. Like git, they ask when the repository's git
 settings name a program, and deny rules still stop them.
 
 ## Permission rules

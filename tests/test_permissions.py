@@ -1478,7 +1478,6 @@ ASKING_GH = [
     "gh pr view HTTPS://evil.example/o/r/pull/1", "gh repo view -q -q evil.example/o/r",
     "gh pr list --search 'see https://evil.example/x'", "gh pr view 'https://[::1/x'",
     "gh repo view -b -q evil.example/o/r",
-    "gh pr list --json title --jq '.[] | .title // \"none\"'", "gh pr view 1 -q '.a//.b'",
     "gh pr list --json title --jq env", "gh pr view 1 -q '$ENV.GH_TOKEN'", "gh pr view 1 --jq='$ENV'",
     "gh pr view 1 --jq 'import \"data\" as $d; $d'", "gh pr view 1 -q 'include \"x\"; .'",
     "gh pr view 1 -q input_filename", "gh pr view 1 -qenv", "gh pr list --template '{{env}}'",
@@ -1914,3 +1913,64 @@ def test_off_windows_a_deny_rule_still_matches_the_name_as_written(workspace, mo
     gate = permissions.Gate(workspace, Asker(), mode=permissions.ALLOW_ALL)
     gate.rules = rules(deny=["run_command(Remove-Item:*)"])
     assert gate.check("run_command", {"command": "rm x"}) is None
+
+
+@needs_git
+@pytest.mark.parametrize("prefix, command", [
+    ("gh api", "gh api repos/cli/cli/issues"), ("gh api", "gh api repos/cli/cli/pulls --paginate"),
+    ("gh pr create", "gh pr create --title 'fix src/app/main.py' --body done"),
+    ("gh pr create", "gh pr create --base release/2026/11 --title x"),
+    ("gh issue create", "gh issue create --title 'docs/a/b moved' --body 'see docs/a/b'"),
+])
+def test_a_remembered_gh_prefix_covers_slashed_words_that_name_no_host(workspace, prefix, command):
+    ask = Asker()
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert saved.allows("run_command", {"command": command})
+    assert ask.questions == []
+
+
+def test_always_for_one_gh_api_call_covers_the_next_endpoint(workspace):
+    ask = Asker("a")
+    gate = permissions.Gate(workspace, ask)
+    assert gate.allows("run_command", {"command": "gh api repos/cli/cli/pulls"})
+    assert gate.allows("run_command", {"command": "gh api repos/cli/cli/issues"})
+    assert len(ask.questions) == 1
+
+
+@needs_git
+@pytest.mark.parametrize("command", ["gh pr view feature/login/fix", "gh pr list --search 'path:src/app/main.py'",
+                                     "gh pr list -B release/2026/11", "gh pr diff team/a/b",
+                                     "gh pr list --json title --jq '.[] | .title // \"none\"'",
+                                     "gh pr view 1 -q '.a//.b'"])
+def test_look_only_gh_with_slashed_words_that_name_no_host_needs_no_ok(workspace, command):
+    assert permissions.is_read_only_command(command)
+    ask = Asker()
+    assert permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert ask.questions == []
+
+
+@pytest.mark.parametrize("prefix, command", [
+    ("gh api", "gh api --hostname evil.example repos/x/y"), ("gh api", "gh api --hostname=evil.example repos/x/y"),
+    ("gh api", "gh api https://evil.example/repos/x"), ("gh pr view", "gh pr view 1 -cR evil.example/o/r"),
+    ("gh pr view", "gh pr view 1 -cRevil.example/o/r"), ("gh pr view", "gh pr view 1 --repo evil.example/o/r"),
+    ("gh pr view", "gh pr view 1 -R git@evil.example:o/r"), ("gh repo view", "gh repo view evil.example/o/r"),
+])
+def test_a_remembered_gh_prefix_still_asks_where_gh_takes_another_host(workspace, prefix, command):
+    ask = Asker("n", "n")
+    gate = permissions.Gate(workspace, ask)
+    gate.always.add(permissions.SESSION_PREFIX_MARK + prefix)
+    assert not gate.allows("run_command", {"command": command})
+    saved = permissions.Gate(workspace, ask)
+    saved.rules = rules(allow=[permissions.prefix_rule(prefix)])
+    assert not saved.allows("run_command", {"command": command})
+    assert len(ask.questions) == 2
+
+
+@pytest.mark.parametrize("command", ["gh pr view 1 -cR evil.example/o/r", "gh pr view 1 -cRevil.example/o/r",
+                                     "gh issue list -R=intranet/o/r"])
+def test_look_only_gh_asks_for_a_host_in_a_bundled_repo_flag(workspace, command):
+    assert not permissions.is_read_only_command(command)
