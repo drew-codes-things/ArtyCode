@@ -32,7 +32,7 @@ code only ever goes to your own server. You need an Arty API key, or to approve 
 | `multi_edit` | Several edits to one file in one step, applied in order; all or nothing, so if one edit doesn't match exactly once nothing is changed. One question with the whole diff, and one `/undo` puts it all back | Yes, like an edit |
 | `notebook_edit` | Replace, insert or delete one cell of a `.ipynb` notebook (a replaced code cell's old output is cleared). Offered once the project has a notebook or a request mentions one | Yes, like an edit |
 | `run_command` | Tests, builds, git (bash on Linux, PowerShell on Windows). A command is stopped after `timeout_seconds` (120 unless the model asks for more, up to 1800, or `max_command_seconds`), and the result starts by saying it was stopped and isn't running any more, then says to run a server in the background or give a long build more time, before the output it printed. The output includes stderr, and long output is trimmed to its start and end. `cwd` runs it in a folder inside the project instead of the project folder. `background: true` starts it and returns at once | Yes, except look-only commands (below) |
-| `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a watcher, a long build). `command_output` waits up to `wait_seconds` (5 unless asked for more) for the job to finish, then returns what it printed since the last read; background commands end when ArtyCode does | No |
+| `command_output`, `stop_command` | Read or stop a command started in the background (a dev server, a watcher, a long build). `command_output` waits up to `wait_seconds` (5 unless asked for more) for the job to finish, then returns what it printed since the last read; background commands end when ArtyCode does, also when its terminal is closed or it is sent SIGTERM (not after a SIGKILL) | No |
 | `todo_write` | A checklist for jobs with several steps, drawn with boxes under the step each time it changes (☐ to do, ☑ done) and kept for `/todos` | No |
 | `web_fetch` | Read a public web page (documentation, an issue), marked as information rather than instructions | Yes, once per site with **a** |
 | `web_search` | Search the web through your Arty brain's own search (its `research__web_search` tool, so no other search key is needed); titles, links and snippets, marked as information rather than instructions. Helpers can search too | Yes, once per session with **a** (also in plan mode, since it changes nothing) |
@@ -51,8 +51,11 @@ stopping, and Enter on its own just says no. "Always" lasts until you quit: for 
 command the program and its subcommand words, which the question names (`Yes, and don't ask again for
 \`python3 -m pytest\` commands until you quit`), so `python3 -m pytest -q`, `python3 -m pytest 2>&1 | tail -40` and
 `python3 -m pytest | grep -E "FAILED|ERROR"` are covered too. A command whose words decide what it touches or runs
-(`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like) or one with `$`, backticks,
-`(`, `<` or output written to a file is only ever remembered exactly, as before. In a trusted project there is also
+(`rm`, `mv`, `cp`, `curl`, `sudo`, `env`, `xargs`, `sed`, `find`, `python -c` and the like), one that starts another
+program (`systemd-run`, `stdbuf`, `xvfb-run`, `strace`, `timeout`, `nice`, `uv run --with ...` and the like), one that
+starts with a shell keyword (`if`, `then`, `do`), or one with `$`, backticks, `(`, `<`, a `#` comment or output written
+to a file is only ever remembered exactly, as before. A prefix rule for such a program or keyword in the settings is not
+followed as an allow rule (it would cover any command); as a deny rule it still forbids. In a trusted project there is also
 **s** (save as a project rule): the answer is written to `.arty/settings.json` as an allow rule (below), for a command
 as `run_command(python3 -m pytest:*)`, for that file, that site or that tool, so later sessions don't ask either. When
 no rule fits, **s** lasts the session like **a**. When there's no terminal to ask in (piped input), anything that needs an OK is refused.
@@ -204,7 +207,9 @@ Worked for 12s · 6 steps · ↓ 2.1k tokens
   stays one message.
 - **Questions.** Permission questions, plan approval and the model list from `/model` are asked in a bordered panel
   that takes the box's place: move with Up and Down or press the answer's letter or number, Enter confirms, Esc
-  refuses. The answer is then noted in the conversation (`Edit greet.py? → Yes`). "What should Arty do instead?" and
+  refuses. Nothing is chosen until you pick, so Enter on its own does nothing. Keys that arrive in the first half
+  second, or while you are still typing without a pause, are ignored, and a letter that is not one of the answers
+  clears the choice: a sentence typed ahead while Arty works can never answer a question. The answer is then noted in the conversation (`Edit greet.py? → Yes`). "What should Arty do instead?" and
   plan feedback are typed in the box (what you were writing is put back afterwards). With remote control on, an answer
   from another device still wins or loses the same way as before.
 - **Notices.** When a permission question is waiting, or a request finishes after more than 30 seconds, the terminal
@@ -279,7 +284,7 @@ Arty works without the other two. ArtyCode needs Arty. starfire.ai works with ot
 
 ## Install
 
-Python 3.11 or newer. The installers (and pipx) also fetch prompt_toolkit, the one library ArtyCode needs, from PyPI.
+Python 3.11 or newer. The installers (and pipx) also fetch prompt_toolkit and Pygments, the two libraries ArtyCode needs, from PyPI.
 
 **Debian (and other Linux), one line:**
 
@@ -474,10 +479,13 @@ not for a request you stopped. Set `finish_check` to `off` in the config file (o
 turn it off.
 
 Test runs are also compared within a request. When files were changed since the best run of the same test command so
-far and the new run is worse (fewer tests pass, or as many pass and more fail, so a test file that no longer imports
-counts as worse), the run's result tells the model so plainly, with both counts and the tests that newly fail, and a dim
+far and the new run is worse (it fails where that run passed, by its exit code, so runners without counts such as
+`go test` are understood; or, both failing, tests no longer run at all, as when a test file stops importing, or fewer
+tests pass, or as many pass and more fail; a run that passes is never worse, so removing an obsolete test is fine),
+the run's result tells the model so plainly, with both counts and the tests that newly fail, and a dim
 `Tests check:` line shows it. From then on the model is also offered `undo_edits`, which puts the files back as they
-were at that better run using `/undo`'s snapshots; it asks you first in default mode, is refused in plan mode, and
+were at that better run using `/undo`'s snapshots; it asks you first, every time, naming how many changes and which
+files it would put back (**a** and **s** count as yes for that once and save nothing), is refused in plan mode, and
 nothing is put back unless the model calls it.
 
 Waiting for the model has no time limit. Connecting gives up after 30 seconds, but once connected ArtyCode waits as
@@ -504,7 +512,8 @@ library and cached in the config folder's `repomap/`, so only changed files are 
 usual:
 
 - Linux: bubblewrap (`bwrap`, install it with your package manager). The system is read-only, the project folder is
-  writable, `/tmp` is private, and secrets in your home folder (`~/.ssh`, `~/.gnupg`, cloud and `gh` logins,
+  writable except the parts that make programs run later (`.git/config`, `.git/hooks`, `.git/info` and the `.arty`
+  folder stay read-only, so change git settings or hooks outside the sandbox), `/tmp` is private, and secrets in your home folder (`~/.ssh`, `~/.gnupg`, cloud and `gh` logins,
   `.netrc`, `.git-credentials`, ArtyCode's own config folder with your API key, and others) look empty. Your
   runtime folder (`/run/user/<uid>`, with the session bus and keyring and agent sockets) is empty too, the SSH agent
   socket is hidden wherever it lives, and environment variables that look secret (names with KEY, TOKEN, SECRET,
@@ -537,6 +546,8 @@ that changed files gets an entry at the end of `.arty/history.md`, written by Ar
 date and the request, Status (the report's Outcome; otherwise DONE if a command ran after the last change and
 UNVERIFIED if not; PARTIAL for a request stopped part way), the files changed, What (the report's Changed), Why (its
 Assumptions), Verified by (each command run, with what it showed), Not verified and Left open (its Open items).
+When `.arty/history.md` or the `.arty` folder is a link (a project could ship one pointing at a file of yours),
+ArtyCode says so and writes nothing; the same goes for saving a rule to `.arty/settings.json` and for screenshots.
 
 They are also checked, not only told:
 
@@ -665,7 +676,7 @@ middle of one, so the brain can keep reusing what it already read.
 
 Addresses on this computer (`localhost`, `127.0.0.1`, `::1`) and files in the project need no OK. Home-network and
 public addresses ask like `web_fetch` (**a** covers that site for that tool until you quit, **s** saves a rule such
-as `http_check(http://192.168.1.16:5003/*)`), and a file outside the project asks too. Deny rules are matched
+as `http_check(http://your-arty-host:8000/*)`), and a file outside the project asks too. Deny rules are matched
 against the full address, so `screenshot(http://localhost:9000/*)` also stops `localhost:9000/admin`.
 
 ## Skills

@@ -57,7 +57,7 @@ def test_addresses_files_and_bare_local_addresses_are_understood(tmp_path):
     (tmp_path / "site" / "index.html").write_text("<p>hi</p>")
     assert eyes.page_address("https://example.com/a", tmp_path) == "https://example.com/a"
     assert eyes.page_address("localhost:8000/app", tmp_path) == "http://localhost:8000/app"
-    assert eyes.page_address("192.168.1.16:5003", tmp_path) == "http://192.168.1.16:5003"
+    assert eyes.page_address("192.168.0.50:8000", tmp_path) == "http://192.168.0.50:8000"
     assert eyes.page_address("site/index.html", tmp_path) == (tmp_path / "site" / "index.html").as_uri()
     for wrong in ("", "ftp://example.com/x", "file://server/share/x.html", "site/missing.html"):
         with pytest.raises(tools.ToolError):
@@ -65,7 +65,7 @@ def test_addresses_files_and_bare_local_addresses_are_understood(tmp_path):
 
 
 @pytest.mark.parametrize("host, local", [("localhost", True), ("127.0.0.5", True), ("::1", True),
-                                         ("app.localhost", True), ("192.168.1.16", False),
+                                         ("app.localhost", True), ("192.168.0.50", False),
                                          ("example.com", False), ("", False)])
 def test_this_computer_is_told_apart_from_the_network(host, local):
     assert eyes.is_this_computer(host) is local
@@ -318,3 +318,14 @@ def test_a_real_browser_shrinks_a_big_picture_before_it_is_sent(tmp_path):
         result = eyes.Eyes(tools.Workspace(tmp_path), client_for(url)).run("view_image", {"path": "huge.png"})
     assert eyes.picture_facts(sent_picture(recorder.requests[0])[1]) == (eyes.PNG, 1280, 320)
     assert result.startswith("huge.png (2000x500, sent as 1280x320 PNG)")
+
+
+def test_a_screenshot_is_never_saved_through_an_arty_folder_that_links_outside(tmp_path):
+    project, outside = tmp_path / "project", tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    (project / ".arty").symlink_to(outside, target_is_directory=True)
+    looking = eyes.Eyes(tools.Workspace(project), client_for("http://127.0.0.1:9"), no_browser)
+    with pytest.raises(tools.ToolError, match="link"):
+        looking.saved_shot("http://127.0.0.1:8000/", headless.Visit("http://127.0.0.1:8000/", 800, 600, b"png"))
+    assert list(outside.iterdir()) == []

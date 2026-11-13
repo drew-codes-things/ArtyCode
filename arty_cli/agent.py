@@ -390,7 +390,11 @@ def gate_refusal(name: str, arguments: dict, gate, extras, decision: str = "", r
 
 
 def reason_not_to_run(name: str, arguments: dict, workspace, gate, extras, decision: str, reason: str) -> str | None:
-    checks_first = name in tools.CHANGING_TOOLS and gate.mode != permissions.PLAN
+    denied = gate.rule_refusal(name, arguments)
+    if denied:
+        return denied
+    checks_first = (name in tools.CHANGING_TOOLS and gate.mode != permissions.PLAN
+                    and gate.shows_quietly(str(arguments.get("path") or "")))
     problem = tools.change_problem(workspace, name, arguments) if checks_first else ""
     return problem or gate_refusal(name, arguments, gate, extras, decision, reason)
 
@@ -606,12 +610,22 @@ def advised_result(result: str, arguments: dict, misses: dict, workspace) -> str
                                 workspace.result_chars - len(result))
 
 
-def advised_results(calls: list[dict], results: list[str], misses: dict, workspace) -> list[str]:
+def bare_miss(result: str) -> str:
+    return result[:result.index(tools.NOT_FOUND)] + tools.BARE_MISS
+
+
+def advised_miss(result: str, arguments: dict, misses: dict, workspace, gate) -> str:
+    if not gate.shows_quietly(str(arguments.get("path") or "")):
+        return bare_miss(result)
+    return advised_result(result, arguments, misses, workspace)
+
+
+def advised_results(calls: list[dict], results: list[str], misses: dict, workspace, gate) -> list[str]:
     advised = []
     for call, result in zip(calls, results):
         name, arguments, _problem = call_parts(call)
         is_miss = name in EDITING_TOOLS and result.startswith(ERROR_LEAD) and tools.NOT_FOUND in result
-        advised.append(advised_result(result, arguments, misses, workspace) if is_miss and arguments else result)
+        advised.append(advised_miss(result, arguments, misses, workspace, gate) if is_miss and arguments else result)
     return advised
 
 
@@ -767,7 +781,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         for call in calls:
             tell(screen, "show_tool_call", call)
         raw_results = results_of(calls, helpers, can_explore, done, extras)
-        results = advised_results(calls, raw_results, misses, workspace)
+        results = advised_results(calls, raw_results, misses, workspace, gate)
         for call, result in zip(calls, results):
             messages.append({"role": "tool", "tool_call_id": call.get("id") or "", "content": result})
             tell(screen, "show_tool_result", call, result)
@@ -790,6 +804,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         failing_now = failing_signatures(calls, raw_results)
         if signature == steered_from or failing_now & steered_failures:
             return stopped_as_stuck(messages, screen)
+        steered_from = None
         failures = (failures + [failing_now])[-STUCK_WINDOW:]
         failing = repeated_failure(failures)
         if failing is not None:

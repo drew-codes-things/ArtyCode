@@ -7,8 +7,10 @@ import io
 import json
 import os
 import shlex
+import signal
 import socket
 import sys
+import threading
 import time
 import webbrowser
 from dataclasses import dataclass, replace
@@ -29,6 +31,8 @@ from arty_cli import look, notify, view
 
 NOT_SET_UP = 2
 FAILED = 1
+SIGNAL_EXIT_BASE = 128
+ENDING_SIGNALS = ("SIGTERM", "SIGHUP")
 PROMPT = "› "
 CONTINUATION_PROMPT = "… "
 LINE_CONTINUES = "\\"
@@ -355,7 +359,8 @@ class Terminal:
         if self.view:
             self.view.text(text)
         else:
-            self.out.write(self.flow.feed(text) if self.out.isatty() else text)
+            shown = view.readable(text)
+            self.out.write(self.flow.feed(shown) if self.out.isatty() else shown)
             self.out.flush()
             self.mid_line = not text.endswith("\n")
         self.streamed_chars += len(text)
@@ -393,7 +398,7 @@ class Terminal:
         if self.view:
             self.view.step(line)
             return
-        first, *rest = self.err_lines(f"{STEP_MARK} {line}", STEP_HANG)
+        first, *rest = self.err_lines(f"{STEP_MARK} {view.readable(line)}", STEP_HANG)
         marked = self.paint(STEP_MARK, "accent") + first[len(STEP_MARK):]
         self.err.write("\n".join([marked, *rest]) + "\n")
         self.err.flush()
@@ -408,6 +413,7 @@ class Terminal:
         self.err.flush()
 
     def show_outcome(self, line: str, is_problem: bool) -> None:
+        line = view.readable(line)
         if self.view:
             self.stop_thinking()
             self.view.outcome(line, is_problem)
@@ -419,7 +425,7 @@ class Terminal:
 
     def show_activity(self, line: str) -> None:
         self.end_line()
-        for shown in self.err_lines(f"  · {line}", OUTCOME_HANG):
+        for shown in self.err_lines(f"  · {view.readable(line)}", OUTCOME_HANG):
             self.err.write(self.paint(shown, "dim") + "\n")
         self.err.flush()
 
@@ -447,6 +453,7 @@ class Terminal:
             return self.asked_about(question, preview, scope)
 
     def asked_about(self, question: str, preview: str = "", scope: str = "") -> str:
+        question = view.readable(question)
         if not is_interactive() and not self.remote:
             self.note(f"Refused without asking (no terminal to ask in): {question}", "error")
             return permissions.NO
@@ -1823,11 +1830,37 @@ def saved_conversation(arguments, store: sessions.Store, project: Path, terminal
     return store.start(project)
 
 
+def leave_on_signal(number, _frame) -> None:
+    for name in ENDING_SIGNALS:
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+    raise SystemExit(SIGNAL_EXIT_BASE + number)
+
+
+@contextlib.contextmanager
+def signals_end_cleanly():
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for name in ENDING_SIGNALS:
+            number = getattr(signal, name, None)
+            if number is not None:
+                previous[number] = signal.signal(number, leave_on_signal)
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if upkeep.handles(argv):
         return upkeep.run(argv)
-    arguments = parse_arguments(argv)
+    with signals_end_cleanly():
+        return main_session(parse_arguments(argv))
+
+
+def main_session(arguments) -> int:
     terminal = Terminal()
     try:
         if arguments.words in (["login"], ["setup"]):
@@ -1928,7 +1961,7 @@ class TrustKeepingRuleFile:
     def __init__(self, workspace, terminal: Terminal):
         self.workspace = workspace
         self.tell = terminal.note
-        self.rules = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, terminal.note)
+        self.rules = permissions.RuleFile(workspace.root / permissions.PROJECT_SETTINGS, terminal.note, workspace.root)
 
     def setup_still_trusted(self) -> bool:
         state = memory.trust_state(settings.config_dir(), self.workspace.root, setup_fingerprint(self.workspace))

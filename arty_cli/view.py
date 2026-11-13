@@ -9,7 +9,8 @@ SHOWN_OUTPUT_ROWS = 3
 SHOWN_DIFF_ROWS = 12
 EXPAND_HINT = "ctrl+o or /last to see all"
 EXIT_LINE = re.compile(r"^\[exit code (-?\d+)\]$")
-CONTROL_SEQUENCE = re.compile(r"\033\[[0-?]*[ -/]*[@-~]|\033[@-_]|[\x00-\x08\x0b-\x1f\x7f]")
+CONTROL_SEQUENCE = re.compile(r"(?:\033[P\]X^_]|[\x90\x98\x9d\x9e\x9f])[^\x07\x1b\x9c]*(?:\x07|\033\\|\x9c)?"
+                              r"|(?:\033\[|\x9b)[0-?]*[ -/]*[@-~]|\033[@-_]|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 TEXT_MARK = "● "
 NO_STEP_YET = "No step has run yet, so there's nothing to show."
 LONG_TURN_SECONDS = 30
@@ -81,13 +82,13 @@ class View:
         with self.lock:
             self.settle()
             self.gap()
-            self.write([self.theme.paint(text, "dim")])
+            self.write([self.theme.paint(readable(text), "dim")])
             self.joined = True
 
     def text(self, chunk: str) -> None:
         with self.lock:
             self.flush_step()
-            self.typed += chunk
+            self.typed += readable(chunk)
             while "\n" in self.typed:
                 line, self.typed = self.typed.split("\n", 1)
                 self.text_line(line)
@@ -136,10 +137,11 @@ class View:
     def step(self, label: str) -> None:
         with self.lock:
             self.settle()
-            self.pending_step = label
+            self.pending_step = readable(label)
             self.latest_label = label
 
     def outcome(self, line: str, is_problem: bool) -> None:
+        line = readable(line)
         with self.lock:
             label, self.pending_step = self.pending_step, None
             self.settle()

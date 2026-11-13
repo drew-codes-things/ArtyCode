@@ -174,7 +174,7 @@ def test_secret_looking_and_session_variables_are_left_out_and_the_rest_kept():
                                          "ARTY_API_KEY": "k", "GITHUB_TOKEN": "t", "AWS_SECRET_ACCESS_KEY": "s",
                                          "DB_PASSWORD": "p", "SSH_AUTH_SOCK": "/a", "SSH_AGENT_PID": "1",
                                          "DBUS_SESSION_BUS_ADDRESS": "unix:path=/b", "GPG_AGENT_INFO": "/c",
-                                         "OPENAIAPIKEY": "o", "XDG_RUNTIME_DIR": "/run/user/1"})
+                                         "EXAMPLEAPIKEY": "o", "XDG_RUNTIME_DIR": "/run/user/1"})
     assert kept == {"PATH": "/usr/bin", "HOME": "/home/x", "GIT_AUTHOR_NAME": "x", "XDG_RUNTIME_DIR": "/run/user/1"}
 
 
@@ -222,3 +222,40 @@ def test_the_ssh_agent_and_secret_variables_are_out_of_reach(tmp_path, monkeypat
     finally:
         agent.close()
         shutil.rmtree(folder)
+
+
+def git_and_arty_setup(root):
+    (root / ".git" / "hooks").mkdir(parents=True)
+    (root / ".git" / "info").mkdir()
+    (root / ".git" / "config").write_text("[core]\n\tbare = false\n")
+    (root / ".arty").mkdir()
+    (root / ".arty" / "settings.json").write_text("{}\n")
+
+
+def test_the_git_settings_hooks_and_the_arty_folder_are_bound_read_only_after_the_project(tmp_path):
+    git_and_arty_setup(tmp_path)
+    arguments = sandbox.linux_arguments("/usr/bin/bwrap", tmp_path, "true", network=False, hidden=[])
+    project_bind = arguments.index("--bind")
+    for place in (tmp_path / ".git" / "config", tmp_path / ".git" / "hooks", tmp_path / ".git" / "info",
+                  tmp_path / ".arty"):
+        at = arguments.index(str(place))
+        assert arguments[at - 1:at + 2] == ["--ro-bind", str(place), str(place)] and at > project_bind
+
+
+def test_a_project_without_git_or_arty_folders_gets_no_extra_binds(tmp_path):
+    arguments = sandbox.linux_arguments("/usr/bin/bwrap", tmp_path, "true", network=False, hidden=[])
+    assert arguments.count("--ro-bind") == 1
+
+
+@needs_bwrap
+def test_a_sandboxed_command_cannot_plant_a_git_hook_a_git_program_or_arty_settings(tmp_path):
+    git_and_arty_setup(tmp_path)
+    workspace = tools.Workspace(tmp_path)
+    workspace.sandbox = sandbox.Sandbox(tmp_path, sandbox.Choice(sandbox.ON, False))
+    result = tools.run_command(workspace, "echo 'touch planted' > .git/hooks/pre-commit; "
+                                          "echo '[core] fsmonitor = touch planted' >> .git/config; "
+                                          "echo '{\"x\": 1}' > .arty/settings.json; echo hi > made.txt")
+    assert not (tmp_path / ".git" / "hooks" / "pre-commit").exists()
+    assert "fsmonitor" not in (tmp_path / ".git" / "config").read_text()
+    assert (tmp_path / ".arty" / "settings.json").read_text() == "{}\n"
+    assert (tmp_path / "made.txt").read_text() == "hi\n" and "Read-only file system" in result

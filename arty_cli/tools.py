@@ -68,6 +68,8 @@ MIN_CLOSENESS = 0.5
 ECHO_CONTEXT_LINES = 3
 MAX_ECHO_LINES = 30
 NOT_FOUND = "old_text was not found"
+BARE_MISS = f"{NOT_FOUND}; read the file again and copy the text exactly"
+LINKED_PLACE = "{place} is a link (to {target}), so ArtyCode doesn't write through it"
 ALREADY_MADE_LEAD = "new_text is already in the file"
 ALREADY_MADE = (f"{NOT_FOUND}, but {ALREADY_MADE_LEAD} at lines {{first}}-{{last}}, so this change is already made. "
                 "Don't send it again: run the tests or make the next change. Those lines now:\n{numbered}\n")
@@ -77,7 +79,9 @@ NO_CHANGE = (NOTHING_CHANGED + ". If that code is already what you want, the cha
 SAME_TEXT_TOOLS = ("edit_file", "multi_edit")
 DROPPED_MARK = "characters dropped to save room"
 HIDDEN_MARK = "[Hidden to save room"
-PLACEHOLDERS = re.compile(rf"\(\d+ {DROPPED_MARK}\)|^\.\.\. \d+ characters cut \.\.\.$|{re.escape(HIDDEN_MARK)}", re.M)
+PLACEHOLDERS = re.compile(rf"\(\d+ {DROPPED_MARK}\)|^\.\.\. \d+ characters cut \.\.\.$|{re.escape(HIDDEN_MARK)}"
+                          r"|^\.\.\. \d+ more lines; read on with offset=\d+$"
+                          r"|^\[[^\n\]]+: lines \d+-\d+ of \d+; \d+ above, \d+ below\]$|^\.\.\. \(diff cut\)$", re.M)
 PLACEHOLDER_REFUSAL = ("the new text has ArtyCode's placeholder \"{placeholder}\" in it. That marks text hidden from "
                        "an earlier step, not code, so nothing was changed: write the real lines out in full")
 KEY_ALIASES = {"file_path": "path", "filepath": "path", "file": "path", "filename": "path", "file_name": "path",
@@ -235,6 +239,17 @@ def created_beside(path: Path) -> Path:
     temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.arty-tmp"
     os.close(os.open(temporary, TEMPORARY_FILE_FLAGS, NEW_FILE_MODE))
     return temporary
+
+
+def is_unlinked_place(root: Path, place: Path) -> bool:
+    root = Path(root)
+    return Path(place).resolve() == root.resolve() / Path(place).relative_to(root)
+
+
+def refuse_linked_place(root: Path, place: Path) -> None:
+    if not is_unlinked_place(root, place):
+        raise ToolError(LINKED_PLACE.format(place=Path(place).relative_to(root).as_posix(),
+                                            target=Path(place).resolve()))
 
 
 def write_text(path: Path, text: str) -> None:
@@ -545,7 +560,7 @@ def not_found_message(before: str, old_text: str, new_text: str = "") -> str:
     pattern = pattern_lines(old_text)
     start = closest_start(lines, pattern)
     if start is None:
-        return f"{NOT_FOUND}; read the file again and copy the text exactly"
+        return BARE_MISS
     first = max(start - CLOSEST_CONTEXT_LINES, 0)
     last = min(start + len(pattern) + CLOSEST_CONTEXT_LINES, len(lines))
     return (f"{NOT_FOUND}. The closest lines in the file are these; copy old_text from them exactly, without the "

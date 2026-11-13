@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from arty_cli import eyes, rules, tools
+from arty_cli import eyes, finish, rules, tools
 
 YES, NO, ALWAYS, SAVE = "y", "n", "a", "s"
 AGREEING = (YES, ALWAYS, SAVE)
@@ -48,6 +48,7 @@ GIT_CONFIG_SECONDS = 10
 SHELL_CONTROL = re.compile(r"[;&|<>`$\n]")
 GROUPING = set("(){}")
 QUOTES = "'\""
+COMMENT_MARK = "#"
 READING_TOOLS = ("read_file", "list_files", "search", eyes.VIEW_IMAGE)
 FREE_TOOLS = ("command_output", "stop_command", "todo_write")
 EDITS = "edits"
@@ -92,9 +93,18 @@ MODULE_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 MODULE_FLAG = "-m"
 RUNNER = re.compile(r"^(python[0-9.]*|pypy[0-9.]*|py|node|nodejs|deno|bun|bunx|npx|pnpx|uvx|ruby|perl|php|lua|java|"
                     r"sh|bash|zsh|dash|ksh|fish|pwsh|powershell|cmd)$")
+LAUNCHER_PROGRAMS = {"systemd-run", "systemd-inhibit", "stdbuf", "setsid", "flock", "strace", "ltrace", "chroot",
+                     "unshare", "nsenter", "script", "gdb", "lldb", "valgrind", "xvfb-run", "busybox", "toybox",
+                     "parallel", "chrt", "taskset", "runuser", "pkexec", "fakeroot", "unbuffer", "dbus-run-session",
+                     "ssh-agent", "firejail", "bwrap", "proot", "torsocks", "proxychains", "proxychains4", "faketime",
+                     "sg", "newgrp", "start-stop-daemon", "daemonize", "catchsegv", "nocache"}
 WRAPPER_PROGRAMS = {"sudo", "su", "doas", "env", "xargs", "eval", "exec", "source", ".", "nohup", "time", "timeout",
-                    "nice", "ionice", "watch", "command", "builtin"}
-EXACT_ONLY_PROGRAMS = WRAPPER_PROGRAMS | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
+                    "nice", "ionice", "watch", "command", "builtin"} | LAUNCHER_PROGRAMS
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "case", "esac", "in",
+                  "function", "coproc", "select", "!", "[[", "]]", "{", "}"}
+LAUNCHING_SUBCOMMANDS = {"run", "x", "dlx"}
+NEVER_PREFIXED = WRAPPER_PROGRAMS | SHELL_KEYWORDS
+EXACT_ONLY_PROGRAMS = NEVER_PREFIXED | {"rm", "rmdir", "mv", "cp", "ln", "touch", "mkdir", "chmod", "chown", "chgrp",
                                           "dd", "truncate", "shred", "tee", "install", "unlink", "rsync", "scp", "sftp",
                                           "ssh", "curl", "wget", "kill", "pkill", "killall", "find", "sed", "awk",
                                           "gawk", "trap", "alias", "export", "unset", "set", "crontab"}
@@ -105,7 +115,7 @@ SUBCOMMAND_PROGRAMS = {"git", "npm", "yarn", "pnpm", "cargo", "go", "docker", "p
 PIPES = ("|", "|&")
 SEPARATORS = ("||", "&&", "|&", "|", "&", ";", "\n")
 ENDING_SEPARATORS = (";", "&", "\n")
-REDIRECTION = re.compile(r"&?>>?(?:&(?:\d+|-)|[ \t]*([^\s;&|<>()]+))")
+REDIRECTION = re.compile(r"&?>>?(?:&(?:\d+|-)(?=$|[\s;&|])|[ \t]*([^\s;&|<>()]+))")
 DESCRIPTOR_AT_END = re.compile(r"(^|\s)\d+$")
 DISCARDED_OUTPUT = "/dev/null"
 SUBSTITUTIONS = ("<(", ">(")
@@ -131,6 +141,14 @@ def discards_output(command: str, index: int) -> int:
     return found.end()
 
 
+def backslash_escapes() -> bool:
+    return sys.platform != "win32"
+
+
+def starts_a_word(text: str) -> bool:
+    return not text or text[-1].isspace()
+
+
 def separator_at(command: str, index: int) -> str:
     return next((separator for separator in SEPARATORS if command.startswith(separator, index)), "")
 
@@ -143,7 +161,7 @@ def command_pieces(command: str) -> list[tuple[str, str]]:
             quote = "" if character == "'" else quote
             text, index = text + character, index + 1
             continue
-        if character == "\\":
+        if character == "\\" and backslash_escapes():
             text, index = text + command[index:index + 2], index + 2
             continue
         if character in EXPANSIONS:
@@ -152,6 +170,8 @@ def command_pieces(command: str) -> list[tuple[str, str]]:
             quote = "" if character == quote else quote or character
             text, index = text + character, index + 1
             continue
+        if character == COMMENT_MARK and starts_a_word(text):
+            return []
         if character in GROUPING or character == "<" or command.startswith(SUBSTITUTIONS, index):
             return []
         if character == ">" or command.startswith("&>", index):
@@ -205,7 +225,19 @@ def prefix_words(words: list[str]) -> list[str]:
     following = subcommand_words(words[1 + len(target):])
     if following is None or (program in SUBCOMMAND_PROGRAMS and not following):
         return []
+    if following and following[-1] in LAUNCHING_SUBCOMMANDS:
+        return []
     return [words[0], *target, *following]
+
+
+def launches_anything(prefix: str) -> bool:
+    words = prefix.split()
+    return bool(words) and program_name(words[0]) in NEVER_PREFIXED
+
+
+def is_honoured_allow(rule: str) -> bool:
+    parts = rule_parts(rule)
+    return parts is None or not launches_anything(command_prefix_of(*parts))
 
 
 def starts_with_words(words: list[str], prefix: str) -> bool:
@@ -438,13 +470,14 @@ class Rules:
         return any(rule_matches(rule, name, targets) for rule in self.deny)
 
     def allows(self, name: str, target: str) -> bool:
-        if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)):
+        if name == "run_command" and (SHELL_CONTROL.search(target) or has_bare_grouping(target)
+                                      or not command_pieces(target)):
             return False
-        return any(rule_matches(rule, name, [target]) for rule in self.allow)
+        return any(rule_matches(rule, name, [target]) for rule in self.allow if is_honoured_allow(rule))
 
     def command_prefixes(self) -> list[str]:
         found = [command_prefix_of(*parts) for parts in map(rule_parts, self.allow) if parts]
-        return [prefix for prefix in found if prefix]
+        return [prefix for prefix in found if prefix and not launches_anything(prefix)]
 
 
 def rules_in(path: Path) -> tuple[dict, list[str]]:
@@ -497,9 +530,12 @@ def saved_settings(path: Path) -> dict:
 class RuleFile:
     path: Path
     tell: Callable[[str], None]
+    root: Path | None = None
 
     def add_allow(self, rule: str) -> bool:
         try:
+            if self.root is not None:
+                tools.refuse_linked_place(self.root, self.path)
             table = saved_settings(self.path)
             rules = table.setdefault("permissions", {})
             allowed = rules.setdefault("allow", [])
@@ -509,7 +545,7 @@ class RuleFile:
                 allowed.append(rule)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(table, indent=2) + "\n", encoding="utf-8")
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, tools.ToolError) as error:
             self.tell(f"Couldn't save the rule {rule} to {self.path} ({error}); allowed for this session only.")
             return False
         self.tell(f"Saved the rule {rule} to {self.path}.")
@@ -577,6 +613,20 @@ class Gate:
         except tools.ToolError:
             return False
 
+    def has_read(self, path: str) -> bool:
+        try:
+            return self.workspace.resolve(path) in self.workspace.seen
+        except (tools.ToolError, OSError, ValueError):
+            return False
+
+    def shows_quietly(self, path: str) -> bool:
+        arguments = {"path": path}
+        if self.rule_refusal("read_file", arguments):
+            return False
+        if self.mode == ALLOW_ALL or not self.outside(arguments) or self.rule_allows("read_file", arguments):
+            return True
+        return self.has_read(path)
+
     def protects(self, arguments: dict) -> bool:
         path = str(arguments.get("path") or "")
         if not path:
@@ -634,6 +684,9 @@ class Gate:
     def saved_as_rules(self, rules_to_save: list[str]) -> bool:
         return all([self.saved_as_rule(rule) for rule in rules_to_save or [""]])
 
+    def confirm_once(self, question: str) -> str | None:
+        return None if self.ask(question, "") in AGREEING else self.refused()
+
     def confirm(self, question: str, preview: str = "", remember: str = "", rule: str = "") -> str | None:
         return self.confirm_scoped(question, preview, [remember] if remember else [], [rule])
 
@@ -647,7 +700,8 @@ class Gate:
         return None if answer in AGREEING else self.refused()
 
     def session_prefixes(self) -> list[str]:
-        return [mark.removeprefix(SESSION_PREFIX_MARK) for mark in self.always if mark.startswith(SESSION_PREFIX_MARK)]
+        found = [mark.removeprefix(SESSION_PREFIX_MARK) for mark in self.always if mark.startswith(SESSION_PREFIX_MARK)]
+        return [prefix for prefix in found if not launches_anything(prefix)]
 
     def is_quiet_filter(self, words: list[str]) -> bool:
         program, arguments = program_name(words[0]), words[1:]
@@ -705,6 +759,8 @@ class Gate:
             return None
         if name in tools.CHANGING_TOOLS and self.mode != PLAN and self.protects(arguments):
             return self.confirm_protected_change(name, arguments)
+        if name == finish.UNDO_TOOL:
+            return PLAN_REFUSAL if self.mode == PLAN else self.confirm_once(finish.undo_question(self.workspace))
         if self.rule_allows(name, arguments) and (self.mode != PLAN or not self.changes_things(name, arguments)):
             return None
         if name in READING_TOOLS:

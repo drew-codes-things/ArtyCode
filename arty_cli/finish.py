@@ -18,6 +18,7 @@ FOLLOW_UP = ("Before you finish: the last test run still fails ({summary}), from
              "clearly why, naming the tests that still fail.")
 SHOWN_NOTE = "Finish check: the last test run still fails ({summary}), so Arty was asked to keep going"
 PASSED_COUNT = re.compile(r"\b(\d+) passed\b", re.I)
+TESTS_RAN = re.compile(r"\b\d+ (?:passed|failed)\b|\bRan \d+ tests?\b|^--- (?:PASS|FAIL):|^ok\s", re.I | re.M)
 FAILED_NAMES = (re.compile(r"^(?:FAILED|ERROR) ([^\s(]\S*)"), re.compile(r"^(?:FAIL|ERROR): (\S+)"),
                 re.compile(r"^\s*[\u2715\u00d7] (.+?)(?: \(\d+ m?s\))?$"))
 MAX_NAMED_TESTS = 8
@@ -32,6 +33,9 @@ NOTHING_TO_GO_BACK_TO = "Error: there is no better test run in this request to g
 TOO_FAR_BACK = "Error: too many changes were made since the better test run for ArtyCode to undo them all"
 UNDONE = "Undid {count} change{plural} since the better test run ({before}). Run the tests again to check."
 UNDO_STOPPED = "Undid {count} of the changes since the better test run, then stopped: {reason}"
+UNDO_QUESTION = ("Use undo_edits: put back {count} change{plural} ({files}) to how the files were at the test run "
+                 "that gave {before}?")
+UNDO_QUESTION_UNKNOWN = "Use undo_edits? (there is no better test run to go back to, so nothing would change)"
 
 
 @dataclass(frozen=True)
@@ -44,14 +48,15 @@ class TestRun:
     failures: int | None
     passed: int | None = None
     failed_names: tuple = ()
+    ran_tests: bool = False
 
     def counts(self) -> str:
         if self.failures is None and self.passed is None:
             return self.summary or f"exit code {self.exit_code}"
         return f"{self.failures or 0} failed, {self.passed or 0} passed"
 
-    def standing(self) -> tuple[int, int]:
-        return (self.passed if self.passed is not None else -1), -(self.failures or 0)
+    def standing(self) -> tuple[bool, bool, int, int]:
+        return not self.failed, self.ran_tests, (self.passed if self.passed is not None else -1), -(self.failures or 0)
 
 
 @dataclass(frozen=True)
@@ -123,7 +128,7 @@ def test_run_of(command: str, result: str) -> TestRun | None:
     if failed and not summary:
         summary = lines[-1].strip() if lines else f"exit code {exit_code}"
     return TestRun(command, exit_code, failed, summary, output_tail(lines), failures, passed_count(lines),
-                   failed_names(lines))
+                   failed_names(lines), bool(TESTS_RAN.search("\n".join(lines))))
 
 
 def has_fewer_failures(run: TestRun, before: int | None) -> bool:
@@ -156,7 +161,7 @@ class FinishCheck:
 
     def compared(self, run: TestRun, last_change: object) -> str:
         best = self.best.get(command_key(run.command))
-        if best is None or run.standing() >= best.run.standing():
+        if best is None or not run.failed or run.standing() >= best.run.standing():
             self.best[command_key(run.command)], self.went_worse_from = GoodRun(run, last_change), None
             return ""
         if last_change is best.last_change:
@@ -230,6 +235,23 @@ def take_notice(workspace) -> str:
 def offers_undo(workspace) -> bool:
     found = check_of(workspace)
     return found is not None and found.undo_target() is not None
+
+
+def changes_since(workspace, target: GoodRun) -> list:
+    kept = list(workspace.checkpoints)
+    start = next((index + 1 for index, change in enumerate(kept) if change is target.last_change), 0)
+    return kept[start:]
+
+
+def undo_question(workspace) -> str:
+    found = check_of(workspace)
+    target = found.undo_target() if found is not None else None
+    if target is None:
+        return UNDO_QUESTION_UNKNOWN
+    changes = changes_since(workspace, target)
+    files = ", ".join(dict.fromkeys(workspace.shown(change.path) for change in changes)) or "no files"
+    return UNDO_QUESTION.format(count=len(changes), plural="" if len(changes) == 1 else "s", files=files,
+                                before=target.run.counts())
 
 
 def undo_edits(workspace) -> str:

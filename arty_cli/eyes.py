@@ -409,6 +409,7 @@ class Eyes:
 
     def saved_shot(self, address: str, visit: headless.Visit) -> str:
         folder = self.workspace.root / SCREENSHOT_FOLDER
+        tools.refuse_linked_place(self.workspace.root, folder)
         folder.mkdir(parents=True, exist_ok=True)
         ignore = folder / ".gitignore"
         if not ignore.exists():
