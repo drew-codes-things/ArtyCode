@@ -698,9 +698,13 @@ def notebook_json(notebook: dict) -> str:
     return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
 
 
+def placeholders_in(text: str) -> list[str]:
+    return PLACEHOLDERS.findall(text.replace("\r\n", "\n"))
+
+
 def refuse_placeholders(before: str, after: str) -> None:
-    added = [found.group(0) for found in PLACEHOLDERS.finditer(after)]
-    if len(added) > len(PLACEHOLDERS.findall(before)):
+    added = placeholders_in(after)
+    if len(added) > len(placeholders_in(before)):
         raise ToolError(PLACEHOLDER_REFUSAL.format(placeholder=added[-1]))
 
 
