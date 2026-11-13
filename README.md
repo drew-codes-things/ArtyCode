@@ -152,6 +152,7 @@ arty --remote                                # chat, shared with your phone and 
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |
 | `/resume` | Pick an earlier conversation and carry on with it |
+| `/mcp add` | Pick an online service (Notion, Linear, Sentry, Stripe and more) and sign in to it in your browser; its tools work straight away. Also `arty mcp add <service>` |
 | **Esc** | Stop the running request, keeping every step that finished |
 | **Shift+Tab** | Move on to the next mode: default, auto-edit, plan, then default again |
 | **Ctrl-O** or `/last` | Everything the last step with output gave back |
@@ -191,7 +192,7 @@ The details live in [`docs/`](docs):
 | [Checks after edits, project map and sandbox](docs/checks-and-sandbox.md) | Linting after edits, the project map, `--sandbox` |
 | [Built-in working rules](docs/working-rules.md) | The engineering rules Arty works by and the `.arty/history.md` record |
 | [Remote control](docs/remote.md) | Following and steering a chat from the Arty apps and starfire.ai |
-| [Skills](docs/skills.md), [Helpers](docs/helpers.md), [Hooks](docs/hooks.md), [MCP servers](docs/mcp-servers.md) | Your own instructions, helpers, commands on events and extra tools |
+| [Skills](docs/skills.md), [Helpers](docs/helpers.md), [Hooks](docs/hooks.md), [MCP servers](docs/mcp-servers.md) | Your own instructions, helpers, commands on events and extra tools, including online services you sign in to in the browser |
 | [Configuration](docs/configuration.md) | Environment variables, limits and what error messages tell you |
 | [Checking the setup and updating](docs/checking-and-updating.md) | `arty doctor` and `arty update` in full |
 | [Arty, ArtyCode and starfire.ai](docs/arty-and-starfire.md) | How the three projects work together and how to link them |
@@ -213,6 +214,8 @@ The details live in [`docs/`](docs):
 - `screenshot` talks to the browser through its debugging port on 127.0.0.1 for the few seconds a shot takes, and a
   page opened from a file can show other files on this computer the way any local page can.
 - A request sent from afar while you are typing at the prompt here clears the line you were typing.
+- Signing in to an online MCP service needs it to let apps register themselves (OAuth dynamic client registration).
+  GitHub's and Asana's hosted MCP servers don't, so they need a token in `headers` instead.
 - Not yet: editor (IDE) integration.
 
 ## Tests
