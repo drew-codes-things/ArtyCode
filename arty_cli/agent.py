@@ -664,6 +664,12 @@ def replied(brain, messages: list[dict], offered: list[dict], screen, squeeze) -
         raise still_too_long(error, brain) from None
 
 
+def stopped_as_stuck(messages: list[dict], screen) -> str:
+    messages.append({"role": "assistant", "content": STUCK_STOPPED})
+    tell(screen, "note", STUCK_STOPPED, "error")
+    return STUCK_STOPPED
+
+
 def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None, can_explore=True, done=None,
              squeeze=None, extras=None, stop_hooks=True, stopped=None, steer=None, on_round=None) -> str:
     extras = extras or extra_tools.NONE
@@ -739,8 +745,7 @@ def run_turn(messages: list[dict], brain, workspace, gate, screen, offered=None,
         failures = (failures + [failing_signatures(calls, raw_results)])[-STUCK_WINDOW:]
         failing = repeated_failure(failures)
         if signature == steered_from or (failing is not None and failing in steered_failures):
-            messages.append({"role": "assistant", "content": STUCK_STOPPED})
-            return STUCK_STOPPED
+            return stopped_as_stuck(messages, screen)
         if failing is not None:
             messages.append({"role": "user", "content": STUCK_FAILING_NOTE})
             steered_failures.add(failing)
