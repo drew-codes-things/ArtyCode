@@ -4,7 +4,7 @@ import json
 import pytest
 
 from arty_cli import agent, checks, cli, context, conversation, prune, rules, sessions, tools
-from tests.portable import python_call
+from tests.portable import plain_python_call
 from tests.scripted import (DREWS_WINDOW, SUMMARY_MARK, ScriptedBrain, copy_of_arty_cli_source, project,
                             session_for)
 
@@ -338,7 +338,7 @@ def test_real_token_counts_from_the_brain_calibrate_the_estimate_and_warn_near_t
     assert "near the end of the model's context window" in session.terminal.err.getvalue()
 
 
-RUN_CALC = python_call("calc.py")
+RUN_CALC = plain_python_call("calc.py")
 REPORT = ("Outcome: DONE\nChanged: calc.py adds two numbers.\nVerification: python3 calc.py printed 5.\n"
           "Assumptions: plain functions, as the project has no classes.\nOpen items: none")
 
