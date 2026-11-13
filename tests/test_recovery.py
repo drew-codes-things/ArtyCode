@@ -1,10 +1,11 @@
 import json
+import os
 import sys
 
 import pytest
 
 from arty_cli import agent, cli, conversation, finish, permissions, prune, tools
-from tests.portable import plain_python_call
+from tests.portable import plain_python_call, short_python_call
 from tests.scripted import ScriptedBrain, project, session_for
 
 assert project
@@ -224,11 +225,13 @@ def test_after_older_results_are_hidden_the_model_still_sees_the_file_it_is_edit
     assert not blind, f"{len(blind)} of {len(pruned)} prompts after a prune had no current view of calc.py"
 
 
-def test_the_footer_shows_real_room_right_after_older_results_are_dropped(project):
+def test_the_footer_shows_real_room_right_after_older_results_are_dropped(project, monkeypatch):
     calc = project / "calc.py"
     calc.write_text(calc_of())
     (project / "fake_pytest.py").write_text(PYTEST_LIKE)
-    tests = ("run_command", {"command": plain_python_call("fake_pytest.py")})
+    launchers = project.parent / "launchers"
+    monkeypatch.setenv("PATH", str(launchers) + os.pathsep + os.environ.get("PATH", ""))
+    tests = ("run_command", {"command": short_python_call(launchers, "fake_pytest.py")})
     steps = [[("read_file", {"path": "calc.py"})], [tests]]
     for number in range(1, 15):
         steps += [[edit_of(number)], [edit_of(number + 20)], [tests]]
