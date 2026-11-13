@@ -68,6 +68,7 @@ MIN_CLOSENESS = 0.5
 ECHO_CONTEXT_LINES = 3
 MAX_ECHO_LINES = 30
 NOT_FOUND = "old_text was not found"
+BARE_MISS = f"{NOT_FOUND}; read the file again and copy the text exactly"
 ALREADY_MADE_LEAD = "new_text is already in the file"
 ALREADY_MADE = (f"{NOT_FOUND}, but {ALREADY_MADE_LEAD} at lines {{first}}-{{last}}, so this change is already made. "
                 "Don't send it again: run the tests or make the next change. Those lines now:\n{numbered}\n")
@@ -545,7 +546,7 @@ def not_found_message(before: str, old_text: str, new_text: str = "") -> str:
     pattern = pattern_lines(old_text)
     start = closest_start(lines, pattern)
     if start is None:
-        return f"{NOT_FOUND}; read the file again and copy the text exactly"
+        return BARE_MISS
     first = max(start - CLOSEST_CONTEXT_LINES, 0)
     last = min(start + len(pattern) + CLOSEST_CONTEXT_LINES, len(lines))
     return (f"{NOT_FOUND}. The closest lines in the file are these; copy old_text from them exactly, without the "

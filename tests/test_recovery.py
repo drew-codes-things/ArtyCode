@@ -1,7 +1,9 @@
 import json
 import sys
 
-from arty_cli import agent, cli, finish, prune, tools
+import pytest
+
+from arty_cli import agent, cli, finish, permissions, prune, tools
 from tests.scripted import ScriptedBrain, project, session_for
 
 assert project
@@ -354,3 +356,77 @@ def test_an_edit_whose_new_text_equals_old_text_says_nothing_changed(project):
     many = tools.run("multi_edit", {"path": "calc.py", "edits": [{"old_text": same, "new_text": same}]}, workspace)
     assert many.startswith("Error") and tools.NOTHING_CHANGED in many
     assert not workspace.checkpoints
+
+
+SECRET_LINE = "token = FAKE-TOKEN-0123456789-NOT-REAL"
+
+
+class QuietScreen:
+    def show_text(self, text):
+        pass
+
+    def show_activity(self, line):
+        pass
+
+
+class Asker:
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.questions = []
+
+    def __call__(self, question, preview="", scope=""):
+        self.questions.append(question)
+        return self.answers.pop(0) if self.answers else permissions.NO
+
+
+def results_of_two_misses(gate, path: str) -> list[str]:
+    brain = ScriptedBrain([[("edit_file", {"path": path, "old_text": "nope one", "new_text": "x"})],
+                           [("edit_file", {"path": path, "old_text": "nope two", "new_text": "x"})], "Done."])
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "go"}]
+    agent.run_turn(messages, brain, gate.workspace, gate, QuietScreen(), stop_hooks=False)
+    return [message["content"] for message in messages if message.get("role") == "tool"]
+
+
+@pytest.fixture
+def outside_secret(project):
+    secret = project.parent / "outside" / "secret.conf"
+    secret.parent.mkdir()
+    secret.write_text(f"[account]\nuser = demo\n{SECRET_LINE}\n")
+    return secret
+
+
+@pytest.mark.parametrize("mode", [permissions.DEFAULT, permissions.AUTO_EDIT])
+@pytest.mark.parametrize("answer", [permissions.NO, permissions.YES])
+def test_missed_edits_never_show_a_file_outside_the_project_that_was_not_read(project, outside_secret, mode, answer):
+    ask = Asker(answer, answer)
+    gate = permissions.Gate(tools.Workspace(project), ask, mode)
+    results = results_of_two_misses(gate, str(outside_secret))
+    assert ask.questions and all("outside the project" in question for question in ask.questions)
+    assert not any("FAKE-TOKEN" in result or "user = demo" in result for result in results), results
+
+
+def test_missed_edits_show_a_file_outside_the_project_once_reading_it_was_allowed(project, outside_secret):
+    ask = Asker(permissions.YES, permissions.YES, permissions.YES)
+    gate = permissions.Gate(tools.Workspace(project), ask, permissions.DEFAULT)
+    assert gate.check("read_file", {"path": str(outside_secret)}) is None
+    gate.workspace.note_seen(outside_secret, outside_secret.read_text())
+    assert SECRET_LINE in results_of_two_misses(gate, str(outside_secret))[-1]
+
+
+@pytest.mark.parametrize("deny", [["read_file(*.env)"], ["read_file(*.env)", "edit_file(*.env)"]])
+@pytest.mark.parametrize("mode", [permissions.DEFAULT, permissions.AUTO_EDIT, permissions.ALLOW_ALL])
+def test_missed_edits_never_show_a_file_a_deny_rule_keeps_from_being_read(project, deny, mode):
+    (project / ".env").write_text("DB_PASSWORD=FAKE-not-real-123\n")
+    gate = permissions.Gate(tools.Workspace(project), Asker(permissions.YES, permissions.YES), mode)
+    gate.rules = permissions.Rules(allow=[], deny=deny)
+    results = results_of_two_misses(gate, ".env")
+    assert not any("FAKE-not-real" in result for result in results), results
+
+
+def test_missed_edits_inside_the_project_still_ask_nothing_and_show_the_file_on_the_second_miss(project):
+    (project / "calc.py").write_text(FIXTURE_CALC)
+    ask = Asker()
+    gate = permissions.Gate(tools.Workspace(project), ask, permissions.DEFAULT)
+    results = results_of_two_misses(gate, "calc.py")
+    assert ask.questions == []
+    assert agent.WHOLE_FILE_LEAD.format(path="calc.py", lines=len(FIXTURE_CALC.splitlines())) in results[-1]

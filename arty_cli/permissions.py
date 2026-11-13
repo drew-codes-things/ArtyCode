@@ -585,6 +585,20 @@ class Gate:
         except tools.ToolError:
             return False
 
+    def has_read(self, path: str) -> bool:
+        try:
+            return self.workspace.resolve(path) in self.workspace.seen
+        except (tools.ToolError, OSError, ValueError):
+            return False
+
+    def shows_quietly(self, path: str) -> bool:
+        arguments = {"path": path}
+        if self.rule_refusal("read_file", arguments):
+            return False
+        if self.mode == ALLOW_ALL or not self.outside(arguments) or self.rule_allows("read_file", arguments):
+            return True
+        return self.has_read(path)
+
     def protects(self, arguments: dict) -> bool:
         path = str(arguments.get("path") or "")
         if not path:
