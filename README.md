@@ -239,6 +239,18 @@ links out of the project (`rg --pre`, `find -fprint`, `find -L`, `grep -R`, `ls 
 `file -C`, `diff -r`, `git log --output`, `git branch -D`), and look-only git asks when the repository's own git
 settings name a program git would run (an fsmonitor, an external diff, a textconv or filter driver, a gpg program).
 
+The GitHub CLI's look-only commands run without a question too: `gh pr view`, `gh pr list`, `gh pr diff`,
+`gh pr checks`, `gh pr status`, `gh issue view`, `gh issue list`, `gh issue status`, `gh run view` (with `--log` or
+`--log-failed` as well), `gh run list`, `gh release view`, `gh release list`, `gh repo view`, `gh workflow view`,
+`gh workflow list` and `gh status`. The program has to be written `gh` (not `GH`, `./gh` or a path), followed straight
+by those words; any other gh command asks, and so does one gh doesn't know itself, since it could be an alias or an
+extension. They ask when they open a browser (`--web`, `-w`), write files (`--output`, `-O`, `--dir`, `-D`), keep
+watching (`--watch`), name a host other than github.com (`-R host/owner/repo`, a URL or `git@host:` address), or
+have a word containing `env`, `import`, `include` or `input` (the jq words for environment variables, modules and
+inputs, which `--jq` passes on). `-R owner/repo` (with a space) and github.com URLs are fine; a word with two or more
+`/` that doesn't start with `github.com` asks, so a jq `//` does too. Like git, they ask when the repository's git
+settings name a program, and deny rules still stop them.
+
 ### Permission rules
 
 Saved rules skip or forbid questions. Put them in `settings.json` in the config folder (every project) or in

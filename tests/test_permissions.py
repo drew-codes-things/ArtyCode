@@ -1364,3 +1364,138 @@ def test_wildcards_that_only_match_ordinary_names_still_need_no_question(option_
     ask = Asker()
     assert permissions.Gate(option_named_files, ask).allows("run_command", {"command": command})
     assert ask.questions == []
+
+
+LOOK_ONLY_GH = [
+    "gh pr view 12", "gh pr view", "gh pr view 12 --comments", "gh pr list --state merged -L 5", "gh pr diff 12",
+    "gh pr diff 12 --name-only --color never", "gh pr checks 12", "gh pr checks 12 --required", "gh pr status",
+    "gh issue view 3 -c", "gh issue list -l bug --state all", "gh issue status", "gh run view 99", "gh run view 99 -v",
+    "gh run view 99 --log-failed", "gh run view 99 --log -j 7", "gh run list -L 5 -b main", "gh release view v1.2.0",
+    "gh release list --exclude-drafts", "gh repo view", "gh repo view octo/demo", "gh repo view github.com/octo/demo",
+    "gh workflow view ci.yml --yaml", "gh workflow list --all", "gh status", "gh status -o octo",
+    "gh pr list -R octo/demo", "gh pr list --repo octo/demo", "gh pr list --repo=octo/demo",
+    "gh pr list -R github.com/octo/demo", "gh pr list -R git@github.com:octo/demo",
+    "gh pr view https://github.com/octo/demo/pull/1", "gh issue view https://github.com/octo/demo/issues/2",
+    "gh pr list --json number,title --jq '.[].title'", "gh pr view 1 -q .title", "gh pr view 1 -q.title",
+    "gh pr list --template '{{range .}}{{.title}}{{end}}'",
+    "gh pr list --search 'is:open author:@me'", "gh pr list | grep fix", "gh pr checks 3 && gh run list",
+]
+
+
+@needs_git
+@pytest.mark.parametrize("command", LOOK_ONLY_GH)
+def test_look_only_gh_runs_without_a_question_also_in_plan_mode(workspace, command):
+    assert permissions.is_read_only_command(command)
+    ask = Asker()
+    assert permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert permissions.Gate(workspace, ask, mode=permissions.PLAN).check("run_command", {"command": command}) is None
+    assert ask.questions == []
+
+
+ASKING_GH = [
+    "gh pr view 12 --web", "gh pr view -w", "gh pr view 12 -cw", "gh repo view --web=false", "gh pr list -w",
+    "gh issue list --web", "gh run list -w ci.yml", "gh release view v1 -w", "gh workflow view ci.yml -w",
+    "gh pr checks 1 --web", "gh pr diff 1 -w",
+    "gh pr create --fill", "gh pr merge 12", "gh pr checkout 12", "gh pr edit 1 --title x", "gh pr close 1",
+    "gh pr comment 1 -b x", "gh pr review 1 --approve", "gh pr ready 1", "gh issue create -t x", "gh issue close 3",
+    "gh run download 99", "gh run watch 99", "gh run rerun 99", "gh run cancel 99", "gh run delete 99",
+    "gh release download v1", "gh release create v1", "gh release delete v1", "gh repo clone octo/demo",
+    "gh repo fork", "gh repo delete octo/demo", "gh repo edit", "gh workflow run ci.yml", "gh workflow enable ci.yml",
+    "gh api repos/octo/demo", "gh api -X DELETE repos/octo/demo", "gh auth status", "gh auth token",
+    "gh alias set co 'pr checkout'", "gh extension install octo/gh-x", "gh browse", "gh secret list",
+    "gh config set pager sh", "gh co 12", "gh my-extension", "gh", "gh pr", "gh --version", "gh pr -R octo/demo view 1",
+    "gh release list -O asc", "gh pr view 1 --output out.txt", "gh run view 1 --dir out", "gh pr view 1 -D out",
+    "gh pr checks 1 --watch", "gh pr checks 1 --watch --fail-fast",
+    "GH pr view 1", "Gh pr list", "gh PR view 1", "gh pr VIEW 1", "gh pr View", "gh pr vie 1", "./gh pr view 1",
+    "/usr/bin/gh pr view 1", "bin/gh pr list", "gh.exe pr view 1",
+    "gh pr list -R evil.example/o/r", "gh pr list --repo evil.example/o/r", "gh pr list --repo=evil.example/o/r",
+    "gh pr list -Revil.example/o/r", "gh pr list -R=evil.example/o/r", "gh pr list -R EVIL.example/o/r",
+    "gh pr list -R evil.example:443/o/r", "gh pr list -R intranet/o/r", "gh pr list -R https://evil.example/o/r",
+    "gh pr list -R git@evil.example:o/r", "gh repo view evil.example/o/r", "gh repo view git@evil.example:o/r",
+    "gh repo view ssh://git@evil.example/o/r", "gh issue view https://evil.example/o/r/issues/1",
+    "gh pr view https://github.com.evil.example/o/r/pull/1", "gh pr view https://github.com@evil.example/o/r/pull/1",
+    "gh pr view HTTPS://evil.example/o/r/pull/1", "gh repo view -q -q evil.example/o/r",
+    "gh pr list --search 'see https://evil.example/x'", "gh pr view 'https://[::1/x'",
+    "gh repo view -b -q evil.example/o/r",
+    "gh pr list --json title --jq '.[] | .title // \"none\"'", "gh pr view 1 -q '.a//.b'",
+    "gh pr list --json title --jq env", "gh pr view 1 -q '$ENV.GH_TOKEN'", "gh pr view 1 --jq='$ENV'",
+    "gh pr view 1 --jq 'import \"data\" as $d; $d'", "gh pr view 1 -q 'include \"x\"; .'",
+    "gh pr view 1 -q input_filename", "gh pr view 1 -qenv", "gh pr list --template '{{env}}'",
+    "gh pr view 1; rm a.py", "gh pr list | sh", "gh pr list > out.txt", "gh pr list >&2out.txt",
+    "gh pr list && gh pr merge 1", "gh pr view $X", "gh pr view `id`", "gh pr view $(id)", "gh pr view $'--web'",
+    "gh pr view {1,--web}", "gh pr view 1 #'\ntouch made.txt\n#'", "GH_PAGER=sh gh pr diff 1", "env gh pr view 1",
+    "sudo gh pr view 1", "gh pr view -[w]", "gh pr view 1 \"--web\"", "gh pr view 1 '-w'",
+    "g\\h pr view 1 --web", "gh pr view 1\rtouch x",
+]
+
+
+@pytest.mark.parametrize("command", ASKING_GH)
+def test_gh_that_changes_opens_writes_or_reaches_further_asks_and_is_refused_in_plan_mode(workspace, command):
+    assert not permissions.is_read_only_command(command)
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a backslash is not an escape on Windows")
+@pytest.mark.parametrize("command", ["gh pr view 1 --w\\\neb", "gh pr view 1 -\\\nw",
+                                     "gh repo view ev\\\nil.example/o/r",
+                                     "gh pr view 1 -q e\\\nnv", "gh pr view 1 --jq \"\\$ENV\""])
+def test_a_line_continuation_or_escape_cannot_hide_a_gh_option(workspace, command):
+    assert not permissions.is_read_only_command(command)
+    plan = permissions.Gate(workspace, Asker(), mode=permissions.PLAN)
+    assert plan.check("run_command", {"command": command}) == permissions.PLAN_REFUSAL
+
+
+@pytest.fixture
+def option_named_gh_files(workspace):
+    for name in ("--web", "-w"):
+        (workspace.root / name).write_text("x\n")
+    return workspace
+
+
+@pytest.mark.parametrize("command", ["gh pr view 1 *", "gh pr view 1 --we?", "gh pr view 1 -[w]", "gh pr list -?"])
+def test_a_wildcard_that_bash_would_turn_into_a_gh_option_asks(option_named_gh_files, command):
+    ask = Asker("n")
+    assert not permissions.Gate(option_named_gh_files, ask).allows("run_command", {"command": command})
+    assert len(ask.questions) == 1
+
+
+@pytest.mark.parametrize("deny, command", [
+    ("run_command(gh:*)", "gh pr view 1"), ("run_command(gh *)", "gh run list"),
+    ("run_command(gh pr view*)", "gh pr view 1 --comments"), ("run_command(gh run:*)", "gh run view 9 --log"),
+    ("run_command(gh:*)", "gh pr list | grep fix"),
+])
+def test_a_deny_rule_still_stops_look_only_gh_in_every_mode(workspace, deny, command):
+    gate = permissions.Gate(workspace, Asker())
+    gate.rules = rules(deny=[deny])
+    for mode in permissions.MODES:
+        gate.mode = mode
+        assert gate.check("run_command", {"command": command}) == permissions.RULE_DENIED
+
+
+@needs_git
+def test_look_only_gh_asks_when_the_repository_names_a_program_git_would_run(workspace):
+    git_repo(workspace, ("core.fsmonitor", "./run.sh"))
+    ask = Asker("n")
+    assert not permissions.Gate(workspace, ask).allows("run_command", {"command": "gh pr status"})
+    assert "program" in ask.questions[0][0]
+
+
+@pytest.mark.parametrize("command", ["GH pr view 1", "gh.exe pr view 1", r"gh pr view 1 .\; Remove-Item -Recurse src",
+                                     "gh pr view 1 `; Remove-Item x", "gh pr view @(Remove-Item x)", "gh pr view 1 -w",
+                                     "gh pr view 1 --% ; Remove-Item x"])
+def test_on_windows_gh_still_needs_the_plain_name_and_no_powershell_tricks(workspace, monkeypatch, command):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not permissions.is_read_only_command(command)
+
+
+def test_on_windows_look_only_gh_needs_no_ok(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert permissions.is_read_only_command("gh pr view 1 --comments")
+
+
+def test_a_remembered_gh_prefix_is_offered_for_a_changing_gh_command(workspace):
+    assert permissions.Gate(workspace, Asker()).prefixes_for("gh pr merge 12 --squash") == ["gh pr merge"]
