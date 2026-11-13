@@ -526,6 +526,11 @@ usual:
   socket is hidden wherever it lives, and environment variables that look secret (names with KEY, TOKEN, SECRET,
   PASSWORD, AUTH and the like) or point at the session bus or an agent are left out. The rest of your home folder
   stays readable so toolchains keep working.
+  A project with no `.git` or `.arty` yet has nothing to protect: a sandboxed command can run `git init` or make
+  `.arty` and write hooks or settings into them, and git run outside the sandbox (your shell prompt, a hook) would
+  then run what was planted. Keeping a name that doesn't exist yet read-only would need bubblewrap to make a
+  placeholder for it in your real project folder, which ArtyCode doesn't do. In a folder where a sandboxed command
+  made a new repository, look at `.git/config` and `.git/hooks` before you run git there yourself.
 - Windows: an AppContainer and a Job Object. The command can change only the project folder (it starts in a
   `Project:` drive there), can't read your user folder, and everything it started ends with it. A project folder that
   holds your whole user folder is refused. Programs installed only for you (under `AppData`) can't be run inside it.
