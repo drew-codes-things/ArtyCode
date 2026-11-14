@@ -26,8 +26,8 @@ runs the tests. The file tools and the shell always run on your computer. The th
 `arty/qwen3:14b` when it marks none or can't be asked quickly; this is never saved as your choice), so your
 code only ever goes to your own server. You need an Arty API key, or to approve this computer in Arty from your browser.
 The brain runs its models on [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine), Arty's own
-Ollama-compatible server built on llama.cpp, or on Ollama itself. ArtyCode sends its model requests only to the
-brain, so it works the same on either. ArtyEngine is a separate project under its own licence, PolyForm Strict 1.0.0, not ArtyCode's
+model engine. ArtyCode sends its model requests only to the
+brain, never to the engine directly. ArtyEngine is a separate project under its own licence, PolyForm Strict 1.0.0, not ArtyCode's
 Apache 2.0.
 
 It reads, edits and runs code with a set of [tools](docs/tools.md), and asks before it changes or runs anything

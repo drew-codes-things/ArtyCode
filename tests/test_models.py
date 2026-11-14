@@ -149,9 +149,9 @@ def test_a_brain_that_marks_coding_models_gets_only_those_listed():
 
 
 def test_the_brain_listing_error_is_plain():
-    with serving([(500, json.dumps({"error": "ollama is down"}))], "application/json") as (url, _recorder):
+    with serving([(500, json.dumps({"error": "the model server is down"}))], "application/json") as (url, _recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
-        with pytest.raises(brain.BrainError, match="ollama is down"):
+        with pytest.raises(brain.BrainError, match="the model server is down"):
             client.available_models()
 
 
