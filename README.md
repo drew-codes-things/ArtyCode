@@ -69,7 +69,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 It finds Python (the `py` launcher first), makes its own environment in `%LOCALAPPDATA%\arty-cli` and adds `arty` and
-`arty-cli` to your PATH. Open a new terminal afterwards. `.\install.ps1 -Uninstall` removes it and keeps your
+`arty-cli` to your PATH. Open a new terminal after that. `.\install.ps1 -Uninstall` removes it and keeps your
 settings in `%APPDATA%\arty-cli`. The same `ARTY_CLI_SOURCE` works.
 
 Then type `arty`. The first run asks how to log in.
