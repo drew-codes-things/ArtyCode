@@ -225,6 +225,20 @@ class Listing(FakeBrain):
         return [("arty/qwen3:14b", "14B"), ("arty/mimo-v2.6:9b", "9B, sees images")]
 
 
+def test_the_interface_is_told_when_the_model_list_arrives_in_the_background(interactive, tmp_path):
+    import time
+    session = session_for(tmp_path)
+    session.client = Listing(settings.Settings(base_url="http://b/v1", api_key="k"))
+    interface = FakeInterface()
+    interface.refreshed = []
+    interface.refresh_menu = lambda: interface.refreshed.append(True)
+    cli.chat_in_interface(session, interface, share=False)
+    deadline = time.monotonic() + 3
+    while not interface.refreshed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert interface.refreshed == [True]
+
+
 def test_slash_model_picks_from_a_list_in_the_interface(interactive, tmp_path, monkeypatch):
     session = session_for(tmp_path)
     session.client = Listing(settings.Settings(base_url="http://b/v1", api_key="k"))

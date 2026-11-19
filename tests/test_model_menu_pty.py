@@ -28,6 +28,8 @@ ESCAPE_SEQUENCE = re.compile(r"\x1b(\[[0-9;?]*[A-Za-z]|[()][0-9A-Za-z]|[=>])")
 class FakeBrain:
     def __init__(self, delay=0.0, status=200):
         self.delay, self.status, self.paths = delay, status, []
+        self.gate = threading.Event()
+        self.gate.set()
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -36,6 +38,7 @@ class FakeBrain:
 
             def do_GET(self):
                 outer.paths.append(self.path)
+                outer.gate.wait(WAIT_SECONDS)
                 time.sleep(outer.delay)
                 body = json.dumps({"object": "list", "data": BRAIN_MODELS} if outer.status == 200
                                   else {"error": "the model server is down"}).encode()
@@ -52,7 +55,14 @@ class FakeBrain:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
 
+    def hold(self):
+        self.gate.clear()
+
+    def release(self):
+        self.gate.set()
+
     def stop(self):
+        self.gate.set()
         self.server.shutdown()
         self.server.server_close()
 
@@ -158,3 +168,25 @@ def test_a_brain_that_cannot_list_models_is_named_in_one_line_and_the_prompt_sta
     assert terminal.sees("the model server is down")
     terminal.type(b"/")
     assert terminal.sees("/help")
+
+
+def test_a_list_that_arrives_after_slash_model_was_typed_opens_the_menu_by_itself(start):
+    brain = FakeBrain()
+    brain.hold()
+    terminal = start(brain)
+    terminal.type(b"/model")
+    terminal.read_for(1.5)
+    assert "mimo-v2.6:9b" not in terminal.shown
+    brain.release()
+    assert terminal.sees("mimo-v2.6:9b") and terminal.sees("private coder")
+
+
+def test_a_list_that_arrives_long_after_slash_model_was_typed_still_opens_the_menu_by_itself(start):
+    brain = FakeBrain()
+    brain.hold()
+    terminal = start(brain)
+    terminal.type(b"/model")
+    terminal.read_for(6.5)
+    assert "mimo-v2.6:9b" not in terminal.shown
+    brain.release()
+    assert terminal.sees("mimo-v2.6:9b") and terminal.sees("private coder")

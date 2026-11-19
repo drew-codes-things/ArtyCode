@@ -37,6 +37,7 @@ PIECES = re.compile(r"(\n|\x08|\r|\033\[K)")
 IGNORED_PIECES = ("\r", wrap.CLEAR_TO_LINE_END)
 MENTION = re.compile(r"(?:^|\s)@(\S*)$")
 MOST_PATHS = 50
+MODEL_WAIT_SECONDS = 5.0
 MENU_ROWS = 8
 CHOICE_ROWS = 10
 REFRESH_SECONDS = 0.15
@@ -159,10 +160,18 @@ class Suggestions(Completer):
     def __init__(self, host):
         self.host = host
 
+    def models_listed(self) -> dict:
+        listed = self.host.models()
+        waits_for_models = getattr(self.host, "await_models", None)
+        if listed or waits_for_models is None:
+            return listed
+        waits_for_models(MODEL_WAIT_SECONDS)
+        return self.host.models()
+
     def get_completions(self, document, complete_event):
         typed = document.text_before_cursor
         if typed.startswith("/") and "\n" not in document.text:
-            found, meanings, partial = suggest.suggestions(typed, self.host.commands, self.host.models)
+            found, meanings, partial = suggest.suggestions(typed, self.host.commands, self.models_listed)
             lead = suggest.argument_lead(typed, partial)
             for name in found:
                 yield Completion(lead + name, start_position=-len(partial), display=name,
@@ -658,6 +667,15 @@ class Interface:
             return False
         self.buffer.apply_completion(state.current_completion or state.completions[0])
         return True
+
+    def refresh_menu(self) -> None:
+        self.in_loop(self.reopen_menu)
+
+    def reopen_menu(self) -> None:
+        text = self.buffer.text
+        menu_is_shut = self.buffer.complete_state is None or not self.buffer.complete_state.completions
+        if self.question is None and not self.wants_line and menu_is_shut and text.startswith("/") and "\n" not in text:
+            self.buffer.start_completion(select_first=False)
 
     def typed_awaits_a_choice(self) -> bool:
         return suggest.takes_a_choice(self.buffer.document.text_before_cursor)

@@ -1,5 +1,6 @@
 import io
 import json
+import time
 
 import pytest
 
@@ -358,6 +359,60 @@ def test_a_listing_is_fetched_once_and_kept_fresh_for_a_minute():
 def test_loading_again_straight_away_reuses_what_another_load_just_fetched():
     listing, fetch, _time_now = listing_with(FOUND, FOUND)
     assert listing.load() is listing.load() and fetch.calls == 1
+
+
+def test_everyone_waiting_for_the_list_is_told_when_it_arrives():
+    listing, _fetch, time_now = listing_with(FOUND, FOUND)
+    told = []
+    listing.when_loaded(lambda: told.append(listing.choices))
+    first = listing.load()
+    assert told == [first]
+    listing.load()
+    assert len(told) == 1
+    time_now.now += models.STALE_SECONDS
+    again = listing.load()
+    assert told == [first, again]
+
+
+def test_waiting_for_the_list_ends_as_soon_as_it_arrives_or_nothing_is_loading():
+    import threading
+    release = threading.Event()
+
+    def slow():
+        release.wait(5)
+        return FOUND
+
+    listing = models.Listing(slow)
+    listing.wait(0.5)
+    assert listing.available() is None
+    threading.Timer(0.2, release.set).start()
+    started = time.monotonic()
+    listing.wait(5)
+    assert listing.choices is not None and time.monotonic() - started < 3
+    idle = models.Listing(slow)
+    started = time.monotonic()
+    idle.wait(5)
+    assert time.monotonic() - started < 1
+
+
+def test_waiting_for_a_list_that_never_comes_gives_up_at_the_limit():
+    import threading
+    release = threading.Event()
+    listing = models.Listing(lambda: release.wait(5) or FOUND)
+    listing.available()
+    started = time.monotonic()
+    listing.wait(0.3)
+    assert listing.choices is None and 0.25 < time.monotonic() - started < 2
+    release.set()
+
+
+def test_a_failed_load_tells_nobody():
+    listing, _fetch, _time_now = listing_with(providers.ProviderError("down"))
+    told = []
+    listing.when_loaded(lambda: told.append(True))
+    with pytest.raises(providers.ProviderError):
+        listing.load()
+    assert told == []
 
 
 def test_a_failed_load_raises_and_keeps_the_last_good_list():

@@ -450,6 +450,9 @@ class Session(Conversation):
     def prefetch_models(self) -> None:
         self.listing.available()
 
+    def await_models(self, seconds: float) -> None:
+        self.listing.wait(seconds)
+
     def pick_model(self, listed: models.Choices) -> None:
         offered = [(str(number), models.picker_text(choice, self.client.model))
                    for number, choice in enumerate(listed.listed, 1)]

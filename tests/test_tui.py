@@ -314,6 +314,64 @@ def test_typing_goes_on_normally_while_the_model_list_is_not_there_yet(started):
     assert until(lambda: typed_text(interface) == "/model x")
 
 
+def test_a_menu_asked_for_while_the_list_is_still_loading_waits_for_it_and_then_shows_it(started):
+    interface, typed = started
+    arrived, waited = [], []
+
+    def arrive(seconds):
+        waited.append(seconds)
+        time.sleep(0.3)
+        arrived.append(True)
+
+    interface.host.models = lambda: MODELS if arrived else {}
+    interface.host.await_models = arrive
+    typed.send_text("/model")
+    assert until(lambda: "mimo-v2.6:9b" in plain(interface.menu_text()))
+    assert waited == [tui.MODEL_WAIT_SECONDS] and typed_text(interface) == "/model"
+
+
+def test_a_list_that_is_already_there_is_not_waited_for(started):
+    interface, typed = started
+    interface.host.await_models = lambda seconds: pytest.fail("waited for a list that was there")
+    typed.send_text("/model")
+    assert until(lambda: "mimo-v2.6:9b" in plain(interface.menu_text()))
+
+
+def test_a_list_that_arrives_after_slash_model_was_typed_opens_the_menu_without_another_key(started):
+    interface, typed = started
+    arrived = []
+    interface.host.models = lambda: MODELS if arrived else {}
+    typed.send_text("/model")
+    assert until(lambda: typed_text(interface) == "/model")
+    assert not until(interface.menu_is_open, 0.5)
+    arrived.append(True)
+    interface.refresh_menu()
+    assert until(lambda: "mimo-v2.6:9b" in plain(interface.menu_text()))
+    assert typed_text(interface) == "/model"
+
+
+def test_a_list_that_arrives_when_the_prompt_is_not_a_command_changes_nothing(started):
+    interface, typed = started
+    typed.send_text("look at this")
+    assert until(lambda: typed_text(interface) == "look at this")
+    interface.refresh_menu()
+    assert not until(interface.menu_is_open, 0.5)
+    assert typed_text(interface) == "look at this"
+
+
+def test_a_list_that_arrives_while_a_question_is_open_leaves_it_alone(started):
+    interface, typed = started
+    arrived = []
+    interface.host.models = lambda: MODELS if arrived else {}
+    typed.send_text("/model")
+    assert until(lambda: typed_text(interface) == "/model")
+    interface.open_question("Run it?", [("y", "yes"), ("n", "no")])
+    arrived.append(True)
+    interface.refresh_menu()
+    assert not until(lambda: interface.buffer.complete_state is not None, 0.5)
+    assert interface.question is not None
+
+
 def test_an_at_sign_completes_file_paths_in_the_project(started):
     interface, typed = started
     typed.send_text("look at @")

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from arty_cli import brain
 
 STALE_SECONDS = 60
+WAIT_POLL_SECONDS = 0.02
 CURRENT_MARK = "●"
 CURRENT_WORD = "current"
 NO_MODELS = "Arty's brain listed no models. /model <name> still switches to one by name."
@@ -72,6 +73,10 @@ class Listing:
         self.attempted_at: float | None = None
         self.loading = threading.Lock()
         self.refreshing = False
+        self.listeners = []
+
+    def when_loaded(self, listener) -> None:
+        self.listeners.append(listener)
 
     def is_current(self, moment: float | None) -> bool:
         return moment is not None and self.clock() - moment < STALE_SECONDS
@@ -87,13 +92,20 @@ class Listing:
             self.attempted_at = self.clock()
             listed = Choices(self.fetch())
             self.choices, self.loaded_at, self.failure = listed, self.clock(), None
-            return listed
+        for listener in list(self.listeners):
+            listener()
+        return listed
 
     def available(self) -> Choices | None:
         if not self.is_current(self.attempted_at) and not self.refreshing:
             self.refreshing = True
             threading.Thread(target=self.refresh, daemon=True).start()
         return self.choices
+
+    def wait(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while self.refreshing and self.choices is None and time.monotonic() < deadline:
+            time.sleep(WAIT_POLL_SECONDS)
 
     def refresh(self) -> None:
         try:

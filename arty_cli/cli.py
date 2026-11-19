@@ -182,6 +182,7 @@ class SessionHost:
         self.root = session.workspace.root
         self.commands = session.slash_choices
         self.models = session.model_choices
+        self.await_models = session.await_models
         self.paint = session.terminal.paint
         self.theme = look.theme_for(session.terminal.colour)
         self.clock = clock
@@ -249,6 +250,8 @@ def chat_in_interface(session: Session, interface, share: bool) -> None:
         terminal.measure = host.measure
         welcome_header(session, host.theme, interface.show_block)
         host.measure()
+        if hasattr(interface, "refresh_menu"):
+            session.listing.when_loaded(interface.refresh_menu)
         session.prefetch_models()
         if share:
             session.start_remote()
