@@ -50,7 +50,7 @@ Python 3.11 or newer. The installers (and pipx) also fetch prompt_toolkit and Py
 curl -fsSL https://raw.githubusercontent.com/drew-codes-things/ArtyCode/main/install.sh | bash
 ```
 
-Run that way the installer downloads the project's newest code itself. It never asks for sudo. Or, from an ArtyCode
+Run that way, the installer downloads the project's newest code itself. It never asks for sudo. Or, from an ArtyCode
 folder you already have,
 
 ```bash
