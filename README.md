@@ -24,7 +24,7 @@ ArtyCode (the `arty` command, also `arty-cli`) is a coding assistant for the ter
 runs the tests. The file tools and the shell always run on your computer. The thinking happens on your own
 [Arty](https://github.com/drew-codes-things/Arty) brain (its own coding model unless you pick another: the first `arty/` model it marks for coding, or
 `arty/qwen3:14b` when it marks none or can't be asked quickly; this is never saved as your choice), so your
-code only ever goes to your own server. You need an Arty API key, or to approve this computer in Arty from your browser.
+code only ever goes to your own server. You need an Arty API key, or you can approve this computer in Arty from your browser.
 The brain runs its models on [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine), Arty's own
 model engine. ArtyCode sends its model requests only to the
 brain, never to the engine directly. ArtyEngine is a separate project under its own licence, PolyForm Strict 1.0.0, not ArtyCode's
