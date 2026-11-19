@@ -163,8 +163,10 @@ class Suggestions(Completer):
         typed = document.text_before_cursor
         if typed.startswith("/") and "\n" not in document.text:
             found, meanings, partial = suggest.suggestions(typed, self.host.commands, self.host.models)
+            lead = suggest.argument_lead(typed, partial)
             for name in found:
-                yield Completion(name, start_position=-len(partial), display_meta=meanings.get(name) or "")
+                yield Completion(lead + name, start_position=-len(partial), display=name,
+                                 display_meta=meanings.get(name) or "")
             return
         mention = MENTION.search(typed)
         if mention is None:
@@ -652,10 +654,13 @@ class Interface:
 
     def accepts_completion(self) -> bool:
         state = self.buffer.complete_state
-        if state.current_completion is None and self.typed_is_listed(state):
+        if state.current_completion is None and (self.typed_is_listed(state) or self.typed_awaits_a_choice()):
             return False
         self.buffer.apply_completion(state.current_completion or state.completions[0])
         return True
+
+    def typed_awaits_a_choice(self) -> bool:
+        return suggest.takes_a_choice(self.buffer.document.text_before_cursor)
 
     def typed_is_listed(self, state) -> bool:
         before = self.buffer.document.text_before_cursor

@@ -249,6 +249,7 @@ def chat_in_interface(session: Session, interface, share: bool) -> None:
         terminal.measure = host.measure
         welcome_header(session, host.theme, interface.show_block)
         host.measure()
+        session.prefetch_models()
         if share:
             session.start_remote()
         talk_in_interface(session, interface)
@@ -304,6 +305,8 @@ def chat(session: Session, share: bool = False, plain: bool = False) -> None:
         return
     welcome(session)
     reader = prompt_line.line_reader(screen.is_interactive, session.slash_choices, session.model_choices)
+    if reader is not None:
+        session.prefetch_models()
     if share:
         session.start_remote()
     try:

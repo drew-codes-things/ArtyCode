@@ -132,8 +132,10 @@ Worked for 12s · 6 steps · ↓ 2.1k tokens
   that finished (and what it showed) in the conversation and dropping only the unfinished one. **Ctrl-C** clears
   what you typed; on an empty line it asks once more and the second Ctrl-C leaves. **Ctrl-D** on an empty line leaves.
 - **Menus.** `/` opens a list of commands under the box that narrows as you type, each with what it does; after
-  `/model ` it lists the models; `@` completes file paths inside the project. Up and Down move through it, Tab or
-  Enter takes the highlighted entry, Esc closes it.
+  `/model`, `/mode` or `/rules` it switches to that command's choices (every model with what it does and the current
+  one marked, the modes, the rules levels) and narrows as you type on; `@` completes file paths inside the project.
+  Up and Down move through it, Tab or Enter takes the highlighted entry, Esc closes it. Enter on the bare command with
+  nothing highlighted runs it: `/model` says `Loading models...` and opens the picker.
 - **History.** Up and Down walk through earlier requests, kept per project between sessions (in the config folder's
   `history/`, readable only by you). **Ctrl-R** searches them.
 - **Several lines.** Alt+Enter (or Ctrl-J, or a line ending in `\`) starts another line; pasted text of several lines

@@ -152,7 +152,7 @@ arty --remote                                # chat, shared with your phone and 
 | `@path` | Attach a file with numbered lines, as if Arty had read it (so it can edit it at once); pictures go to the model's vision |
 | `!command` | Run a command yourself; the model sees the output |
 | `/undo` | Put back the last file change Arty made (again for the one before); a file Arty created is removed. Refused if the file changed again since |
-| `/model` | A numbered list of every model downloaded on your Arty brain. The current one is marked with ● |
+| `/model` | A numbered list of every model downloaded on your Arty brain. The current one is marked with ●. Typing `/model` already shows them all in the menu. The list is fetched once and kept for a minute |
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |
 | `/resume` | Pick an earlier conversation and carry on with it |

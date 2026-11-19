@@ -6,8 +6,8 @@ from pathlib import Path
 from arty_cli import extras as extras_module
 from arty_cli import rules
 
-from arty_cli import (agent, brain, context, memory, mentions, offering, prompts, providers, prune, remote, settings,
-                      skills, tools)
+from arty_cli import (agent, brain, context, memory, mentions, models, offering, prompts, providers, prune, remote,
+                      settings, skills, tools)
 from arty_cli.screen import ERROR_MARK
 
 NOTE_MARK = "#"
@@ -106,7 +106,7 @@ class Conversation:
         self.project_trusted = project_trusted
         self.turn_start = 0
         self.compacted_in_turn = False
-        self.choices = None
+        self.listing = models.Listing(lambda: models.listed_for(self.client, self.client.model))
         self.turns = []
         self.request, self.done = "", []
         self.last_checkpoint = None

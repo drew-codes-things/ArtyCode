@@ -98,6 +98,10 @@ EDITS = "edits"
 WEB_SEARCH = "web_search"
 DEFAULT, AUTO_EDIT, PLAN, ALLOW_ALL = "default", "auto-edit", "plan", "allow-all"
 MODES = (DEFAULT, AUTO_EDIT, PLAN, ALLOW_ALL)
+MODE_MEANINGS = {DEFAULT: "asks before it changes anything",
+                 AUTO_EDIT: "edits without asking, asks before commands",
+                 PLAN: "looks and plans, changes nothing",
+                 ALLOW_ALL: "asks only before a command it can't read"}
 REFUSED_LEAD = "The user didn't allow that, so it wasn't done."
 REFUSED = REFUSED_LEAD + " Don't try another way round it; say so and ask what they'd like."
 REFUSED_INSTEAD = (REFUSED_LEAD + " They said what to do instead: {said}. Do that, and don't try another way round "

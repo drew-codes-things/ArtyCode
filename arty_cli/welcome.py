@@ -15,10 +15,6 @@ WINDOWS_PROGRAM_ENDING = ".exe"
 RESUME_LINE = "Resume this chat: {}"
 HOME_MARK = "~"
 WELCOME_LABEL_WIDTH = 8
-MODE_MEANINGS = {permissions.DEFAULT: "asks before it changes anything",
-                 permissions.AUTO_EDIT: "edits without asking, asks before commands",
-                 permissions.PLAN: "looks and plans, changes nothing",
-                 permissions.ALLOW_ALL: "asks only before a command it can't read"}
 WELCOME_TIPS = ('Ask in plain words, e.g. "why does the login test fail?" or "add a --dry-run flag"',
                 "@file attaches a file · !command runs one yourself · # note saves a project note",
                 "? or /help for commands · Ctrl-C stops a request · Ctrl-D leaves")
@@ -45,7 +41,7 @@ def welcome(session: Session, tips: tuple = WELCOME_TIPS) -> None:
     terminal.note(f"{terminal.paint(WORDMARK, 'accent')} {terminal.paint(__version__, 'dim')}", "reset")
     welcome_row(terminal, "Folder", shown_folder(session.workspace.root, Path.home()))
     welcome_row(terminal, "Model", session.client.model, "accent")
-    welcome_row(terminal, "Mode", f"{mode}: {MODE_MEANINGS.get(mode, '')} (Shift+Tab to change)")
+    welcome_row(terminal, "Mode", f"{mode}: {permissions.MODE_MEANINGS.get(mode, '')} (Shift+Tab to change)")
     level = rules_level(session.workspace)
     welcome_row(terminal, "Rules", f"{level}: {rules.MEANINGS[level]} (/rules to change)")
     if mode == permissions.ALLOW_ALL:
@@ -76,7 +72,7 @@ def header_details(session: Session, window: int | None) -> list[tuple[str, str]
     details = [("model", session.client.model), ("folder", shown_folder(session.workspace.root, Path.home()))]
     if window:
         details.append(("context", f"{window:,} tokens"))
-    return details + [("mode", f"{mode}: {MODE_MEANINGS.get(mode, '')}"),
+    return details + [("mode", f"{mode}: {permissions.MODE_MEANINGS.get(mode, '')}"),
                       ("rules", rules_summary(rules_level(session.workspace)))]
 
 
