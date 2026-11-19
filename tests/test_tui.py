@@ -252,6 +252,68 @@ def test_after_slash_model_the_menu_lists_the_models(started):
     assert "qwen3" not in plain(interface.menu_text())
 
 
+def test_a_whole_slash_model_lists_every_model_with_what_it_does_without_a_space(started):
+    interface, typed = started
+    typed.send_text("/model")
+    assert until(lambda: "arty/qwen3:14b     14B, all tools" in plain(interface.menu_text()))
+    shown = plain(interface.menu_text())
+    assert "arty/mimo-v2.6:9b  9B, sees images" in shown and "switch model" not in shown
+    assert typed_text(interface) == "/model"
+
+
+def test_typing_more_after_a_whole_slash_model_narrows_the_list(started):
+    interface, typed = started
+    typed.send_text("/model")
+    assert until(lambda: "qwen3" in plain(interface.menu_text()))
+    typed.send_text(" arty/m")
+    assert until(lambda: "qwen3" not in plain(interface.menu_text()) and "mimo" in plain(interface.menu_text()))
+
+
+def test_enter_on_a_whole_slash_model_sends_it_instead_of_taking_the_first_model(started):
+    interface, typed = started
+    typed.send_text("/model")
+    assert until(lambda: "qwen3" in plain(interface.menu_text()))
+    typed.send_text("\r")
+    assert until(lambda: not interface.messages.empty())
+    assert interface.messages.get_nowait() == "/model" and typed_text(interface) == ""
+
+
+def test_tab_and_the_arrows_pick_a_model_after_a_whole_slash_model(started):
+    interface, typed = started
+    typed.send_text("/model")
+    assert until(lambda: "qwen3" in plain(interface.menu_text()))
+    typed.send_text("\t")
+    assert until(lambda: typed_text(interface) == "/model arty/qwen3:14b")
+    typed.send_text(CTRL_C + "/model")
+    assert until(lambda: typed_text(interface) == "/model" and "mimo" in plain(interface.menu_text()))
+    typed.send_text(DOWN)
+    assert until(lambda: typed_text(interface) == "/model arty/mimo-v2.6:9b")
+    typed.send_text("\r")
+    assert until(lambda: interface.messages.empty() and typed_text(interface) == "/model arty/mimo-v2.6:9b")
+    typed.send_text("\r")
+    assert until(lambda: not interface.messages.empty())
+    assert interface.messages.get_nowait() == "/model arty/mimo-v2.6:9b"
+
+
+def test_a_whole_slash_mode_lists_the_modes(started):
+    interface, typed = started
+    typed.send_text("/mode")
+    assert until(lambda: "plan" in plain(interface.menu_text()))
+    shown = plain(interface.menu_text())
+    assert "default" in shown and "looks and plans, changes nothing" in shown and "/model" not in shown
+    typed.send_text("\r")
+    assert until(lambda: not interface.messages.empty())
+    assert interface.messages.get_nowait() == "/mode"
+
+
+def test_typing_goes_on_normally_while_the_model_list_is_not_there_yet(started):
+    interface, typed = started
+    interface.host.models = lambda: {}
+    typed.send_text("/model")
+    typed.send_text(" x")
+    assert until(lambda: typed_text(interface) == "/model x")
+
+
 def test_an_at_sign_completes_file_paths_in_the_project(started):
     interface, typed = started
     typed.send_text("look at @")

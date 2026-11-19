@@ -69,6 +69,7 @@ REMOTE_NAME_USAGE = "Give the new name: /remote name <new name>."
 REMOTE_NAME_NEEDS_SHARING = "Turn remote control on with /remote first, then rename it."
 REMOTE_NAME = "name"
 MCP_USAGE = "Use /mcp, /mcp add [service or https address] [name], /mcp login <name> or /mcp remove <name>."
+LOADING_MODELS = "Loading models..."
 SIGN_IN_AGAIN_CHOICES = (("y", "Yes, open the sign-in page"), ("n", "Not now"))
 SIGN_IN_TROUBLE = (mcp_sign_in.SignInStopped, sign_ins.SignInError, oauth.OAuthError, mcp.McpError, OSError)
 
@@ -435,27 +436,29 @@ class Session(Conversation):
         level = rules_level(self.workspace)
         self.terminal.note(f"Rules: {level}: {rules.MEANINGS[level]}")
 
-    def listed_models(self) -> models.Choices:
-        self.choices = models.Choices(models.listed_for(self.client, self.client.model))
-        return self.choices
+    def loaded_models(self) -> models.Choices:
+        listed = self.listing.fresh()
+        if listed is not None:
+            return listed
+        self.terminal.note(LOADING_MODELS, "dim")
+        return self.listing.load()
 
     def model_choices(self) -> dict[str, str]:
-        if self.choices is None:
-            try:
-                self.listed_models()
-            except providers.ERRORS:
-                return {}
-        return {choice.model: choice.about for choice in self.choices.listed}
+        listed = self.listing.available()
+        return models.menu_meanings(listed, self.client.model) if listed else {}
+
+    def prefetch_models(self) -> None:
+        self.listing.available()
 
     def pick_model(self, listed: models.Choices) -> None:
-        offered = [(str(number), f"{choice.model}  {choice.about}".rstrip())
+        offered = [(str(number), models.picker_text(choice, self.client.model))
                    for number, choice in enumerate(listed.listed, 1)]
         picked = self.terminal.console.choose(f"Model: {self.client.model}. Switch to which?", offered)
         if picked:
             self.change_model(picked)
 
     def show_models(self) -> None:
-        listed = self.listed_models()
+        listed = self.loaded_models()
         if self.terminal.console:
             self.pick_model(listed)
             return
@@ -471,7 +474,7 @@ class Session(Conversation):
     def chosen(self, wanted: str) -> models.Choice | None:
         if not wanted.isdigit():
             return models.Choice(wanted, "")
-        listed = self.choices or self.listed_models()
+        listed = self.listing.choices or self.loaded_models()
         picked = listed.pick(wanted)
         if picked is None:
             self.terminal.note(f"Pick a number from 1-{len(listed.listed)}; /model shows the list.", "error")

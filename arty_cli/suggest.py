@@ -1,12 +1,16 @@
 import difflib
 import re
 
+from arty_cli import permissions, rules
+
 SLASH_NAME = re.compile(r"/[a-z][a-z-]*")
 MENU_ROWS = 12
 NAME_GAP = 2
 CLOSE_ENOUGH = 0.6
 MENU_INDENT = "  "
-MODEL_COMMAND = "/model "
+MODEL_COMMAND = "/model"
+FIXED_CHOICES = {"/mode": permissions.MODE_MEANINGS, "/rules": rules.MEANINGS}
+COMMAND_WITH_CHOICE = re.compile(r"(/[a-z][a-z-]*)( ([^ \t\n]*))?")
 
 
 def slash_choices(groups, custom_meanings: dict) -> dict[str, str]:
@@ -30,13 +34,27 @@ def matching(typed: str, choices: dict) -> list[str]:
     return [name for name in choices if name.startswith(typed)]
 
 
+def choices_for(command: str, models) -> dict:
+    if command == MODEL_COMMAND:
+        return models() if models is not None else {}
+    return FIXED_CHOICES.get(command, {})
+
+
+def takes_a_choice(typed: str) -> bool:
+    return typed == MODEL_COMMAND or typed in FIXED_CHOICES
+
+
+def argument_lead(typed: str, partial: str) -> str:
+    return " " if takes_a_choice(typed) and not partial else ""
+
+
 def suggestions(typed: str, commands, models=None) -> tuple[list[str], dict, str]:
-    if models is not None and typed.startswith(MODEL_COMMAND):
-        wanted = typed[len(MODEL_COMMAND):]
-        if any(space in wanted for space in " \t\n"):
-            return [], {}, wanted
-        listed = models()
-        return [name for name in listed if name.startswith(wanted)], listed, wanted
+    found = COMMAND_WITH_CHOICE.fullmatch(typed)
+    if found:
+        command, spaced, wanted = found.group(1), found.group(2), found.group(3) or ""
+        listed = choices_for(command, models) if spaced or takes_a_choice(typed) else {}
+        if listed or spaced:
+            return [name for name in listed if name.startswith(wanted)], listed, wanted
     listed = commands()
     return matching(typed, listed), listed, typed
 

@@ -267,6 +267,40 @@ def test_on_windows_tab_after_slash_model_finishes_the_one_model_that_fits():
     assert reader.read("› ", 2, "") == ("/model own/Coder ", False)
 
 
+def test_on_linux_tab_after_a_whole_slash_model_lists_the_models_without_a_space():
+    reader, module, written, _prompts = readline_reader("/model", choices=lambda: COMMANDS)
+    reader.models = lambda: MODEL_LIST
+    reader.read("default › ", 10, "")
+    module.buffer = "/model"
+    offered = [module.completer("/model", state) for state in range(3)]
+    assert offered == ["/model arty/qwen3:14b", "/model own/Coder", None]
+    module.display_hook("/model arty/qwen3:14b", offered[:2], 21)
+    shown = written.getvalue()
+    assert "own/Coder       private coder" in shown and "/model own/Coder" not in shown
+
+
+def test_on_linux_tab_after_a_whole_slash_mode_lists_the_modes():
+    reader, module, _written, _prompts = readline_reader("/mode", choices=lambda: COMMANDS)
+    reader.read("default › ", 10, "")
+    module.buffer = "/mode"
+    assert [module.completer("/mode", state) for state in range(5)] == [
+        f"/mode {name}" for name in permissions.MODES] + [None]
+
+
+def test_on_windows_tab_after_a_whole_slash_model_finishes_the_one_model_that_fits():
+    reader, _written = console_reader(list("/model") + ["\t", "\r"], choices=lambda: COMMANDS)
+    reader.models = lambda: {"own/Coder": "private coder"}
+    assert reader.read("› ", 2, "") == ("/model own/Coder ", False)
+
+
+def test_on_windows_tab_after_a_whole_slash_model_shows_every_model_and_keeps_the_line():
+    reader, written = console_reader(list("/model") + ["\t", "\r"], choices=lambda: COMMANDS)
+    reader.models = lambda: MODEL_LIST
+    assert reader.read("› ", 2, "") == ("/model", False)
+    shown = written.getvalue()
+    assert "arty/qwen3:14b  14B, all tools" in shown and "own/Coder       private coder" in shown
+
+
 class Plain:
     def paint(self, text, colour):
         return text

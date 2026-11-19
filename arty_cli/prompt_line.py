@@ -120,7 +120,7 @@ class ReadlineLine:
         self.choices = choices
         self.models = models
         self.prompt, self.box = "", None
-        self.found, self.meanings = [], {}
+        self.found, self.meanings, self.joined = [], {}, ""
         module.parse_and_bind(f'"{SHIFT_TAB_SEQUENCE}": "{MODE_MARK}\\n"')
         if choices:
             self.offer_commands()
@@ -132,14 +132,17 @@ class ReadlineLine:
         self.module.set_completer(self.complete)
         self.module.set_completion_display_matches_hook(self.show_matches)
 
-    def complete(self, _text: str, state: int) -> str | None:
+    def complete(self, text: str, state: int) -> str | None:
         if state == 0:
-            self.found, self.meanings, _partial = suggest.suggestions(self.module.get_line_buffer(), self.choices,
-                                                                      self.models)
+            typed = self.module.get_line_buffer()
+            names, self.meanings, partial = suggest.suggestions(typed, self.choices, self.models)
+            lead = suggest.argument_lead(typed, partial)
+            self.joined = text + lead if lead else ""
+            self.found = [self.joined + name for name in names]
         return self.found[state] if state < len(self.found) else None
 
     def show_matches(self, _substitution, matches, _longest) -> None:
-        lines = suggest.menu_lines(list(matches), self.meanings, self.columns())
+        lines = suggest.menu_lines([match[len(self.joined):] for match in matches], self.meanings, self.columns())
         lead, redrawn = (self.box.left(1), self.box.opened()) if self.box else ("\n", "")
         self.write(lead + "\n".join(lines) + "\n" + redrawn + self.prompt + self.module.get_line_buffer())
 
@@ -240,10 +243,11 @@ class ConsoleLine:
     def complete(self) -> None:
         if not self.choices:
             return
-        found, meanings, partial = suggest.suggestions("".join(self.typed), self.choices, self.models)
+        typed = "".join(self.typed)
+        found, meanings, partial = suggest.suggestions(typed, self.choices, self.models)
         if len(found) == 1:
             self.move_end()
-            for letter in found[0][len(partial):] + " ":
+            for letter in suggest.argument_lead(typed, partial) + found[0][len(partial):] + " ":
                 self.insert(letter)
         elif found:
             self.show_menu(found, meanings)
