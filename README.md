@@ -92,13 +92,19 @@ address on your network (`http://<AI_ADDRESS>:8081/v1`) and `ARTY_REMOTE_URL` fo
 it). When neither is known, `arty login` (and the first run) shows the lines to copy for your shell (`export` on Linux,
 `$env:` and `setx` in PowerShell) and saves nothing.
 
-`arty login` (or `arty-cli login`) then offers exactly two ways in:
+`arty login` (or `arty-cli login`) then offers three ways in:
 
 1. **API key.** Paste an Arty API key.
 2. **Browser login.** ArtyCode shows a short code and opens Arty in your browser. Approve it there and ArtyCode
    receives a key of its own for this computer. From outside your home network this needs the Cloudflare Access id
    and secret first. Plain `http://` is only accepted for an address on your own network; a public address has to
    use https.
+3. **Another OpenAI-compatible server.** Asks for its address (ending in `/v1`, such as a starfire app key's
+   `https://<starfire address>/v1`) and its key, checks the key by listing the server's models, and saves both. The
+   same step is `arty-cli login outside`, which also works before Arty's address is known. The server's models show in
+   `/model` as `outside/<model>` next to Arty's; choosing one sends the chat to that server with its own key (Arty's
+   key is never sent there). Without an Arty login, the first of its models becomes the model. `ARTY_OUTSIDE_URL` and
+   `ARTY_OUTSIDE_KEY` set the same from the environment.
 
 Everything is saved to `~/.config/arty-cli/config.json` (`%APPDATA%\arty-cli\config.json` on Windows), readable only
 by you. For Arty the home address is tried first, then the other. Before the key is sent to a plain `http://` home
@@ -152,7 +158,7 @@ arty --remote                                # chat, shared with your phone and 
 | `@path` | Attach a file with numbered lines, as if Arty had read it (so it can edit it at once); pictures go to the model's vision |
 | `!command` | Run a command yourself; the model sees the output |
 | `/undo` | Put back the last file change Arty made (again for the one before); a file Arty created is removed. Refused if the file changed again since |
-| `/model` | A numbered list of every model downloaded on your Arty brain. The current one is marked with ●. Typing `/model` already shows them all in the menu. The list is fetched once and kept for a minute |
+| `/model` | A numbered list of every model downloaded on your Arty brain, then the `outside/` models of an OpenAI-compatible server when one is logged in. The current one is marked with ●. Typing `/model` already shows them all in the menu. The list is fetched once and kept for a minute |
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |
 | `/resume` | Pick an earlier conversation and carry on with it |

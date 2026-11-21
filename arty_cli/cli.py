@@ -22,7 +22,7 @@ from arty_cli import upkeep
 from arty_cli import look, notify, view
 from arty_cli.chat_session import SESSIONS_FOLDER, Session
 from arty_cli.conversation import HELP_MARK, NOTE_MARK, RESUME, SHELL_MARK, STARTUP
-from arty_cli.login_flow import FAILED, login
+from arty_cli.login_flow import FAILED, login, outside_server
 from arty_cli.screen import NOTIFICATION_LEADS, PERMISSION_PROMPT, PLAN_APPROVAL, JsonLines, Terminal
 from arty_cli.welcome import say_how_to_resume, welcome, welcome_header
 
@@ -50,8 +50,9 @@ REMOTE_ONLY_IN_CHAT = "--remote works in the chat, not with a single question."
 def parse_arguments(argv):
     parser = argparse.ArgumentParser(prog="arty-cli", description="ArtyCode: reads, edits and runs code in the "
                                      "current folder, asking before it changes anything. Runs on your Arty.")
-    parser.add_argument("words", nargs="*", help="`login` to connect to Arty, `doctor` to check the setup, `update` to "
-                        "get the newest version, or a question to ask once")
+    parser.add_argument("words", nargs="*", help="`login` to connect to Arty (`login outside` for another "
+                        "OpenAI-compatible server), `doctor` to check the setup, `update` to get the newest version, "
+                        "or a question to ask once")
     parser.add_argument("-p", "--print", dest="once", help="ask once, print the answer and exit")
     parser.add_argument("--output-format", choices=OUTPUT_FORMATS, default=TEXT_OUTPUT,
                         help="with -p: text (streamed), json (one object with the answer at the end) or "
@@ -396,6 +397,8 @@ def main_session(arguments) -> int:
     try:
         if arguments.words in (["login"], ["setup"]):
             return login(terminal)
+        if arguments.words == ["login", "outside"]:
+            return outside_server(terminal)
         config, tried_login = ready_settings(arguments, terminal)
         if not config.is_ready():
             if not tried_login:
@@ -425,7 +428,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
     store = sessions.Store(settings.config_dir() / SESSIONS_FOLDER)
     saved = saved_conversation(arguments, store, workspace.root, terminal)
     client = providers.make(config)
-    if saved.model and not arguments.model and brain.is_arty_model(saved.model):
+    if saved.model and not arguments.model and brain.is_known_model(saved.model):
         client.model = saved.model
     elif not arguments.model and not settings.model_was_chosen():
         client.model = brains_coding_model(client) or client.model

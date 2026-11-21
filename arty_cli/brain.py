@@ -33,6 +33,10 @@ QUICK_LIST_SECONDS = 5
 MODEL_PREFIX = "arty/"
 OWN_MODEL_PREFIX = "own/"
 AGENT_MODEL_PREFIXES = (MODEL_PREFIX, OWN_MODEL_PREFIX)
+OUTSIDE_PREFIX = "outside/"
+OUTSIDE_MODELS = "/models"
+OUTSIDE_NOT_SET = ("No OpenAI-compatible server is set up for outside/ models. Run `arty-cli login outside` to give "
+                   "its address and key.")
 DOWNLOADED_MODELS = "/models?all=1"
 OFFERED_MODELS = "/models"
 CODING_MARK = "coding"
@@ -59,6 +63,10 @@ SEARCH_SECONDS = 60
 NOT_FOUND = 404
 REFUSED_KEY = 401
 MISSING_MODEL_CODES = (400, 404)
+UNAVAILABLE = 503
+MODEL_UNAVAILABLE = "model_unavailable"
+OFFLINE_MARK = "(offline)"
+BRAIN_OFFLINE_LEAD = "offline · "
 MISSING_MODEL = re.compile(r"isn't downloaded|model\b.*\bnot found|no such model", re.I)
 ERRNO_LEAD = re.compile(r"^\[Errno -?\d+\]\s*")
 
@@ -148,6 +156,7 @@ class Route:
     url: str
     headers: dict
     must_prove: bool = False
+    outside: bool = False
 
 
 def routes(settings) -> list[Route]:
@@ -199,6 +208,41 @@ def proves_identity(url: str, key: str) -> bool:
 
 def is_arty_model(name: str) -> bool:
     return name.startswith(AGENT_MODEL_PREFIXES)
+
+
+def is_outside_model(name: str) -> bool:
+    return name.startswith(OUTSIDE_PREFIX)
+
+
+def is_known_model(name: str) -> bool:
+    return is_arty_model(name) or is_outside_model(name)
+
+
+def outside_label(url: str) -> str:
+    return f"the OpenAI-compatible server at {url}"
+
+
+def outside_model_ids(url: str, key: str, seconds: float = LIST_SECONDS) -> list[str]:
+    return [model for model, _ in outside_model_entries(url, key, seconds)]
+
+
+def outside_model_entries(url: str, key: str, seconds: float = LIST_SECONDS) -> list[tuple[str, bool]]:
+    request = urllib.request.Request(f"{url.rstrip('/')}{OUTSIDE_MODELS}", headers={
+        "Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": f"arty-cli/{__version__}"})
+    try:
+        with urllib.request.urlopen(request, timeout=seconds) as response:
+            listed = json.loads(response.read() or b"{}").get("data") or []
+    except urllib.error.HTTPError as error:
+        if error.code == REFUSED_KEY:
+            raise SetupProblem(f"{outside_label(url)} refused the key. Run `arty-cli login outside` to give it "
+                               "again.") from None
+        raise BrainError(f"{outside_label(url)} couldn't list its models: {error_message(error) or error.code}") from None
+    except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError, AttributeError) as error:
+        raise BrainError(f"Couldn't get the models of {outside_label(url)}: {plain_reason(error)}") from None
+    if not isinstance(listed, list):
+        return []
+    return [(str(entry["id"]), entry.get("available") is not False) for entry in listed
+            if isinstance(entry, dict) and entry.get("id")]
 
 
 def shared_messages(messages: list[dict]) -> list[dict]:
@@ -327,7 +371,7 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
                 on_text(delta["content"])
         for call in delta.get("tool_calls") or []:
             index = call.pop("index", len(calls))
-            calls[index] = call
+            calls[index] = joined_call(calls[index], call) if index in calls else call
     if held:
         on_text(held)
     if not finished:
@@ -336,6 +380,21 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
         raise BrainFault(f"{FAULT_REASON}; the details are in its log")
     reply = {"role": "assistant", "content": "".join(content), "tool_calls": [calls[i] for i in sorted(calls)]}
     return {**reply, "usage": usage} if usage else reply
+
+
+def arty_model_about(entry: dict) -> str:
+    about = str(entry.get("description") or "")
+    if entry.get("available") is not False:
+        return about
+    return f"{about.removeprefix(BRAIN_OFFLINE_LEAD)} {OFFLINE_MARK}".strip()
+
+
+def joined_call(earlier: dict, piece: dict) -> dict:
+    function, more = dict(earlier.get("function") or {}), piece.get("function") or {}
+    function["arguments"] = (function.get("arguments") or "") + (more.get("arguments") or "")
+    if more.get("name") and not function.get("name"):
+        function["name"] = more["name"]
+    return {**{key: value for key, value in piece.items() if value}, **earlier, "function": function}
 
 
 def error_object(error: urllib.error.HTTPError) -> dict:
@@ -419,7 +478,21 @@ class Brain:
         tried = ", ".join(candidate.url for candidate in candidates)
         raise BrainError(f"Can't reach Arty's brain (tried {tried}). Is the server on, and is this computer online?")
 
+    def outside_route(self) -> Route:
+        if not self.settings.has_outside():
+            raise SetupProblem(OUTSIDE_NOT_SET)
+        return Route(self.settings.outside_url.rstrip("/"), {}, outside=True)
+
+    def outside_request(self, route: Route, body: dict) -> urllib.request.Request:
+        headers = {"Authorization": f"Bearer {self.settings.outside_key}", "Content-Type": "application/json",
+                   "Accept": "text/event-stream", "User-Agent": f"arty-cli/{__version__}"}
+        sent = {**body, "model": body["model"].removeprefix(OUTSIDE_PREFIX)}
+        return urllib.request.Request(f"{route.url}/chat/completions", data=json.dumps(sent).encode(), headers=headers,
+                                      method="POST")
+
     def request(self, route: Route, body: dict) -> urllib.request.Request:
+        if route.outside:
+            return self.outside_request(route, body)
         headers = {"Authorization": f"Bearer {self.settings.api_key}", "Content-Type": "application/json",
                    "Accept": "text/event-stream", "User-Agent": f"arty-cli/{__version__}",
                    "X-Arty-Client-Tools": "1", "X-Arty-Agent": "1", "X-Arty-Any-Model": "1", "X-Arty-Skip-Groups": SKIPPED_GROUPS,
@@ -429,11 +502,28 @@ class Brain:
                                       headers=headers, method="POST")
 
     def available_models(self) -> list[tuple[str, str]]:
+        if not self.settings.has_outside():
+            return self.arty_models()
+        arty = []
+        if self.settings.has_arty():
+            try:
+                arty = self.arty_models()
+            except BrainError:
+                arty = []
+        return arty + self.outside_models()
+
+    def outside_models(self) -> list[tuple[str, str]]:
+        url = self.settings.outside_url.rstrip("/")
+        host = urlparse(url).hostname or url
+        return [(f"{OUTSIDE_PREFIX}{model}", f"on {host}" if available else f"on {host} {OFFLINE_MARK}")
+                for model, available in outside_model_entries(url, self.settings.outside_key)]
+
+    def arty_models(self) -> list[tuple[str, str]]:
         entries = {}
         for entry in self.model_entries(DOWNLOADED_MODELS) + self.model_entries(OFFERED_MODELS):
             entries.setdefault(str(entry.get("id", "")), entry)
         marks_coding = any(CODING_MARK in entry for entry in entries.values())
-        return [(model, str(entry.get("description") or "")) for model, entry in entries.items()
+        return [(model, arty_model_about(entry)) for model, entry in entries.items()
                 if is_arty_model(model) and (entry.get(CODING_MARK) is True or not marks_coding)]
 
     def coding_model(self) -> str | None:
@@ -501,6 +591,8 @@ class Brain:
         return self.reported_size(REPLY_MARK)
 
     def reported_size(self, mark: str) -> int | None:
+        if is_outside_model(self.model):
+            return None
         if self.sized_models is None:
             try:
                 self.sized_models = self.model_entries(DOWNLOADED_MODELS, QUICK_LIST_SECONDS)
@@ -519,6 +611,8 @@ class Brain:
             return read_reply(decoded_lines(response), on_text, self.on_thinking)
 
     def answered_once(self, body: dict, on_text) -> dict:
+        if is_outside_model(self.model):
+            return self.outside_answer(body, on_text)
         try:
             route = self.pick_route()
         except BrainError:
@@ -538,6 +632,33 @@ class Brain:
             raise Dropped(f"Lost the connection to Arty's brain at {route.url} ({plain_reason(error)}). "
                           "Is the server still on?", plain_reason(error)) from None
 
+    def outside_answer(self, body: dict, on_text) -> dict:
+        route = self.outside_route()
+        try:
+            return self.streamed_reply(route, body, on_text)
+        except urllib.error.HTTPError as error:
+            if error.code == UNAVAILABLE and error_object(error).get("code") == MODEL_UNAVAILABLE:
+                raise BrainError(f"{self.model} is offline right now on {outside_label(route.url)}. Pick another model "
+                                 "with /model or try again later.") from None
+            raise
+        except TimeoutError:
+            raise BrainError(f"{outside_label(route.url)} stopped answering for {STREAM_IDLE_SECONDS:g} s.") from None
+        except (OSError, http.client.HTTPException) as error:
+            raise Dropped(f"Lost the connection to {outside_label(route.url)} ({plain_reason(error)}).",
+                          plain_reason(error)) from None
+
+    def outside_refusal(self, error: urllib.error.HTTPError) -> BrainError:
+        who = outside_label(self.settings.outside_url.rstrip("/"))
+        detail = str(error_object(error).get("message") or "")
+        if error.code == REFUSED_KEY:
+            return SetupProblem(f"{who} refused the key. Run `arty-cli login outside` to give it again.")
+        if error.code in MISSING_MODEL_CODES and MISSING_MODEL.search(detail):
+            return SetupProblem(f"{who} doesn't have the model {self.model}. /model lists the ones it has.")
+        if error.code in BUSY_CODES:
+            return BrainError(f"{who} is busy or limiting requests right now ({detail or error.code}). "
+                              "Try again in a minute.")
+        return BrainError(f"{who} hit an error: {detail or error.code}")
+
     def reply(self, messages, tools, on_text) -> dict:
         body = {"model": self.model, "messages": shared_messages(messages), "stream": True}
         if tools:
@@ -545,6 +666,8 @@ class Brain:
         try:
             reply = retry.with_retries(lambda: self.answered_once(body, on_text), busy_of)
         except urllib.error.HTTPError as error:
+            if is_outside_model(self.model):
+                raise self.outside_refusal(error) from None
             if error.code == REFUSED_KEY:
                 raise SetupProblem("Arty's brain refused the API key. Run `arty-cli login` to log in again.") from None
             found = error_object(error)
