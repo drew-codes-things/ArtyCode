@@ -11,7 +11,8 @@ CONFIG_NAME = "config.json"
 DEFAULT_MODEL = "arty/qwen3:14b"
 RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
-OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with", "finish_check", "notify")
+OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with", "finish_check", "notify", "outside_url",
+                     "outside_key")
 SWITCHED_ON = ("on", "true", "yes", "1")
 SWITCHED_OFF = ("off", "false", "no", "0")
 TEMPORARY_NAME_BYTES = 8
@@ -23,6 +24,8 @@ ENVIRONMENT_NAMES = {
     "api_key": "ARTY_API_KEY",
     "access_client_id": "ARTY_ACCESS_CLIENT_ID",
     "access_client_secret": "ARTY_ACCESS_CLIENT_SECRET",
+    "outside_url": "ARTY_OUTSIDE_URL",
+    "outside_key": "ARTY_OUTSIDE_KEY",
     "model": "ARTY_CLI_MODEL",
     "context_tokens": "ARTY_CLI_CONTEXT_TOKENS",
     "max_command_seconds": "ARTY_CLI_MAX_COMMAND_SECONDS",
@@ -43,6 +46,8 @@ class Settings:
     api_key: str = ""
     access_client_id: str = ""
     access_client_secret: str = ""
+    outside_url: str = ""
+    outside_key: str = ""
     model: str = DEFAULT_MODEL
     context_tokens: str = ""
     max_command_seconds: str = ""
@@ -51,7 +56,13 @@ class Settings:
     notify: str = ""
 
     def is_ready(self) -> bool:
+        return self.has_arty() or self.has_outside()
+
+    def has_arty(self) -> bool:
         return bool(self.api_key and (self.base_url or self.remote_url))
+
+    def has_outside(self) -> bool:
+        return bool(self.outside_url and self.outside_key)
 
 
 def positive_number(settings: Settings, name: str) -> int | None:

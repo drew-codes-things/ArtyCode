@@ -96,21 +96,22 @@ REMOTE_BRAIN = {"ARTY_REMOTE_URL": "https://arty.example/v1", "ARTY_ACCESS_CLIEN
                 "ARTY_ACCESS_CLIENT_SECRET": "cf-secret"}
 
 
-def test_login_offers_exactly_an_api_key_or_a_browser_login(monkeypatch, tmp_path, capsys):
+def test_login_offers_an_api_key_a_browser_login_or_another_server(monkeypatch, tmp_path, capsys):
     asked = login_with(monkeypatch, tmp_path, ["1"], ["app-key"], **HOME_BRAIN)
     shown = capsys.readouterr().err
-    assert "1. API key" in shown and "2. Browser login" in shown and "3." not in shown
-    assert asked[0] == "Choose 1-2: "
+    assert "1. API key" in shown and "2. Browser login" in shown and "3. Another OpenAI-compatible server" in shown
+    assert "4." not in shown
+    assert asked[0] == "Choose 1-3: "
 
 
-def test_a_choice_other_than_the_two_is_asked_again(monkeypatch, tmp_path):
-    login_with(monkeypatch, tmp_path, ["3", "0", "1"], ["app-key"], **HOME_BRAIN)
+def test_a_choice_other_than_the_three_is_asked_again(monkeypatch, tmp_path):
+    login_with(monkeypatch, tmp_path, ["4", "0", "1"], ["app-key"], **HOME_BRAIN)
     assert settings.Settings(**settings.read_file(settings.config_path())).api_key == "app-key"
 
 
 def test_login_with_an_api_key_asks_for_the_key_and_nothing_else(monkeypatch, tmp_path, capsys):
     asked = login_with(monkeypatch, tmp_path, ["1"], ["app-key"], **HOME_BRAIN)
-    assert asked == ["Choose 1-2: ", "Arty API key: "]
+    assert asked == ["Choose 1-3: ", "Arty API key: "]
     shown = capsys.readouterr().err.lower()
     assert "address" not in shown and "cloudflare" not in shown
 
@@ -122,7 +123,7 @@ def test_browser_login_asks_nothing_after_the_choice(monkeypatch, tmp_path, caps
     monkeypatch.setattr(login_flow.authorise, "wait_for_key", lambda url, headers, started: "approved-key")
     monkeypatch.setattr(login_flow.webbrowser, "open", lambda url: opened.append(url) or True)
     asked = login_with(monkeypatch, tmp_path, ["2"], [], **REMOTE_BRAIN)
-    assert asked == ["Choose 1-2: "]
+    assert asked == ["Choose 1-3: "]
     assert settings.Settings(**settings.read_file(settings.config_path())).api_key == "approved-key"
     assert waited == [("https://arty.example/v1", {"CF-Access-Client-Id": "cf-id", "CF-Access-Client-Secret": "cf-secret"})]
     assert opened == [request.verify_url]
@@ -135,7 +136,7 @@ def test_a_saved_address_is_used_without_asking(monkeypatch, tmp_path):
     settings.save(settings.Settings(base_url="http://brain.lan:8081/v1"))
     asked = login_with(monkeypatch, tmp_path, ["1"], ["app-key"])
     saved = settings.load()
-    assert asked == ["Choose 1-2: ", "Arty API key: "]
+    assert asked == ["Choose 1-3: ", "Arty API key: "]
     assert (saved.base_url, saved.api_key) == ("http://brain.lan:8081/v1", "app-key")
 
 
@@ -172,7 +173,7 @@ def test_a_first_run_without_an_address_says_it_once(monkeypatch, tmp_path, caps
     assert cli.main([]) == cli.NOT_SET_UP
     shown = capsys.readouterr().err
     assert "ARTY_URL" in shown
-    assert shown.count("arty-cli login") == 1
+    assert shown.count(login_flow.NO_ADDRESS) == 1 and shown.count(login_flow.OUTSIDE_HINT) == 1
     assert "isn't logged in" not in shown
 
 

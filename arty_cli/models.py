@@ -2,7 +2,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from arty_cli import brain
+from arty_cli import brain, view
 
 STALE_SECONDS = 60
 WAIT_POLL_SECONDS = 0.02
@@ -36,12 +36,17 @@ class Choices:
 
 
 def listed_for(client, current_model: str = "") -> list[Choice]:
-    found = [Choice(model, about) for model, about in client.available_models()]
+    cleaned = [Choice(one_line(model), one_line(about)) for model, about in client.available_models()]
+    found = [choice for choice in cleaned if choice.model]
     if not found:
         raise brain.BrainError(NO_MODELS)
     if current_model and all(choice.model != current_model for choice in found):
         found.insert(0, Choice(current_model, "current"))
     return found
+
+
+def one_line(text) -> str:
+    return " ".join(view.readable(str(text)).split())
 
 
 def described(choice: Choice) -> str:

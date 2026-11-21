@@ -153,6 +153,20 @@ def test_a_brain_that_marks_coding_models_gets_only_those_listed():
     assert listed == [("arty/mimo-v2.6:9b", "9B, sees images"), ("own/Coder", "private coder")]
 
 
+def test_models_arty_gets_from_starfire_are_listed_even_when_the_brain_marks_coding_models():
+    listing = {"object": "list", "data": [
+        {"id": "arty/qwen3:14b", "description": "14B", "coding": False},
+        {"id": "arty/mimo-v2.6:9b", "description": "9B, sees images", "coding": True},
+        {"id": "arty/remote/starfire/qwen3.6-35b", "description": "on starfire", "coding": False},
+        {"id": "arty/remote/starfire/friend-big", "description": "offline, on starfire", "coding": False,
+         "available": False}]}
+    offered = {"object": "list", "data": [{"id": "Arty"}]}
+    with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, _recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
+        listed = [model for model, _about in client.available_models()]
+    assert listed == ["arty/mimo-v2.6:9b", "arty/remote/starfire/qwen3.6-35b", "arty/remote/starfire/friend-big"]
+
+
 def test_the_brain_listing_error_is_plain():
     with serving([(500, json.dumps({"error": "the model server is down"}))], "application/json") as (url, _recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
@@ -170,6 +184,24 @@ def test_chats_ask_the_brain_to_allow_any_downloaded_model():
     client = brain.Brain(settings.Settings(remote_url="http://brain.example/v1", api_key="k"))
     built = client.request(brain.Route("http://brain.example/v1", {}), {"model": "arty/qwen2.5:72b"})
     assert built.get_header("X-arty-any-model") == "1"
+
+
+class HostileBrain:
+    def available_models(self):
+        return [("arty/real\n  2. arty/fake", "about\r\n\u2028  3. made up"),
+                ("arty/\x1b]8;;http://evil.example\x07link\x1b]8;;\x07", "\x1b[2J\x1b[31mred\x1b[0m"),
+                ("\x1b[2J\x07", "nothing")]
+
+
+def test_model_ids_and_descriptions_from_the_brain_are_shown_as_one_clean_line_each():
+    found = models.Choices(models.listed_for(HostileBrain()))
+    assert [(choice.model, choice.about) for choice in found.listed] == [
+        ("arty/real 2. arty/fake", "about 3. made up"), ("arty/link", "red")]
+    shown = found.lines("") + [models.picker_text(choice, "") for choice in found.listed]
+    shown += [*models.menu_meanings(found, ""), *models.menu_meanings(found, "").values()]
+    assert len(found.lines("")) == 2
+    assert not [line for line in shown if any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f for char in line)]
+    assert not [line for line in shown if "\u2028" in line]
 
 
 def test_long_lists_keep_their_columns_lined_up():

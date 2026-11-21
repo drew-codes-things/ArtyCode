@@ -14,6 +14,11 @@ NO_ADDRESS = ("ArtyCode doesn't know where your Arty brain is yet, so nothing wa
 HOME_ADDRESS = "http://<brain address>:8081/v1"
 ANYWHERE_ADDRESS = "https://<your address>/v1"
 ACCESS_NOTE = "with ARTY_ACCESS_CLIENT_ID and ARTY_ACCESS_CLIENT_SECRET too if Cloudflare Access guards it"
+OUTSIDE_HINT = ("To use another OpenAI-compatible server instead (an address and a key, such as an app key), run "
+                "arty-cli login outside.")
+OUTSIDE_ADDRESS_PROMPT = "OpenAI-compatible address (such as https://models.example.com/v1): "
+OUTSIDE_KEY_PROMPT = "Key for that server: "
+WEB_SCHEMES = ("http", "https")
 
 
 def address_help(windows: bool) -> str:
@@ -61,9 +66,49 @@ def arty_by_authorising(terminal: Terminal, current: settings.Settings) -> str:
     return authorise.wait_for_key(route.url, route.headers, request)
 
 
+def outside_address_problem(address: str) -> str:
+    parsed = urlparse(address)
+    if parsed.scheme not in WEB_SCHEMES or not parsed.hostname:
+        return "The address should start with http:// or https:// and name a server."
+    if parsed.username or parsed.password or parsed.query:
+        return "Give the plain address, with no user, password or query in it."
+    if parsed.scheme == "http" and reaches_the_internet(address):
+        return f"{address} is a public address over plain http, so the key could be read on the way. Use https."
+    return ""
+
+
+def outside_server(terminal: Terminal) -> int:
+    current = settings.load()
+    address = input(OUTSIDE_ADDRESS_PROMPT).strip().rstrip("/")
+    problem = outside_address_problem(address)
+    if problem:
+        terminal.note(f"{problem} Nothing was saved.", "error")
+        return FAILED
+    key = getpass.getpass(OUTSIDE_KEY_PROMPT).strip()
+    if not key:
+        terminal.note("No key was given. Nothing was saved.", "error")
+        return FAILED
+    try:
+        listed = brain.outside_model_ids(address, key)
+    except brain.BrainError as error:
+        terminal.note(f"{error} Nothing was saved.", "error")
+        return FAILED
+    if not listed:
+        terminal.note(f"{brain.outside_label(address)} listed no models. Nothing was saved.", "error")
+        return FAILED
+    changes = {"outside_url": address, "outside_key": key}
+    if not current.has_arty():
+        changes["model"] = f"{brain.OUTSIDE_PREFIX}{listed[0]}"
+    saved = settings.remember(**changes)
+    names = ", ".join(f"{brain.OUTSIDE_PREFIX}{model}" for model in listed)
+    terminal.note(f"Saved to {saved}. Its models: {names}. Pick one with /model.", "green")
+    return 0
+
+
 LOGIN_CHOICES = (
     ("API key (paste a key made in Arty)", arty_with_key),
     ("Browser login (opens Arty in your browser to approve this computer)", arty_by_authorising),
+    ("Another OpenAI-compatible server (its URL and a key, such as an app key)", outside_server),
 )
 
 
@@ -84,8 +129,11 @@ def login(terminal: Terminal) -> int:
         terminal.note(first, "error")
         for line in rest:
             terminal.note(line, "reset")
+        terminal.note(OUTSIDE_HINT, "reset")
         return FAILED
     handler = chosen_login(terminal)
+    if handler is outside_server:
+        return outside_server(terminal)
     try:
         key = handler(terminal, current)
     except authorise.AuthoriseError as error:
