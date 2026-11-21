@@ -186,6 +186,24 @@ def test_chats_ask_the_brain_to_allow_any_downloaded_model():
     assert built.get_header("X-arty-any-model") == "1"
 
 
+class HostileBrain:
+    def available_models(self):
+        return [("arty/real\n  2. arty/fake", "about\r\n\u2028  3. made up"),
+                ("arty/\x1b]8;;http://evil.example\x07link\x1b]8;;\x07", "\x1b[2J\x1b[31mred\x1b[0m"),
+                ("\x1b[2J\x07", "nothing")]
+
+
+def test_model_ids_and_descriptions_from_the_brain_are_shown_as_one_clean_line_each():
+    found = models.Choices(models.listed_for(HostileBrain()))
+    assert [(choice.model, choice.about) for choice in found.listed] == [
+        ("arty/real 2. arty/fake", "about 3. made up"), ("arty/link", "red")]
+    shown = found.lines("") + [models.picker_text(choice, "") for choice in found.listed]
+    shown += [*models.menu_meanings(found, ""), *models.menu_meanings(found, "").values()]
+    assert len(found.lines("")) == 2
+    assert not [line for line in shown if any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f for char in line)]
+    assert not [line for line in shown if "\u2028" in line]
+
+
 def test_long_lists_keep_their_columns_lined_up():
     found = models.Choices([models.Choice(f"arty/m{n}", "") for n in range(12)])
     shown = found.lines("arty/m0")
