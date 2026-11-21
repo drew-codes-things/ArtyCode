@@ -153,6 +153,20 @@ def test_a_brain_that_marks_coding_models_gets_only_those_listed():
     assert listed == [("arty/mimo-v2.6:9b", "9B, sees images"), ("own/Coder", "private coder")]
 
 
+def test_models_arty_gets_from_starfire_are_listed_even_when_the_brain_marks_coding_models():
+    listing = {"object": "list", "data": [
+        {"id": "arty/qwen3:14b", "description": "14B", "coding": False},
+        {"id": "arty/mimo-v2.6:9b", "description": "9B, sees images", "coding": True},
+        {"id": "arty/remote/starfire/qwen3.6-35b", "description": "on starfire", "coding": False},
+        {"id": "arty/remote/starfire/friend-big", "description": "offline, on starfire", "coding": False,
+         "available": False}]}
+    offered = {"object": "list", "data": [{"id": "Arty"}]}
+    with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, _recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
+        listed = [model for model, _about in client.available_models()]
+    assert listed == ["arty/mimo-v2.6:9b", "arty/remote/starfire/qwen3.6-35b", "arty/remote/starfire/friend-big"]
+
+
 def test_the_brain_listing_error_is_plain():
     with serving([(500, json.dumps({"error": "the model server is down"}))], "application/json") as (url, _recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))

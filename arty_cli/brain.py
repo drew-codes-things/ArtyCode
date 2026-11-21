@@ -33,6 +33,7 @@ QUICK_LIST_SECONDS = 5
 MODEL_PREFIX = "arty/"
 OWN_MODEL_PREFIX = "own/"
 AGENT_MODEL_PREFIXES = (MODEL_PREFIX, OWN_MODEL_PREFIX)
+REMOTE_MODEL_PREFIX = MODEL_PREFIX + "remote/"
 OUTSIDE_PREFIX = "outside/"
 OUTSIDE_MODELS = "/models"
 OUTSIDE_NOT_SET = ("No OpenAI-compatible server is set up for outside/ models. Run `arty-cli login outside` to give "
@@ -524,7 +525,8 @@ class Brain:
             entries.setdefault(str(entry.get("id", "")), entry)
         marks_coding = any(CODING_MARK in entry for entry in entries.values())
         return [(model, arty_model_about(entry)) for model, entry in entries.items()
-                if is_arty_model(model) and (entry.get(CODING_MARK) is True or not marks_coding)]
+                if is_arty_model(model) and (entry.get(CODING_MARK) is True or not marks_coding
+                                             or model.startswith(REMOTE_MODEL_PREFIX))]
 
     def coding_model(self) -> str | None:
         try:
