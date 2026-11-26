@@ -12,7 +12,7 @@ DEFAULT_MODEL = "arty/qwen3:14b"
 RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
 OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with", "finish_check", "notify", "outside_url",
-                     "outside_key")
+                     "outside_key", "update_notice", "skipped_update")
 SWITCHED_ON = ("on", "true", "yes", "1")
 SWITCHED_OFF = ("off", "false", "no", "0")
 TEMPORARY_NAME_BYTES = 8
@@ -32,6 +32,7 @@ ENVIRONMENT_NAMES = {
     "search_with": "ARTY_CLI_SEARCH_WITH",
     "finish_check": "ARTY_CLI_FINISH_CHECK",
     "notify": "ARTY_CLI_NOTIFY",
+    "update_notice": "ARTY_CLI_UPDATE_NOTICE",
 }
 
 
@@ -54,6 +55,8 @@ class Settings:
     search_with: str = ""
     finish_check: str = ""
     notify: str = ""
+    update_notice: str = ""
+    skipped_update: str = ""
 
     def is_ready(self) -> bool:
         return self.has_arty() or self.has_outside()

@@ -43,3 +43,14 @@ def retries_wait_in_pretend_time(monkeypatch):
     monkeypatch.setattr(retry, "clock", pretend.clock, raising=False)
     monkeypatch.setattr(retry, "sleep", pretend.sleep)
     return pretend
+
+
+def no_network_in_tests(*_arguments, **_options):
+    raise OSError("tests never check GitHub for a newer version")
+
+
+@pytest.fixture(autouse=True)
+def update_checks_stay_offline(monkeypatch):
+    from arty_cli import update
+    monkeypatch.setenv("ARTY_CLI_UPDATE_NOTICE", "off")
+    monkeypatch.setattr(update, "read_release", no_network_in_tests)

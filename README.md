@@ -82,7 +82,9 @@ With [pipx](https://pipx.pypa.io) instead: `pipx install .`
 computer's key, the models, web search, the sandbox tool, a browser for screenshots, git and the terminal. It never
 prints the key or any other secret. `arty update` updates a clean git checkout in place, or prints the one command
 to run for any other install; `arty update --check` only reports whether a newer version is out. Neither ever uses
-sudo. More in [Checking the setup and updating](docs/checking-and-updating.md).
+sudo. When a newer release is out, the chat says so in one line at the start; `arty update --skip` hides that line
+for that version and `update_notice` set to `off` (or `ARTY_CLI_UPDATE_NOTICE=off`) stops the check. More in
+[Checking the setup and updating](docs/checking-and-updating.md).
 
 ## Logging in
 

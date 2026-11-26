@@ -1,10 +1,16 @@
+import http.client
 import io
+import json
+import logging
+import os
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
 
-from arty_cli import __version__, update
+from arty_cli import __version__, settings, update
+from arty_cli.update import read_release as real_read_release
 
 OLD, NEW = "a" * 40, "b" * 40
 
@@ -171,4 +177,182 @@ def test_versions_compare_by_number_not_by_text():
 def test_unknown_options_are_refused_with_the_usage():
     out = io.StringIO()
     assert update.main(["--force"], out=out, world=update.World(package_dir=Path("/x/arty_cli"))) == 2
-    assert "arty update [--check]" in out.getvalue()
+    assert "arty update [--check | --skip]" in out.getvalue()
+
+
+DAY = 24 * 60 * 60
+NEWER, OLDER = "99.0.0", "0.0.1"
+
+
+def release_answer(tag: str) -> str:
+    return json.dumps({"tag_name": tag, "html_url": "https://example.test/elsewhere", "body": "notes"})
+
+
+class Answer:
+    def __init__(self, body: bytes):
+        self.body = body
+        self.asked_for = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_details):
+        return False
+
+    def read(self, most: int) -> bytes:
+        self.asked_for = most
+        return self.body[:most]
+
+
+class Opener:
+    def __init__(self, body: bytes = b"{}"):
+        self.answer = Answer(body)
+        self.requests = []
+
+    def __call__(self, request, timeout):
+        self.requests.append((request, timeout))
+        return self.answer
+
+
+class Reads:
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.count = 0
+
+    def __call__(self):
+        self.count += 1
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+@pytest.mark.parametrize("tag, version", [("v1.4.0", "1.4.0"), ("1.2", "1.2"), ("desktop-v2.0.1", "2.0.1")])
+def test_the_released_version_is_read_from_the_tag_with_or_without_a_prefix(tag, version):
+    assert update.released_version(release_answer(tag)) == version
+
+
+@pytest.mark.parametrize("text", ["not json", "[]", '{"tag_name": 5}', '{"name": "v1.0"}', '{"tag_name": "latest"}'])
+def test_a_release_answer_without_a_usable_version_is_refused(text):
+    with pytest.raises(ValueError):
+        update.released_version(text)
+
+
+def test_the_release_check_asks_github_once_over_https_with_a_short_timeout_and_no_user_data():
+    opener = Opener(release_answer("v1.4.0").encode())
+    assert update.released_version(real_read_release(opener=opener)) == "1.4.0"
+    [(request, timeout)] = opener.requests
+    assert request.full_url == "https://api.github.com/repos/drew-codes-things/ArtyCode/releases/latest"
+    assert timeout == 5
+    assert dict(request.header_items()) == {"User-agent": f"ArtyCode/{__version__}",
+                                             "Accept": "application/vnd.github+json"}
+    assert request.data is None
+
+
+def test_the_release_check_refuses_plain_http():
+    opener = Opener()
+    with pytest.raises(ValueError, match="https"):
+        real_read_release("http://api.github.com/repos/drew-codes-things/ArtyCode/releases/latest", opener=opener)
+    assert opener.requests == []
+
+
+def test_a_release_answer_over_256_kb_is_refused_without_reading_the_rest():
+    opener = Opener(b"x" * (300 * 1024))
+    with pytest.raises(ValueError, match="larger"):
+        real_read_release(opener=opener)
+    assert opener.answer.asked_for == 256 * 1024 + 1
+
+
+def test_a_newer_release_gives_a_one_line_notice_with_the_release_page(tmp_path):
+    line = update.startup_notice(tmp_path / "state.json", "", Reads(release_answer(f"v{NEWER}")), lambda: 1000.0)
+    assert line.startswith(f"Version {NEWER} is available: https://github.com/drew-codes-things/ArtyCode/releases/latest")
+    assert "arty update --skip" in line and "\n" not in line and "\u2014" not in line
+
+
+@pytest.mark.parametrize("tag", [f"v{__version__}", f"v{OLDER}"])
+def test_no_notice_when_this_version_is_the_newest(tmp_path, tag):
+    assert update.startup_notice(tmp_path / "state.json", "", Reads(release_answer(tag)), lambda: 1000.0) == ""
+
+
+def test_a_skipped_version_shows_no_notice_but_a_later_one_does(tmp_path):
+    later = "100.0.0"
+    reads = Reads(release_answer(f"v{NEWER}"), release_answer(f"v{later}"))
+    assert update.startup_notice(tmp_path / "state.json", NEWER, reads, lambda: 1000.0) == ""
+    assert later in update.startup_notice(tmp_path / "state.json", NEWER, reads, lambda: 1000.0 + DAY)
+
+
+def test_github_is_asked_at_most_once_a_day_and_the_answer_is_remembered(tmp_path):
+    state = tmp_path / "config" / "state.json"
+    reads = Reads(release_answer(f"v{NEWER}"), release_answer(f"v{OLDER}"))
+    assert NEWER in update.startup_notice(state, "", reads, lambda: 1000.0)
+    assert NEWER in update.startup_notice(state, "", reads, lambda: 1000.0 + DAY - 1)
+    assert reads.count == 1
+    assert json.loads(state.read_text()) == {"checked_at": 1000.0, "latest": NEWER}
+    if os.name == "posix":
+        assert state.stat().st_mode & 0o777 == 0o600
+    assert update.startup_notice(state, "", reads, lambda: 1000.0 + DAY) == ""
+    assert reads.count == 2
+
+
+@pytest.mark.parametrize("failure", [OSError("offline"), TimeoutError("timed out"), ValueError("bad json"),
+                                     http.client.IncompleteRead(b"")])
+def test_a_failed_check_shows_nothing_logs_one_line_and_is_tried_again_next_start(tmp_path, caplog, failure):
+    state = tmp_path / "state.json"
+    reads = Reads(failure, release_answer(f"v{NEWER}"))
+    with caplog.at_level(logging.INFO, logger="arty_cli.update"):
+        assert update.startup_notice(state, "", reads, lambda: 1000.0) == ""
+    assert len(caplog.records) == 1 and caplog.records[0].levelno == logging.INFO
+    assert not state.exists()
+    assert NEWER in update.startup_notice(state, "", reads, lambda: 1001.0)
+
+
+def test_a_damaged_state_file_means_checking_again(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text('{"checked_at": "soon", "latest": 7}')
+    reads = Reads(release_answer(f"v{NEWER}"))
+    assert NEWER in update.startup_notice(state, "", reads, lambda: 1000.0)
+    assert reads.count == 1
+
+
+def test_a_state_that_cannot_be_saved_still_shows_the_notice(tmp_path, caplog):
+    blocked = tmp_path / "file"
+    blocked.write_text("")
+    with caplog.at_level(logging.INFO, logger="arty_cli.update"):
+        line = update.startup_notice(blocked / "state.json", "", Reads(release_answer(f"v{NEWER}")), lambda: 1.0)
+    assert NEWER in line and len(caplog.records) == 1
+
+
+def test_the_startup_notice_is_found_in_the_background_and_shown_once():
+    release = threading.Event()
+
+    def find():
+        release.wait(5)
+        return "Version 9 is available"
+
+    notice = update.StartupNotice(find).start()
+    assert notice.take() == ""
+    release.set()
+    assert notice.take(5) == "Version 9 is available"
+    assert notice.take(5) == ""
+
+
+def skip_world(tmp_path):
+    return update.World(package_dir=Path("/x/arty_cli"), config_folder=tmp_path)
+
+
+def test_skip_hides_the_notice_for_the_newest_version_seen(tmp_path):
+    (tmp_path / update.NOTICE_STATE_NAME).write_text(json.dumps({"checked_at": 1.0, "latest": NEWER}))
+    code, shown = updated(skip_world(tmp_path), "--skip")
+    assert code == 0 and f"version {NEWER} won't show again" in shown
+    assert settings.load(tmp_path / settings.CONFIG_NAME, {}).skipped_update == NEWER
+
+
+def test_skip_with_no_newer_version_seen_changes_nothing(tmp_path):
+    code, shown = updated(skip_world(tmp_path), "--skip")
+    assert code == 0 and "no notice to hide" in shown
+    assert not (tmp_path / settings.CONFIG_NAME).exists()
+
+
+def test_check_and_skip_together_are_refused_with_the_usage(tmp_path):
+    code, shown = updated(skip_world(tmp_path), "--check", "--skip")
+    assert code == 2 and "arty update [--check | --skip]" in shown

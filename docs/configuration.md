@@ -10,7 +10,8 @@ as `context_tokens` and `max_command_seconds` in the file or `ARTY_CLI_CONTEXT_T
 `ARTY_CLI_MAX_COMMAND_SECONDS`: the model's context window (unless set, the size the brain's model list reports for the model in use, else the smallest it lists, or 12288 tokens for a brain that doesn't say) and the
 longest one command may run (1800 seconds unless set). Anything but a whole number above 0 stops ArtyCode at the start
 with a message saying where to fix it. `notify` (or `ARTY_CLI_NOTIFY`) set to `off` stops the bell and desktop notice
-of the terminal interface; they are on unless set.
+of the terminal interface; they are on unless set. `update_notice` (or `ARTY_CLI_UPDATE_NOTICE`) set to `off` stops
+the [check for a newer release](checking-and-updating.md) at the start of a chat; it is on unless set.
 
 When something goes wrong the message says what to do next. A refused key says to run `arty-cli login` again; a
 model the brain doesn't have says so and points at `/model` (or `--model` for one run); neither suggests waiting.

@@ -18,7 +18,7 @@ from arty_cli import rules
 from arty_cli import (__version__, brain, commands, context, helpers, hooks, lint, mcp, mcp_sign_in, memory,
                       permissions, prompt_line, providers, remote, repomap, sandbox, screen, sessions, settings,
                       sign_ins, skills, tools, websearch, wrap)
-from arty_cli import upkeep
+from arty_cli import update, upkeep
 from arty_cli import look, notify, view
 from arty_cli.chat_session import SESSIONS_FOLDER, Session
 from arty_cli.conversation import HELP_MARK, NOTE_MARK, RESUME, SHELL_MARK, STARTUP
@@ -45,6 +45,7 @@ BRANCH_CHECK_SECONDS = 5.0
 TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT = "text", "json", "stream-json"
 OUTPUT_FORMATS = (TEXT_OUTPUT, JSON_OUTPUT, STREAM_JSON_OUTPUT)
 REMOTE_ONLY_IN_CHAT = "--remote works in the chat, not with a single question."
+NOTICE_GRACE_SECONDS = 1.0
 
 
 def parse_arguments(argv):
@@ -237,7 +238,7 @@ def started_interface(session: Session):
     return interface
 
 
-def chat_in_interface(session: Session, interface, share: bool) -> None:
+def chat_in_interface(session: Session, interface, share: bool, notice: update.StartupNotice | None = None) -> None:
     terminal = session.terminal
     before = (terminal.out, terminal.err, sys.stdout, sys.stderr)
     terminal.out = terminal.err = interface.scroll
@@ -250,13 +251,14 @@ def chat_in_interface(session: Session, interface, share: bool) -> None:
         terminal.view.partial = getattr(interface, "show_partial", None)
         terminal.measure = host.measure
         welcome_header(session, host.theme, interface.show_block)
+        show_update_notice(session, notice, NOTICE_GRACE_SECONDS)
         host.measure()
         if hasattr(interface, "refresh_menu"):
             session.listing.when_loaded(interface.refresh_menu)
         session.prefetch_models()
         if share:
             session.start_remote()
-        talk_in_interface(session, interface)
+        talk_in_interface(session, interface, notice)
     finally:
         if session.remote:
             session.stop_remote()
@@ -277,8 +279,9 @@ def interface_notifier(session: Session, interface) -> notify.Notifier | None:
     return notify.Notifier(ring)
 
 
-def talk_in_interface(session: Session, interface) -> None:
+def talk_in_interface(session: Session, interface, notice: update.StartupNotice | None = None) -> None:
     while True:
+        show_update_notice(session, notice)
         try:
             with interface.working():
                 session.run_remote_requests()
@@ -302,26 +305,43 @@ def talk_in_interface(session: Session, interface) -> None:
             return
 
 
-def chat(session: Session, share: bool = False, plain: bool = False) -> None:
+def show_update_notice(session: Session, notice: update.StartupNotice | None, wait_seconds: float = 0.0) -> None:
+    line = notice.take(wait_seconds) if notice is not None else ""
+    if line:
+        session.terminal.note(line, "accent")
+
+
+def started_update_notice(config: settings.Settings) -> update.StartupNotice | None:
+    if not settings.is_on(config, "update_notice"):
+        return None
+    state_path = settings.config_dir() / update.NOTICE_STATE_NAME
+    return update.StartupNotice(
+        lambda: update.startup_notice(state_path, config.skipped_update, update.read_release)).start()
+
+
+def chat(session: Session, share: bool = False, plain: bool = False,
+         notice: update.StartupNotice | None = None) -> None:
     interface = None if plain else started_interface(session)
     if interface is not None:
-        chat_in_interface(session, interface, share)
+        chat_in_interface(session, interface, share, notice)
         return
     welcome(session)
+    show_update_notice(session, notice, NOTICE_GRACE_SECONDS)
     reader = prompt_line.line_reader(screen.is_interactive, session.slash_choices, session.model_choices)
     if reader is not None:
         session.prefetch_models()
     if share:
         session.start_remote()
     try:
-        talk(session, reader)
+        talk(session, reader, notice)
     finally:
         if session.remote:
             session.stop_remote()
 
 
-def talk(session: Session, reader) -> None:
+def talk(session: Session, reader, notice: update.StartupNotice | None = None) -> None:
     while True:
+        show_update_notice(session, notice)
         try:
             session.run_remote_requests()
             with session.running(remote.AT_PROMPT):
@@ -408,6 +428,7 @@ def main_session(arguments) -> int:
         workspace = tools.Workspace(arguments.project or Path.cwd())
         workspace.max_command_seconds = settings.positive_number(config, "max_command_seconds") or tools.MAX_COMMAND_SECONDS
         workspace.finish_check = finish.FinishCheck(enabled=settings.is_on(config, "finish_check"))
+        settings.is_on(config, "update_notice")
         try:
             return run_session(arguments, config, workspace, terminal)
         finally:
@@ -470,7 +491,7 @@ def run_session(arguments, config, workspace, terminal: Terminal) -> int:
         if once:
             return 0 if handle(session, once) is not False and session.messages[-1]["role"] == "assistant" else FAILED
         try:
-            chat(session, share=arguments.remote, plain=arguments.plain)
+            chat(session, share=arguments.remote, plain=arguments.plain, notice=started_update_notice(config))
         finally:
             say_how_to_resume(session)
         return 0

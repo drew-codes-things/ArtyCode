@@ -1,25 +1,39 @@
+import http.client
+import json
+import logging
 import re
 import subprocess
 import sys
+import threading
+import time
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from arty_cli import __version__
+from arty_cli import __version__, settings
 
 PROJECT_URL = "https://github.com/drew-codes-things/ArtyCode"
 ARCHIVE_URL = f"{PROJECT_URL}/archive/refs/heads/main.tar.gz"
 VERSION_URL = "https://raw.githubusercontent.com/drew-codes-things/ArtyCode/main/arty_cli/__init__.py"
+LATEST_RELEASE_URL = "https://api.github.com/repos/drew-codes-things/ArtyCode/releases/latest"
+RELEASES_PAGE = f"{PROJECT_URL}/releases/latest"
 VERSION_FILE = "arty_cli/__init__.py"
 INSTALL_MARKER = ".arty-cli-install"
 CLONE, INSTALLER, PIPX, PIP = "git checkout", "installer", "pipx", "pip"
 FALLBACK_BRANCH = "origin/main"
-CHECK = "--check"
-USAGE = "Use: arty update [--check]"
+CHECK, SKIP = "--check", "--skip"
+USAGE = "Use: arty update [--check | --skip]"
 EXIT_GOOD, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 VERSION_LINE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
 VERSION_NUMBER = re.compile(r"\d+(?:\.\d+)*")
+SECURE_SCHEME = "https://"
+NOTICE_SECONDS = 5
+MOST_RELEASE_BYTES = 256 * 1024
+CHECK_EVERY_SECONDS = 24 * 60 * 60
+NOTICE_STATE_NAME = "update-check.json"
+NOTICE_ERRORS = (OSError, ValueError, http.client.HTTPException)
+log = logging.getLogger(__name__)
 READ_SECONDS = 15
 GIT_SECONDS = 120
 INSTALL_SECONDS = 600
@@ -40,6 +54,7 @@ class World:
     run: Callable = subprocess.run
     read_url: Callable = read_text
     platform: str = sys.platform
+    config_folder: Path = field(default_factory=settings.config_dir)
 
 
 class UpdateStopped(Exception):
@@ -68,6 +83,99 @@ def numbers(version: str) -> tuple[int, ...]:
 
 def is_newer(latest: str, current: str) -> bool:
     return bool(numbers(latest)) and numbers(latest) > numbers(current)
+
+
+def read_release(url: str = LATEST_RELEASE_URL, opener: Callable = urllib.request.urlopen) -> str:
+    if not url.startswith(SECURE_SCHEME):
+        raise ValueError(f"refusing to check {url}: only https is used")
+    request = urllib.request.Request(url, headers={"User-Agent": f"ArtyCode/{__version__}",
+                                                   "Accept": "application/vnd.github+json"})
+    with opener(request, timeout=NOTICE_SECONDS) as response:
+        body = response.read(MOST_RELEASE_BYTES + 1)
+    if len(body) > MOST_RELEASE_BYTES:
+        raise ValueError(f"the release answer is larger than {MOST_RELEASE_BYTES} bytes")
+    return body.decode("utf-8", errors="replace")
+
+
+def released_version(text: str) -> str:
+    answer = json.loads(text)
+    tag = answer.get("tag_name") if isinstance(answer, dict) else None
+    found = VERSION_NUMBER.search(tag) if isinstance(tag, str) else None
+    if not found:
+        raise ValueError("the latest release has no version in its tag")
+    return found.group(0)
+
+
+def read_notice_state(path: Path) -> dict:
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return stored if isinstance(stored, dict) else {}
+
+
+def is_check_due(state: dict, now: float) -> bool:
+    checked_at = state.get("checked_at")
+    if not isinstance(checked_at, (int, float)):
+        return True
+    return not 0 <= now - checked_at < CHECK_EVERY_SECONDS
+
+
+def remembered_latest(state: dict) -> str:
+    latest = state.get("latest")
+    return latest if isinstance(latest, str) else ""
+
+
+def notice_line(latest: str, skipped: str, current: str = __version__) -> str:
+    if not latest or latest == skipped or not is_newer(latest, current):
+        return ""
+    return (f"Version {latest} is available: {RELEASES_PAGE} (run `arty update` to get it, "
+            f"or `arty update --skip` to hide this for {latest})")
+
+
+def startup_notice(state_path: Path, skipped: str, read: Callable = read_release, now: Callable = time.time) -> str:
+    state = read_notice_state(state_path)
+    latest = remembered_latest(state)
+    if is_check_due(state, now()):
+        try:
+            latest = released_version(read())
+        except NOTICE_ERRORS as error:
+            log.info("Couldn't check for a newer ArtyCode: %s", error)
+            return ""
+        remember_check(state_path, latest, now())
+    return notice_line(latest, skipped)
+
+
+def remember_check(state_path: Path, latest: str, moment: float) -> None:
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_private_json(state_path, {"checked_at": moment, "latest": latest})
+    except OSError as error:
+        log.info("Couldn't save the update check in %s: %s", state_path, error)
+
+
+class StartupNotice:
+    def __init__(self, find: Callable[[], str]):
+        self.find = find
+        self.found = ""
+        self.ready = threading.Event()
+        self.shown = False
+
+    def start(self) -> "StartupNotice":
+        threading.Thread(target=self.look, daemon=True).start()
+        return self
+
+    def look(self) -> None:
+        try:
+            self.found = self.find()
+        finally:
+            self.ready.set()
+
+    def take(self, wait_seconds: float = 0.0) -> str:
+        if self.shown or not self.ready.wait(wait_seconds):
+            return ""
+        self.shown = True
+        return self.found
 
 
 def upgrade_command(kind: str, world: World) -> str:
@@ -169,12 +277,28 @@ def steps(world: World, kind: str, only_check: bool) -> list[str]:
     return ["ArtyCode doesn't change this kind of install itself. To update, run:", f"  {upgrade_command(kind, world)}"]
 
 
+def skip_notice(world: World) -> list[str]:
+    latest = remembered_latest(read_notice_state(world.config_folder / NOTICE_STATE_NAME))
+    if not is_newer(latest, __version__):
+        return [f"No newer version has been seen, so there is no notice to hide (you have {__version__})."]
+    settings.remember(world.config_folder / settings.CONFIG_NAME, skipped_update=latest)
+    return [f"The notice for version {latest} won't show again. A later version will still show one."]
+
+
 def main(argv: list[str], out=None, world: World | None = None) -> int:
     out = out or sys.stdout
-    if any(argument != CHECK for argument in argv):
+    if any(argument not in (CHECK, SKIP) for argument in argv) or len(set(argv)) > 1:
         out.write(f"{USAGE}\n")
         return EXIT_USAGE
     world = world or World()
+    if SKIP in argv:
+        try:
+            said = skip_notice(world)
+        except (OSError, settings.SettingsError) as error:
+            out.write(f"Couldn't hide the notice ({error}).\n")
+            return EXIT_FAILED
+        out.write("".join(f"{line}\n" for line in said))
+        return EXIT_GOOD
     kind = install_kind(world)
     out.write(f"{how_installed(kind, world)}\n")
     try:

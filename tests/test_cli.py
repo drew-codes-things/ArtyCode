@@ -88,6 +88,47 @@ def test_the_chat_loop_handles_its_own_commands(ready, monkeypatch, capsys):
     assert made.calls[1][-1]["content"] == "second"
 
 
+def notice_found_as(monkeypatch, line, seen):
+    def found(state_path, skipped, read):
+        seen.append((state_path, skipped))
+        return line
+
+    monkeypatch.delenv("ARTY_CLI_UPDATE_NOTICE")
+    monkeypatch.setattr(cli.update, "startup_notice", found)
+
+
+def test_the_chat_shows_the_update_notice_once_at_the_start(ready, monkeypatch, capsys, tmp_path):
+    seen = []
+    notice_found_as(monkeypatch, "Version 9.9.9 is available", seen)
+    chat_with(monkeypatch, "first", "second", "/exit")
+    assert capsys.readouterr().err.count("Version 9.9.9 is available") == 1
+    assert seen == [(tmp_path / "config" / "arty-cli" / "update-check.json", "")]
+
+
+def test_the_update_notice_can_be_switched_off(ready, monkeypatch, capsys):
+    seen = []
+    notice_found_as(monkeypatch, "Version 9.9.9 is available", seen)
+    monkeypatch.setattr(cli.settings, "load", lambda *a, **k: settings.Settings(base_url="http://b/v1", api_key="k",
+                                                                                update_notice="off"))
+    chat_with(monkeypatch, "/exit")
+    assert "Version 9.9.9" not in capsys.readouterr().err and seen == []
+
+
+def test_a_single_question_never_checks_for_updates(ready, monkeypatch, capsys):
+    seen = []
+    notice_found_as(monkeypatch, "Version 9.9.9 is available", seen)
+    assert cli.main(["-p", "hello"]) == 0
+    shown = capsys.readouterr()
+    assert "Version 9.9.9" not in shown.out + shown.err and seen == []
+
+
+def test_an_update_notice_setting_that_is_not_on_or_off_stops_at_the_start(ready, monkeypatch, capsys):
+    monkeypatch.setattr(cli.settings, "load", lambda *a, **k: settings.Settings(base_url="http://b/v1", api_key="k",
+                                                                                update_notice="maybe"))
+    assert cli.main(["-p", "hello"]) == cli.FAILED
+    assert "ARTY_CLI_UPDATE_NOTICE" in capsys.readouterr().err
+
+
 def test_an_unknown_slash_command_is_explained(ready, monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("/frobnicate\n/exit\n"))
     cli.main([])
@@ -663,7 +704,7 @@ def test_a_chat_where_nothing_was_asked_prints_no_resume_line(ready, monkeypatch
 def test_the_resume_line_is_printed_even_when_the_chat_crashes(ready, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["arty"])
 
-    def crashing(session, share=False, plain=False):
+    def crashing(session, share=False, plain=False, notice=None):
         cli.handle(session, "hello")
         raise RuntimeError("boom")
 

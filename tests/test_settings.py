@@ -135,6 +135,15 @@ def test_the_finish_check_can_be_switched_off_from_the_environment(tmp_path):
     assert settings.is_on(loaded, "finish_check") is False
 
 
+def test_the_update_notice_is_on_unless_switched_off_in_the_file_or_the_environment(tmp_path):
+    assert settings.is_on(settings.load(tmp_path / "none.json", {}), "update_notice") is True
+    assert settings.is_on(settings.load(tmp_path / "none.json", {"ARTY_CLI_UPDATE_NOTICE": "off"}), "update_notice") is False
+    saved = tmp_path / "config.json"
+    saved.write_text('{"update_notice": "off", "skipped_update": "9.0.0"}')
+    loaded = settings.load(saved, {})
+    assert settings.is_on(loaded, "update_notice") is False and loaded.skipped_update == "9.0.0"
+
+
 def test_a_finish_check_setting_that_is_not_on_or_off_says_where_to_fix_it():
     with pytest.raises(settings.SettingsError, match="ARTY_CLI_FINISH_CHECK"):
         settings.is_on(settings.Settings(finish_check="sometimes"), "finish_check")

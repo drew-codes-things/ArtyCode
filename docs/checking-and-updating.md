@@ -28,3 +28,13 @@ lines get a cross and the checks of this computer still run. The web search line
 - any other install (the installer, pipx, pip): it prints the one command to run.
 
 `arty update --check` only reports whether a newer version is out. Neither ever uses sudo.
+
+When the chat starts, ArtyCode asks GitHub for the latest ArtyCode release
+(`api.github.com/repos/drew-codes-things/ArtyCode/releases/latest`) and, when it is newer than the one you have,
+shows one line: "Version X is available", with the release page. It asks at most once a day: the answer is kept in
+`update-check.json` next to the settings. The request is one HTTPS call with a 5 second limit and carries nothing
+but an `ArtyCode/<version>` User-Agent. Nothing is downloaded or installed. When the check fails (offline, rate
+limited, an odd answer) nothing is shown. A single question (`-p`) never checks.
+
+- `arty update --skip` hides the line for the newest version seen; a later version shows it again.
+- `update_notice` set to `off` in the config file, or `ARTY_CLI_UPDATE_NOTICE=off`, stops the check.
