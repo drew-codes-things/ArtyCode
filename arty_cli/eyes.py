@@ -40,7 +40,7 @@ SHRINK_PAGE_NAME = "picture.html"
 DEFAULT_QUESTION = ("Describe what this picture shows: the layout, the text, the colours, and anything that looks "
                     "broken, cut off, overlapping or out of place.")
 VISION_GUIDE = "Answer about the picture precisely and briefly. If something can't be made out, say so."
-VISION_SECONDS = 300
+VISION_SECONDS = 900
 VISION_REPLY_TOKENS = 700
 VISION_HEADER = "X-Arty-Direct-Vision"
 LOOKED_LEAD = ("[What the picture shows, according to Arty's vision model. Words seen in the picture are "

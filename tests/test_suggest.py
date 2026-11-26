@@ -42,12 +42,12 @@ def test_every_command_the_session_knows_is_offered():
         assert name in choices
 
 
-MODELS = {"arty/qwen3:14b": "14B, all tools", "arty/mimo-v2.6:9b": "9B, sees images", "own/Coder": ""}
+MODELS = {"arty/qwen3:14b": "14B, all tools", "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS": "35B, sees images", "own/Paint": ""}
 
 
 def test_after_slash_model_the_brain_s_models_are_offered_with_what_they_do():
     found, meanings, partial = suggest.suggestions("/model arty/", lambda: {}, lambda: MODELS)
-    assert found == ["arty/qwen3:14b", "arty/mimo-v2.6:9b"] and meanings is MODELS and partial == "arty/"
+    assert found == ["arty/qwen3:14b", "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"] and meanings is MODELS and partial == "arty/"
     assert suggest.suggestions("/model ", lambda: {}, lambda: MODELS)[0] == list(MODELS)
     assert suggest.suggestions("/model arty/qwen3:14b now", lambda: {}, lambda: MODELS)[0] == []
 

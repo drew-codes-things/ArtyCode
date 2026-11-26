@@ -393,3 +393,8 @@ def test_a_screenshot_is_never_saved_through_an_arty_folder_that_links_outside(t
     with pytest.raises(tools.ToolError, match="link"):
         looking.saved_shot("http://127.0.0.1:8000/", headless.Visit("http://127.0.0.1:8000/", 800, 600, b"png"))
     assert list(outside.iterdir()) == []
+
+
+def test_a_picture_question_waits_long_enough_for_a_big_slow_model():
+    reading_and_loading_seconds, writing_seconds = 110 + 300, eyes.VISION_REPLY_TOKENS / 15
+    assert eyes.VISION_SECONDS >= reading_and_loading_seconds + writing_seconds

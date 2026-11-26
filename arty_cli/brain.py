@@ -32,6 +32,9 @@ LIST_SECONDS = 30
 QUICK_LIST_SECONDS = 5
 MODEL_PREFIX = "arty/"
 OWN_MODEL_PREFIX = "own/"
+BRAIN_LABEL = re.compile(r"Arty \((.+)\)")
+NO_TOOLS_TAIL = ", no tools"
+LABEL_LIMIT = 60
 AGENT_MODEL_PREFIXES = (MODEL_PREFIX, OWN_MODEL_PREFIX)
 REMOTE_MODEL_PREFIX = MODEL_PREFIX + "remote/"
 OUTSIDE_PREFIX = "outside/"
@@ -383,8 +386,17 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
     return {**reply, "usage": usage} if usage else reply
 
 
+def brain_label(entry: dict) -> str:
+    named = BRAIN_LABEL.fullmatch(str(entry.get("name") or ""))
+    if not named:
+        return ""
+    label = named.group(1).removesuffix(NO_TOOLS_TAIL).strip()
+    shown_as_id = label == str(entry.get("id") or "").removeprefix(MODEL_PREFIX)
+    return "" if shown_as_id or len(label) > LABEL_LIMIT else label
+
+
 def arty_model_about(entry: dict) -> str:
-    about = str(entry.get("description") or "")
+    about = ", ".join(part for part in (brain_label(entry), str(entry.get("description") or "")) if part)
     if entry.get("available") is not False:
         return about
     return f"{about.removeprefix(BRAIN_OFFLINE_LEAD)} {OFFLINE_MARK}".strip()

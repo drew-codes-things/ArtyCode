@@ -8,7 +8,7 @@ from pathlib import Path
 
 APP_FOLDER = "arty-cli"
 CONFIG_NAME = "config.json"
-DEFAULT_MODEL = "arty/qwen3:14b"
+DEFAULT_MODEL = "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
 RETIRED_DEFAULT_MODELS = ("arty/qwen2.5-coder:14b",)
 PRIVATE_FILE_MODE = 0o600
 OPTIONAL_SETTINGS = ("context_tokens", "max_command_seconds", "search_with", "finish_check", "notify", "outside_url",
