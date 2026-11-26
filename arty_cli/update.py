@@ -30,6 +30,7 @@ VERSION_NUMBER = re.compile(r"\d+(?:\.\d+)*")
 SECURE_SCHEME = "https://"
 NOTICE_SECONDS = 5
 MOST_RELEASE_BYTES = 256 * 1024
+READ_CHUNK_BYTES = 8 * 1024
 CHECK_EVERY_SECONDS = 24 * 60 * 60
 NOTICE_STATE_NAME = "update-check.json"
 NOTICE_ERRORS = (OSError, ValueError, RecursionError, http.client.HTTPException)
@@ -94,13 +95,26 @@ class RefuseRedirects(urllib.request.HTTPRedirectHandler):
 NO_REDIRECTS = urllib.request.build_opener(RefuseRedirects)
 
 
+def read_until(response, deadline: float) -> bytes:
+    body = bytearray()
+    while len(body) <= MOST_RELEASE_BYTES:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"the release answer did not arrive within {NOTICE_SECONDS} seconds")
+        chunk = response.read1(READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        body += chunk
+    return bytes(body)
+
+
 def read_release(url: str = LATEST_RELEASE_URL, opener: Callable = NO_REDIRECTS.open) -> str:
     if not url.startswith(SECURE_SCHEME):
         raise ValueError(f"refusing to check {url}: only https is used")
     request = urllib.request.Request(url, headers={"User-Agent": f"ArtyCode/{__version__}",
                                                    "Accept": "application/vnd.github+json"})
+    deadline = time.monotonic() + NOTICE_SECONDS
     with opener(request, timeout=NOTICE_SECONDS) as response:
-        body = response.read(MOST_RELEASE_BYTES + 1)
+        body = read_until(response, deadline)
     if len(body) > MOST_RELEASE_BYTES:
         raise ValueError(f"the release answer is larger than {MOST_RELEASE_BYTES} bytes")
     return body.decode("utf-8", errors="replace")

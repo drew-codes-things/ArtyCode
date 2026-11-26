@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -196,6 +197,7 @@ class Answer:
     def __init__(self, body: bytes):
         self.body = body
         self.asked_for = None
+        self.delivered = 0
 
     def __enter__(self):
         return self
@@ -206,6 +208,11 @@ class Answer:
     def read(self, most: int) -> bytes:
         self.asked_for = most
         return self.body[:most]
+
+    def read1(self, most: int) -> bytes:
+        chunk = self.body[self.delivered:self.delivered + most]
+        self.delivered += len(chunk)
+        return chunk
 
 
 class Opener:
@@ -264,7 +271,7 @@ def test_a_release_answer_over_256_kb_is_refused_without_reading_the_rest():
     opener = Opener(b"x" * (300 * 1024))
     with pytest.raises(ValueError, match="larger"):
         real_read_release(opener=opener)
-    assert opener.answer.asked_for == 256 * 1024 + 1
+    assert opener.answer.delivered <= 256 * 1024 + update.READ_CHUNK_BYTES
 
 
 def test_a_newer_release_gives_a_one_line_notice_with_the_release_page(tmp_path):
@@ -371,6 +378,10 @@ def test_check_and_skip_together_are_refused_with_the_usage(tmp_path):
 NESTING_BOMB = '{"tag_name":' + "[" * 100_000 + "]" * 100_000 + "}"
 HUGE_VERSION = "9" * 5000
 MOST_VERSION_CHARACTERS = 32
+DRIP_BYTES = 40
+DRIP_STEP_SECONDS = 0.1
+DEADLINE_SECONDS = 1
+DEADLINE_SLACK_SECONDS = 1.5
 
 
 def test_a_deeply_nested_release_answer_shows_nothing_and_is_logged(tmp_path, caplog):
@@ -479,3 +490,32 @@ def test_a_redirect_is_never_followed():
 
 def test_the_release_check_uses_the_opener_that_refuses_redirects():
     assert inspect.signature(real_read_release).parameters["opener"].default == update.NO_REDIRECTS.open
+
+
+def test_a_slow_drip_is_stopped_at_the_total_deadline(monkeypatch):
+    class Drip(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            try:
+                for _ in range(DRIP_BYTES):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(DRIP_STEP_SECONDS)
+            except OSError:
+                return
+
+        def log_message(self, *_details):
+            return
+
+    server = serving(Drip)
+    monkeypatch.setattr(update, "NOTICE_SECONDS", DEADLINE_SECONDS)
+    local = f"http://127.0.0.1:{server.server_address[1]}/"
+    started = time.monotonic()
+    try:
+        with pytest.raises(OSError):
+            real_read_release("https://example.test/releases/latest",
+                              opener=lambda request, timeout: urllib.request.urlopen(local, timeout=timeout))
+    finally:
+        server.shutdown()
+    assert time.monotonic() - started < DEADLINE_SECONDS + DEADLINE_SLACK_SECONDS
