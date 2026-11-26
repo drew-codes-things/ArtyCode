@@ -347,6 +347,12 @@ def test_skip_hides_the_notice_for_the_newest_version_seen(tmp_path):
     assert settings.load(tmp_path / settings.CONFIG_NAME, {}).skipped_update == NEWER
 
 
+def test_skip_stores_only_the_skipped_version_when_the_setup_is_environment_only(tmp_path):
+    (tmp_path / update.NOTICE_STATE_NAME).write_text(json.dumps({"checked_at": 1.0, "latest": NEWER}))
+    updated(skip_world(tmp_path), "--skip")
+    assert json.loads((tmp_path / settings.CONFIG_NAME).read_text()) == {"skipped_update": NEWER}
+
+
 def test_skip_with_no_newer_version_seen_changes_nothing(tmp_path):
     code, shown = updated(skip_world(tmp_path), "--skip")
     assert code == 0 and "no notice to hide" in shown

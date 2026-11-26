@@ -281,7 +281,7 @@ def skip_notice(world: World) -> list[str]:
     latest = remembered_latest(read_notice_state(world.config_folder / NOTICE_STATE_NAME))
     if not is_newer(latest, __version__):
         return [f"No newer version has been seen, so there is no notice to hide (you have {__version__})."]
-    settings.remember(world.config_folder / settings.CONFIG_NAME, skipped_update=latest)
+    settings.remember_only(world.config_folder / settings.CONFIG_NAME, skipped_update=latest)
     return [f"The notice for version {latest} won't show again. A later version will still show one."]
 
 

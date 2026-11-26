@@ -166,3 +166,12 @@ def remember(path: Path | None = None, **changes) -> Path:
     target = path or config_path()
     stored = replace(Settings(**read_file(target)), **changes)
     return save(stored, target)
+
+
+def remember_only(path: Path, **changes) -> Path:
+    unknown = set(changes) - {field.name for field in fields(Settings)}
+    if unknown:
+        raise TypeError(f"unknown settings: {', '.join(sorted(unknown))}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_private_json(path, {**read_file(path), **changes}, indent=2)
+    return path
