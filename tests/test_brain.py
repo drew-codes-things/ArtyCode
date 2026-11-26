@@ -33,6 +33,27 @@ def test_tool_calls_are_collected_in_order():
     assert all("index" not in call for call in message["tool_calls"])
 
 
+LATE_REFUSAL = {"error": {"message": "Arty's rules for this model couldn't be loaded, so it can't answer right now.",
+                          "type": "rules_unavailable", "code": "rules_unavailable"}}
+
+
+@pytest.mark.parametrize("ending", [["data: [DONE]", ""], []])
+def test_an_error_event_after_keep_alives_is_raised_even_when_done_follows(ending):
+    lines = [": keep-alive", "", ": keep-alive", "", f"data: {json.dumps(LATE_REFUSAL)}", "", *ending]
+    with pytest.raises(brain.BrainError, match="hit an error: Arty's rules for this model couldn't be loaded"):
+        brain.read_reply(lines, lambda text: None)
+
+
+def test_an_error_event_with_only_a_word_is_raised_too():
+    with pytest.raises(brain.BrainError, match="hit an error: too many replies"):
+        brain.read_reply(['data: {"error": "too many replies"}', "", "data: [DONE]", ""], lambda text: None)
+
+
+def test_keep_alives_before_a_normal_reply_change_nothing():
+    lines = [": keep-alive", "", *sse({"content": "hi"})]
+    assert brain.read_reply(lines, lambda text: None)["content"] == "hi"
+
+
 def test_garbage_in_the_stream_is_an_error():
     with pytest.raises(brain.BrainError, match="unreadable"):
         brain.read_reply(["data: {nope"], lambda text: None)

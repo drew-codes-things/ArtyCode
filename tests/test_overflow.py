@@ -64,10 +64,12 @@ def test_an_answer_ending_in_a_mention_of_the_context_window_is_shown_when_the_s
     assert shown == ["It fits the context window."]
 
 
-def test_another_kind_of_error_in_the_last_chunk_does_not_count_as_an_overflow():
+def test_another_kind_of_error_in_the_last_chunk_is_a_plain_error_not_an_overflow():
     lines = [chunk_line({"content": "ok"}), chunk_line({}, "stop", error={"type": "other", "message": "x"}),
              "data: [DONE]"]
-    assert brain.read_reply(lines, lambda text: None)["content"] == "ok"
+    with pytest.raises(brain.BrainError, match="hit an error: x") as raised:
+        brain.read_reply(lines, lambda text: None)
+    assert not isinstance(raised.value, brain.WindowOverflow)
 
 
 def brain_at(url: str) -> brain.Brain:

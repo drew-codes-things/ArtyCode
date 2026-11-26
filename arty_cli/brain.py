@@ -360,6 +360,8 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
         overflow = window_overflow_in(chunk.get("error"))
         if overflow:
             raise overflow
+        if chunk.get("error"):
+            raise BrainError(f"Arty's brain hit an error: {error_detail(chunk['error'])}")
         if held:
             on_text(held)
             held = ""
@@ -408,6 +410,12 @@ def joined_call(earlier: dict, piece: dict) -> dict:
     if more.get("name") and not function.get("name"):
         function["name"] = more["name"]
     return {**{key: value for key, value in piece.items() if value}, **earlier, "function": function}
+
+
+def error_detail(found) -> str:
+    if isinstance(found, dict):
+        return str(found.get("message") or found.get("code") or found.get("type") or found)
+    return str(found)
 
 
 def error_object(error: urllib.error.HTTPError) -> dict:
