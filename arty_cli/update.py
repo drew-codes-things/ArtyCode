@@ -32,7 +32,8 @@ NOTICE_SECONDS = 5
 MOST_RELEASE_BYTES = 256 * 1024
 CHECK_EVERY_SECONDS = 24 * 60 * 60
 NOTICE_STATE_NAME = "update-check.json"
-NOTICE_ERRORS = (OSError, ValueError, http.client.HTTPException)
+NOTICE_ERRORS = (OSError, ValueError, RecursionError, http.client.HTTPException)
+MOST_VERSION_CHARACTERS = 32
 log = logging.getLogger(__name__)
 READ_SECONDS = 15
 GIT_SECONDS = 120
@@ -103,13 +104,15 @@ def released_version(text: str) -> str:
     found = VERSION_NUMBER.search(tag) if isinstance(tag, str) else None
     if not found:
         raise ValueError("the latest release has no version in its tag")
+    if len(found.group(0)) > MOST_VERSION_CHARACTERS:
+        raise ValueError(f"the release version is longer than {MOST_VERSION_CHARACTERS} characters")
     return found.group(0)
 
 
 def read_notice_state(path: Path) -> dict:
     try:
         stored = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return stored if isinstance(stored, dict) else {}
 
@@ -123,7 +126,7 @@ def is_check_due(state: dict, now: float) -> bool:
 
 def remembered_latest(state: dict) -> str:
     latest = state.get("latest")
-    return latest if isinstance(latest, str) else ""
+    return latest if isinstance(latest, str) and len(latest) <= MOST_VERSION_CHARACTERS else ""
 
 
 def notice_line(latest: str, skipped: str, current: str = __version__) -> str:
@@ -135,15 +138,15 @@ def notice_line(latest: str, skipped: str, current: str = __version__) -> str:
 
 def startup_notice(state_path: Path, skipped: str, read: Callable = read_release, now: Callable = time.time) -> str:
     state = read_notice_state(state_path)
-    latest = remembered_latest(state)
-    if is_check_due(state, now()):
-        try:
+    try:
+        latest = remembered_latest(state)
+        if is_check_due(state, now()):
             latest = released_version(read())
-        except NOTICE_ERRORS as error:
-            log.info("Couldn't check for a newer ArtyCode: %s", error)
-            return ""
-        remember_check(state_path, latest, now())
-    return notice_line(latest, skipped)
+            remember_check(state_path, latest, now())
+        return notice_line(latest, skipped)
+    except NOTICE_ERRORS as error:
+        log.info("Couldn't check for a newer ArtyCode: %s", error)
+        return ""
 
 
 def remember_check(state_path: Path, latest: str, moment: float) -> None:
@@ -168,6 +171,8 @@ class StartupNotice:
     def look(self) -> None:
         try:
             self.found = self.find()
+        except Exception as error:
+            log.info("The update notice failed: %s", error)
         finally:
             self.ready.set()
 

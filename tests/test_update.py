@@ -362,3 +362,69 @@ def test_skip_with_no_newer_version_seen_changes_nothing(tmp_path):
 def test_check_and_skip_together_are_refused_with_the_usage(tmp_path):
     code, shown = updated(skip_world(tmp_path), "--check", "--skip")
     assert code == 2 and "arty update [--check | --skip]" in shown
+
+
+NESTING_BOMB = '{"tag_name":' + "[" * 100_000 + "]" * 100_000 + "}"
+HUGE_VERSION = "9" * 5000
+MOST_VERSION_CHARACTERS = 32
+
+
+def test_a_deeply_nested_release_answer_shows_nothing_and_is_logged(tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger="arty_cli.update"):
+        assert update.startup_notice(tmp_path / "state.json", "", lambda: NESTING_BOMB, lambda: 1000.0) == ""
+    assert len(caplog.records) == 1
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_a_release_tag_with_a_5000_digit_number_is_refused():
+    with pytest.raises(ValueError, match="longer"):
+        update.released_version(release_answer(f"v{HUGE_VERSION}"))
+
+
+def test_a_version_of_the_longest_allowed_length_is_read():
+    longest = "1" * MOST_VERSION_CHARACTERS
+    assert update.released_version(release_answer(longest)) == longest
+
+
+def test_a_5000_digit_remembered_version_is_ignored(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"checked_at": 1000.0, "latest": HUGE_VERSION}))
+    assert update.remembered_latest(json.loads(state.read_text())) == ""
+    assert update.startup_notice(state, "", Reads(), lambda: 1000.0) == ""
+
+
+def test_skip_ignores_a_5000_digit_remembered_version(tmp_path):
+    (tmp_path / update.NOTICE_STATE_NAME).write_text(json.dumps({"checked_at": 1.0, "latest": HUGE_VERSION}))
+    code, shown = updated(skip_world(tmp_path), "--skip")
+    assert code == 0 and "no notice to hide" in shown
+    assert not (tmp_path / settings.CONFIG_NAME).exists()
+
+
+def test_a_failure_while_building_the_notice_line_is_caught_and_logged(tmp_path, caplog, monkeypatch):
+    def broken(latest, skipped, current=__version__):
+        raise ValueError("cannot compare")
+
+    monkeypatch.setattr(update, "notice_line", broken)
+    with caplog.at_level(logging.INFO, logger="arty_cli.update"):
+        assert update.startup_notice(tmp_path / "state.json", "", Reads(release_answer(f"v{NEWER}")), lambda: 1000.0) == ""
+    assert len(caplog.records) == 1
+
+
+def test_the_background_notice_survives_any_failure_and_logs_it(caplog):
+    def find():
+        raise RuntimeError("unexpected")
+
+    notice = update.StartupNotice(find)
+    with caplog.at_level(logging.INFO, logger="arty_cli.update"):
+        notice.look()
+    assert notice.take() == ""
+    assert len(caplog.records) == 1 and "unexpected" in caplog.records[0].getMessage()
+
+
+def test_a_deeply_nested_state_file_means_checking_again_and_skip_changes_nothing(tmp_path):
+    state = tmp_path / update.NOTICE_STATE_NAME
+    state.write_text("[" * 100_000 + "]" * 100_000)
+    assert update.read_notice_state(state) == {}
+    code, shown = updated(skip_world(tmp_path), "--skip")
+    assert code == 0 and "no notice to hide" in shown
+    assert not (tmp_path / settings.CONFIG_NAME).exists()
