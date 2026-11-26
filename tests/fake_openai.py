@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 GOOD_KEY = "sf_outside_0123456789"
-LISTED = ["Qwen3-14B-Q4_K_M", "friend/Big-Model"]
+LISTED = ["Qwen3-14B-Q4_K_M", "remote/model"]
 
 
 class OutsideServer:

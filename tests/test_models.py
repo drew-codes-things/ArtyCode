@@ -158,13 +158,13 @@ def test_models_arty_gets_from_starfire_are_listed_even_when_the_brain_marks_cod
         {"id": "arty/qwen3:14b", "description": "14B", "coding": False},
         {"id": "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "description": "35B, sees images", "coding": True},
         {"id": "arty/remote/starfire/qwen3.6-35b", "description": "on starfire", "coding": False},
-        {"id": "arty/remote/starfire/friend-big", "description": "offline, on starfire", "coding": False,
+        {"id": "arty/remote/starfire/model", "description": "offline, on starfire", "coding": False,
          "available": False}]}
     offered = {"object": "list", "data": [{"id": "Arty"}]}
     with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, _recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
         listed = [model for model, _about in client.available_models()]
-    assert listed == ["arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "arty/remote/starfire/qwen3.6-35b", "arty/remote/starfire/friend-big"]
+    assert listed == ["arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "arty/remote/starfire/qwen3.6-35b", "arty/remote/starfire/model"]
 
 
 def test_the_brain_listing_error_is_plain():
