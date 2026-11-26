@@ -1,10 +1,14 @@
 import http.client
+import http.server
+import inspect
 import io
 import json
 import logging
 import os
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -428,3 +432,50 @@ def test_a_deeply_nested_state_file_means_checking_again_and_skip_changes_nothin
     code, shown = updated(skip_world(tmp_path), "--skip")
     assert code == 0 and "no notice to hide" in shown
     assert not (tmp_path / settings.CONFIG_NAME).exists()
+
+
+def serving(handler):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_a_redirect_is_never_followed():
+    seen = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_details):
+            return
+
+    target = serving(Target)
+
+    class Redirecting(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{target.server_address[1]}/elsewhere")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_details):
+            return
+
+    redirecting = serving(Redirecting)
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{redirecting.server_address[1]}/releases/latest")
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            update.NO_REDIRECTS.open(request, timeout=5)
+        assert refused.value.code == 302
+        assert seen == []
+    finally:
+        redirecting.shutdown()
+        target.shutdown()
+
+
+def test_the_release_check_uses_the_opener_that_refuses_redirects():
+    assert inspect.signature(real_read_release).parameters["opener"].default == update.NO_REDIRECTS.open

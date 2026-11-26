@@ -86,7 +86,15 @@ def is_newer(latest: str, current: str) -> bool:
     return bool(numbers(latest)) and numbers(latest) > numbers(current)
 
 
-def read_release(url: str = LATEST_RELEASE_URL, opener: Callable = urllib.request.urlopen) -> str:
+class RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+NO_REDIRECTS = urllib.request.build_opener(RefuseRedirects)
+
+
+def read_release(url: str = LATEST_RELEASE_URL, opener: Callable = NO_REDIRECTS.open) -> str:
     if not url.startswith(SECURE_SCHEME):
         raise ValueError(f"refusing to check {url}: only https is used")
     request = urllib.request.Request(url, headers={"User-Agent": f"ArtyCode/{__version__}",
