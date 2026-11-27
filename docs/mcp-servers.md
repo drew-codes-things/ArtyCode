@@ -101,7 +101,8 @@ real one; it gives up after 5 minutes. When the service says which account you s
   publishes can't be used, or can't be looked up (an unclear answer, or a missing sign-in server behind published
   resource details), `mcp add` says so and saves nothing. Only when every well-known address answers with a refusal
   that a server without sign-in metadata would give (any 4xx except 429, or 501) does it count as a server that
-  needs no sign-in; a 429, a redirect or any other 5xx is reported instead.
+  needs no sign-in; a 429, a redirect or any other 5xx is reported instead. A success answer with no usable
+  metadata in it (an empty one, or a JSON object without `resource` or `issuer`) also counts as nothing published.
 
 - **What is saved.** Your `settings.json` gets `"notion": {"url": "https://mcp.notion.com/mcp", "signIn": "notion"}`,
   with no token in it. The tokens go in `mcp-sign-ins.json` in the same config folder, readable only by you (mode

@@ -1524,3 +1524,30 @@ def test_the_deadline_messages_end_with_one_full_stop(home, probe_server, monkey
     assert ("ArtyCode couldn't use it: the MCP server second: the check took longer than 1 s. Nothing was saved."
             in second)
     assert ".." not in first + second
+
+
+@pytest.mark.parametrize("body", [{"status": "ok"}, {"error": "not_found"}])
+def test_a_2xx_object_that_is_not_metadata_counts_as_nothing_published(home, probe_server, body):
+    holder = probe_server()
+    paths = ("/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource",
+             "/.well-known/oauth-authorization-server/mcp", "/.well-known/oauth-authorization-server",
+             "/.well-known/openid-configuration")
+    holder.answer = well_known_answers({path: (200, body) for path in paths})
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="plain")
+    assert code == 0, shown
+    assert settings_table()["mcpServers"]["plain"] == {"type": "http", "url": f"{holder.address}/mcp"}
+
+
+def test_valid_metadata_is_read_when_served_with_any_2xx():
+    issuer = "https://auth.example.com"
+    url = "https://mcp.example.com/mcp"
+    metadata = {"issuer": issuer, "code_challenge_methods_supported": ["S256"],
+                "authorization_endpoint": f"{issuer}/authorize", "token_endpoint": f"{issuer}/token",
+                "registration_endpoint": f"{issuer}/register"}
+    resource = {"resource": url, "authorization_servers": [issuer]}
+    answers = {
+        "https://mcp.example.com/.well-known/oauth-protected-resource/mcp": (203, {}, json.dumps(resource).encode()),
+        f"{issuer}/.well-known/oauth-authorization-server": (203, {}, json.dumps(metadata).encode()),
+    }
+    found = oauth.discover(url, lambda address, *rest: answers.get(address, (404, {}, b"{}")), {})
+    assert found.issuer == issuer and found.registration_endpoint == f"{issuer}/register"

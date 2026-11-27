@@ -42,6 +42,7 @@ CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MAX_ANSWER_BYTES = 1024 * 1024
 READ_CHUNK_BYTES = 8192
 SOCKET_SEARCH_DEPTH = 3
+SUCCESS_FROM, SUCCESS_BEFORE = 200, 300
 CALLBACK_REQUEST_SECONDS = 10
 TOO_MANY_REQUESTS = 429
 FIRST_SERVER_ERROR = 500
@@ -322,11 +323,15 @@ def well_known_urls(url: str, suffixes: tuple[str, ...], also_inside_path: bool 
     return found + [f"{origin}{suffix}" for suffix in suffixes]
 
 
-def first_json(urls: list[str], fetch) -> tuple[str, dict]:
+def is_success(status: int) -> bool:
+    return SUCCESS_FROM <= status < SUCCESS_BEFORE
+
+
+def first_json(urls: list[str], fetch, required_key: str) -> tuple[str, dict]:
     for url in urls:
         status, _headers, raw = fetch(url, None, {"Accept": "application/json"}, "GET")
-        found = read_json(raw) if status == 200 else {}
-        if found:
+        found = read_json(raw) if is_success(status) else {}
+        if required_key in found:
             return url, found
     return "", {}
 
@@ -334,7 +339,7 @@ def first_json(urls: list[str], fetch) -> tuple[str, dict]:
 def protected_resource(server_url: str, hints: dict, fetch) -> dict:
     pointed = hints.get("resource_metadata", "")
     urls = [checked_address(pointed, "resource metadata address", server_url)] if pointed else []
-    _url, found = first_json(urls + well_known_urls(server_url, (PROTECTED_RESOURCE,)), fetch)
+    _url, found = first_json(urls + well_known_urls(server_url, (PROTECTED_RESOURCE,)), fetch, "resource")
     if found and comparable(text_field(found, "resource", server_url)) != comparable(server_url):
         raise OAuthError(f"{server_url} says it is {found.get('resource')!r}, which isn't the address you gave, "
                          "so ArtyCode won't sign in to it.")
@@ -347,7 +352,8 @@ def origin_of(url: str) -> str:
 
 
 def authorization_server(issuer: str, fetch) -> dict:
-    _url, found = first_json(well_known_urls(issuer, (AUTHORIZATION_SERVER, OPENID_CONFIGURATION), True), fetch)
+    _url, found = first_json(well_known_urls(issuer, (AUTHORIZATION_SERVER, OPENID_CONFIGURATION), True), fetch,
+                          "issuer")
     if not found:
         raise NotPublished(f"The sign-in server {issuer} doesn't publish its details, so ArtyCode can't sign in there.")
     if comparable(text_field(found, "issuer", issuer)) != comparable(issuer):
