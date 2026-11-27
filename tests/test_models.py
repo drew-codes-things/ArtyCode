@@ -7,7 +7,7 @@ import pytest
 from arty_cli import brain, cli, models, providers, sessions, settings
 from tests.fake_servers import serving
 
-LISTED = [("arty/qwen3:14b", "main"), ("arty/qwen2.5-coder:14b", "coder")]
+LISTED = [(settings.DEFAULT_MODEL, "main"), ("arty/qwen3:14b", "fallback")]
 
 
 class ListingBrain:
@@ -62,13 +62,13 @@ def test_slash_model_lists_arty_models_and_marks_the_current_one(arty_set_up, mo
     shown = capsys.readouterr().err
     for model, _about in LISTED:
         assert model in shown
-    assert "● 1. arty/qwen3:14b" in shown and "  2. arty/qwen2.5-coder:14b" in shown
+    assert f"● 1. {settings.DEFAULT_MODEL}" in shown and "  2. arty/qwen3:14b" in shown
     assert "/model <number or name>" in shown
     assert "not set up" not in shown
 
 
 def test_picking_a_number_switches_the_model_and_is_remembered(arty_set_up, monkeypatch, capsys):
-    chat(monkeypatch, "/model", "/model 1", "/status", "/exit")
+    chat(monkeypatch, "/model", "/model 2", "/status", "/exit")
     assert ListingBrain.made[-1].model == "arty/qwen3:14b"
     saved = json.loads(arty_set_up.read_text())
     assert saved["model"] == "arty/qwen3:14b" and "provider" not in saved
@@ -114,9 +114,9 @@ def test_carrying_on_reuses_the_saved_arty_model(arty_set_up, monkeypatch):
 
 
 def test_carrying_on_reuses_a_saved_model_from_the_brain_s_own_list(arty_set_up, monkeypatch):
-    saved_conversation_with("own/Coder")
+    saved_conversation_with("own/Paint")
     chat(monkeypatch, "/exit", arguments=["-c"])
-    assert ListingBrain.made[0].model == "own/Coder"
+    assert ListingBrain.made[0].model == "own/Paint"
 
 
 def test_carrying_on_ignores_a_saved_model_that_is_not_one_of_arty_s(arty_set_up, monkeypatch):
@@ -131,11 +131,11 @@ def test_the_brain_lists_its_arty_models_with_the_key():
         {"id": "arty/qwen3:14b", "description": "14B, tools"},
         {"id": "arty/qwen2.5-coder:14b"},
         {"id": "solo/qwen3:14b", "description": "on its own"}]}
-    offered = {"object": "list", "data": [{"id": "Arty"}, {"id": "arty/qwen3:14b"}, {"id": "own/Coder"}]}
+    offered = {"object": "list", "data": [{"id": "Arty"}, {"id": "arty/qwen3:14b"}, {"id": "own/Paint"}]}
     with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
         listed = client.available_models()
-    assert listed == [("arty/qwen3:14b", "14B, tools"), ("arty/qwen2.5-coder:14b", ""), ("own/Coder", "")]
+    assert listed == [("arty/qwen3:14b", "14B, tools"), ("arty/qwen2.5-coder:14b", ""), ("own/Paint", "")]
     assert [sent["path"] for sent in recorder.requests] == ["/models?all=1", "/models"]
     sent = {name.lower(): value for name, value in recorder.requests[0]["headers"].items()}
     assert sent["authorization"] == "Bearer secret"
@@ -144,27 +144,27 @@ def test_the_brain_lists_its_arty_models_with_the_key():
 def test_a_brain_that_marks_coding_models_gets_only_those_listed():
     listing = {"object": "list", "data": [
         {"id": "arty/qwen3:14b", "description": "14B", "coding": False},
-        {"id": "arty/mimo-v2.6:9b", "description": "9B, sees images", "coding": True}]}
+        {"id": "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "description": "35B, sees images", "coding": True}]}
     offered = {"object": "list", "data": [{"id": "Arty"}, {"id": "arty/qwen3:14b"}, {"id": "own/Persona"},
-                                          {"id": "own/Coder", "description": "private coder", "coding": True}]}
+                                          {"id": "own/Paint", "description": "private coder", "coding": True}]}
     with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, _recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
         listed = client.available_models()
-    assert listed == [("arty/mimo-v2.6:9b", "9B, sees images"), ("own/Coder", "private coder")]
+    assert listed == [("arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "35B, sees images"), ("own/Paint", "private coder")]
 
 
 def test_models_arty_gets_from_starfire_are_listed_even_when_the_brain_marks_coding_models():
     listing = {"object": "list", "data": [
         {"id": "arty/qwen3:14b", "description": "14B", "coding": False},
-        {"id": "arty/mimo-v2.6:9b", "description": "9B, sees images", "coding": True},
+        {"id": "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "description": "35B, sees images", "coding": True},
         {"id": "arty/remote/starfire/qwen3.6-35b", "description": "on starfire", "coding": False},
-        {"id": "arty/remote/starfire/friend-big", "description": "offline, on starfire", "coding": False,
+        {"id": "arty/remote/starfire/model", "description": "offline, on starfire", "coding": False,
          "available": False}]}
     offered = {"object": "list", "data": [{"id": "Arty"}]}
     with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, _recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
         listed = [model for model, _about in client.available_models()]
-    assert listed == ["arty/mimo-v2.6:9b", "arty/remote/starfire/qwen3.6-35b", "arty/remote/starfire/friend-big"]
+    assert listed == ["arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "arty/remote/starfire/qwen3.6-35b", "arty/remote/starfire/model"]
 
 
 def test_the_brain_listing_error_is_plain():
@@ -219,9 +219,9 @@ def coding_model_from(*entries):
 
 
 def test_the_brains_coding_model_is_its_first_arty_entry_marked_for_coding():
-    assert coding_model_from({"id": "arty/qwen3:14b", "coding": False}, {"id": "own/Coder", "coding": True},
-                             {"id": "arty/mimo-v2.6:9b", "coding": True},
-                             {"id": "arty/other:7b", "coding": True}) == "arty/mimo-v2.6:9b"
+    assert coding_model_from({"id": "arty/qwen3:14b", "coding": False}, {"id": "own/Paint", "coding": True},
+                             {"id": "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "coding": True},
+                             {"id": "arty/other:7b", "coding": True}) == "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
 
 
 def test_a_brain_that_marks_no_coding_model_names_none():
@@ -236,7 +236,7 @@ def test_a_brain_that_cannot_be_reached_or_listed_names_no_coding_model():
 
 class CodingBrain(ListingBrain):
     def coding_model(self):
-        return "arty/mimo-v2.6:9b"
+        return "arty/qwen3:14b"
 
 
 @pytest.fixture
@@ -249,9 +249,9 @@ def nothing_chosen(arty_set_up, monkeypatch):
 def test_with_no_model_ever_picked_it_starts_on_the_brains_coding_model_without_saving_it(nothing_chosen, monkeypatch,
                                                                                          capsys):
     chat(monkeypatch, "/exit")
-    assert ListingBrain.made[0].model == "arty/mimo-v2.6:9b"
-    assert "arty/mimo-v2.6:9b" in capsys.readouterr().err
-    assert not nothing_chosen.exists() or "mimo" not in nothing_chosen.read_text()
+    assert ListingBrain.made[0].model == "arty/qwen3:14b"
+    assert "arty/qwen3:14b" in capsys.readouterr().err
+    assert not nothing_chosen.exists() or "qwen3:14b" not in nothing_chosen.read_text()
 
 
 def test_a_model_given_for_this_run_wins_over_the_brains_coding_model(nothing_chosen, monkeypatch):
@@ -266,7 +266,7 @@ def test_a_model_the_user_saved_or_set_in_the_environment_wins(nothing_chosen, m
     nothing_chosen.unlink()
     monkeypatch.setenv("ARTY_CLI_MODEL", "arty/env:1b")
     chat(monkeypatch, "/exit")
-    assert [made.model for made in ListingBrain.made] == ["arty/qwen3:14b", settings.DEFAULT_MODEL]
+    assert [made.model for made in ListingBrain.made] == [settings.DEFAULT_MODEL, settings.DEFAULT_MODEL]
 
 
 def test_a_brain_with_no_coding_model_leaves_the_default(nothing_chosen, monkeypatch):
@@ -287,7 +287,7 @@ def test_a_saved_default_that_was_retired_does_not_count_as_a_choice(tmp_path):
 
 def test_the_context_size_comes_from_the_brain_and_is_asked_for_once():
     listing = {"object": "list", "data": [{"id": "arty/qwen3:14b", "context_tokens": 24576},
-                                          {"id": "arty/mimo-v2.6:9b", "context_tokens": 24576}]}
+                                          {"id": "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "context_tokens": 24576}]}
     with serving([(200, json.dumps(listing))], "application/json") as (url, recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
         sizes = [client.context_tokens(), client.context_tokens()]
@@ -315,8 +315,8 @@ def test_a_failed_look_up_is_tried_again_next_time():
 
 
 def test_the_reply_room_comes_from_the_brain_when_it_reports_one():
-    listing = {"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576, "reply_tokens": 4096},
-                        {"id": "arty/mimo-v2.6:9b", "context_tokens": 24576, "reply_tokens": 6144}]}
+    listing = {"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576, "reply_tokens": 6144},
+                        {"id": "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "context_tokens": 24576, "reply_tokens": 4096}]}
     with serving([(200, json.dumps(listing))], "application/json") as (url, recorder):
         client = brain.Brain(settings.Settings(remote_url=url, api_key="k"))
         assert client.reply_tokens() == 4096 and client.context_tokens() == 24576
@@ -330,12 +330,12 @@ def test_without_reply_tokens_in_the_list_the_reply_room_is_unknown():
 
 
 SIZED_LISTING = {"data": [{"id": "arty/qwen3:14b", "context_tokens": 24576, "reply_tokens": 4096},
-                          {"id": "arty/mimo-v2.6:9b", "context_tokens": 49152, "reply_tokens": 6144}]}
+                          {"id": "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "context_tokens": 49152, "reply_tokens": 6144}]}
 
 
 def test_the_window_and_reply_room_are_those_of_the_model_requests_go_to():
     with serving([(200, json.dumps(SIZED_LISTING))], "application/json") as (url, recorder):
-        client = brain.Brain(settings.Settings(remote_url=url, api_key="k", model="arty/mimo-v2.6:9b"))
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="k", model="arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"))
         assert (client.context_tokens(), client.reply_tokens()) == (49152, 6144)
         client.model = "arty/qwen3:14b"
         assert (client.context_tokens(), client.reply_tokens()) == (24576, 4096)
@@ -479,7 +479,7 @@ def test_asking_for_the_menu_list_never_waits_for_the_brain():
     assert listing.available() is None
     release.set()
     assert wait_for(lambda: listing.available() is not None)
-    assert listing.available().listed[0].model == "arty/qwen3:14b"
+    assert listing.available().listed[0].model == settings.DEFAULT_MODEL
 
 
 def test_a_failing_brain_is_asked_again_by_the_menu_only_once_a_minute():
@@ -542,13 +542,13 @@ def picking_session(tmp_path, monkeypatch, listed, failure=None, answer=None):
 
 def test_a_bare_slash_model_says_it_is_loading_then_offers_every_model_with_the_current_one_marked(tmp_path, monkeypatch):
     session, _client, terminal = picking_session(tmp_path, monkeypatch, [("arty/qwen3:14b", "14B, tools"),
-                                                                       ("arty/mimo-v2.6:9b", "9B, sees images")])
+                                                                       ("arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "35B, sees images")])
     session.command("/model")
     shown = terminal.err.getvalue()
     assert shown.splitlines()[0] == "Loading models..."
     question, offered = terminal.console.asked[0]
     assert "arty/qwen3:14b" in question
-    assert offered == [("1", "arty/qwen3:14b  14B, tools  (current)"), ("2", "arty/mimo-v2.6:9b  9B, sees images")]
+    assert offered == [("1", "arty/qwen3:14b  14B, tools  (current)"), ("2", "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS  35B, sees images")]
 
 
 def test_a_second_slash_model_within_a_minute_reuses_the_list_without_loading_again(tmp_path, monkeypatch):
@@ -587,24 +587,24 @@ def test_a_brain_with_no_models_says_so_and_opens_no_empty_picker(tmp_path, monk
 
 
 def test_picking_in_the_list_switches_and_remembers_the_model(tmp_path, monkeypatch):
-    session, client, terminal = picking_session(tmp_path, monkeypatch, [("arty/qwen3:14b", ""), ("own/Coder", "")],
+    session, client, terminal = picking_session(tmp_path, monkeypatch, [("arty/qwen3:14b", ""), ("own/Paint", "")],
                                                 answer="2")
     session.command("/model")
-    assert client.model == "own/Coder" and "Model: own/Coder" in terminal.err.getvalue()
+    assert client.model == "own/Paint" and "Model: own/Paint" in terminal.err.getvalue()
 
 
 def test_the_menu_list_is_the_cached_one_with_the_current_model_marked(tmp_path, monkeypatch):
-    session, client, _terminal = picking_session(tmp_path, monkeypatch, [("arty/qwen3:14b", "14B"), ("own/Coder", "")])
+    session, client, _terminal = picking_session(tmp_path, monkeypatch, [("arty/qwen3:14b", "14B"), ("own/Paint", "")])
     session.listing.load()
-    assert session.model_choices() == {"arty/qwen3:14b": "● current, 14B", "own/Coder": ""}
-    client.model = "own/Coder"
-    assert session.model_choices()["own/Coder"] == "● current"
+    assert session.model_choices() == {"arty/qwen3:14b": "● current, 14B", "own/Paint": ""}
+    client.model = "own/Paint"
+    assert session.model_choices()["own/Paint"] == "● current"
 
 
 def test_the_plain_prompt_says_it_is_loading_then_lists_and_reuses_the_list(arty_set_up, monkeypatch, capsys):
     chat(monkeypatch, "/model", "/model", "/exit")
     shown = capsys.readouterr().err
-    assert shown.count("Loading models...") == 1 and shown.count("● 1. arty/qwen3:14b") == 2
+    assert shown.count("Loading models...") == 1 and shown.count(f"● 1. {settings.DEFAULT_MODEL}") == 2
     assert ListingBrain.listings == 1
 
 
@@ -628,3 +628,19 @@ def test_a_background_load_that_crashes_is_kept_as_the_failure_and_a_direct_load
     assert isinstance(listing.failure, AttributeError) and listing.available() is None
     with pytest.raises(AttributeError, match="no listing"):
         listing.load()
+
+
+def test_a_model_the_brain_labels_shows_its_label():
+    listing = {"object": "list", "data": [
+        {"id": "arty/hf.co/owner/big-a3b-gguf:iq4_xs", "name": "Arty (Big 35B)", "description": "sees images"},
+        {"id": "arty/plain:9b", "name": "Arty (plain:9b)", "description": "9B"},
+        {"id": "arty/quiet:4b", "name": "Arty (Quiet 4B, no tools)"},
+        {"id": "arty/odd:1b", "name": "Arty (" + "x" * 300 + ")"}]}
+    offered = {"object": "list", "data": [{"id": "Arty"}]}
+    with serving([(200, json.dumps(listing)), (200, json.dumps(offered))], "application/json") as (url, _recorder):
+        client = brain.Brain(settings.Settings(remote_url=url, api_key="secret"))
+        listed = dict(client.available_models())
+    assert listed["arty/hf.co/owner/big-a3b-gguf:iq4_xs"] == "Big 35B, sees images"
+    assert listed["arty/plain:9b"] == "9B"
+    assert listed["arty/quiet:4b"] == "Quiet 4B"
+    assert listed["arty/odd:1b"] == ""

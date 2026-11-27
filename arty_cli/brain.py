@@ -32,6 +32,9 @@ LIST_SECONDS = 30
 QUICK_LIST_SECONDS = 5
 MODEL_PREFIX = "arty/"
 OWN_MODEL_PREFIX = "own/"
+BRAIN_LABEL = re.compile(r"Arty \((.+)\)")
+NO_TOOLS_TAIL = ", no tools"
+LABEL_LIMIT = 60
 AGENT_MODEL_PREFIXES = (MODEL_PREFIX, OWN_MODEL_PREFIX)
 REMOTE_MODEL_PREFIX = MODEL_PREFIX + "remote/"
 OUTSIDE_PREFIX = "outside/"
@@ -357,6 +360,8 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
         overflow = window_overflow_in(chunk.get("error"))
         if overflow:
             raise overflow
+        if chunk.get("error"):
+            raise BrainError(f"Arty's brain hit an error: {error_detail(chunk['error'])}")
         if held:
             on_text(held)
             held = ""
@@ -383,8 +388,17 @@ def read_reply(lines, on_text, on_thinking=None) -> dict:
     return {**reply, "usage": usage} if usage else reply
 
 
+def brain_label(entry: dict) -> str:
+    named = BRAIN_LABEL.fullmatch(str(entry.get("name") or ""))
+    if not named:
+        return ""
+    label = named.group(1).removesuffix(NO_TOOLS_TAIL).strip()
+    shown_as_id = label == str(entry.get("id") or "").removeprefix(MODEL_PREFIX)
+    return "" if shown_as_id or len(label) > LABEL_LIMIT else label
+
+
 def arty_model_about(entry: dict) -> str:
-    about = str(entry.get("description") or "")
+    about = ", ".join(part for part in (brain_label(entry), str(entry.get("description") or "")) if part)
     if entry.get("available") is not False:
         return about
     return f"{about.removeprefix(BRAIN_OFFLINE_LEAD)} {OFFLINE_MARK}".strip()
@@ -396,6 +410,12 @@ def joined_call(earlier: dict, piece: dict) -> dict:
     if more.get("name") and not function.get("name"):
         function["name"] = more["name"]
     return {**{key: value for key, value in piece.items() if value}, **earlier, "function": function}
+
+
+def error_detail(found) -> str:
+    if isinstance(found, dict):
+        return str(found.get("message") or found.get("code") or found.get("type") or found)
+    return str(found)
 
 
 def error_object(error: urllib.error.HTTPError) -> dict:

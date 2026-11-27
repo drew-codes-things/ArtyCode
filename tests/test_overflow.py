@@ -9,11 +9,11 @@ from tests.test_follow_ups import BRAINS_FOLLOW_UP
 
 assert project
 
-MODEL = "arty/mimo-v2.6:9b"
+MODEL = "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
 WINDOW = 24576
-REFUSAL = (f"This conversation is longer than mimo-v2.6:9b's context window of {WINDOW} tokens, so the model did not "
+REFUSAL = (f"This conversation is longer than hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS's context window of {WINDOW} tokens, so the model did not "
            "read it. Shorten or compact the conversation and send it again.")
-DETAILS = {"message": REFUSAL, "type": "context_length_exceeded", "code": 413, "model": "mimo-v2.6:9b",
+DETAILS = {"message": REFUSAL, "type": "context_length_exceeded", "code": 413, "model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS",
            "context_tokens": WINDOW}
 
 
@@ -38,7 +38,7 @@ def test_a_streamed_refusal_for_length_is_an_overflow_and_its_text_is_never_show
     with pytest.raises(brain.WindowOverflow) as raised:
         brain.read_reply(refused_stream(), shown.append)
     assert shown == []
-    assert raised.value.window == WINDOW and raised.value.model == "mimo-v2.6:9b"
+    assert raised.value.window == WINDOW and raised.value.model == "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
     assert "context window of 24576 tokens" in str(raised.value)
 
 
@@ -64,10 +64,12 @@ def test_an_answer_ending_in_a_mention_of_the_context_window_is_shown_when_the_s
     assert shown == ["It fits the context window."]
 
 
-def test_another_kind_of_error_in_the_last_chunk_does_not_count_as_an_overflow():
+def test_another_kind_of_error_in_the_last_chunk_is_a_plain_error_not_an_overflow():
     lines = [chunk_line({"content": "ok"}), chunk_line({}, "stop", error={"type": "other", "message": "x"}),
              "data: [DONE]"]
-    assert brain.read_reply(lines, lambda text: None)["content"] == "ok"
+    with pytest.raises(brain.BrainError, match="hit an error: x") as raised:
+        brain.read_reply(lines, lambda text: None)
+    assert not isinstance(raised.value, brain.WindowOverflow)
 
 
 def brain_at(url: str) -> brain.Brain:
@@ -104,7 +106,7 @@ class Refusing:
     def reply(self, messages, tools, on_text):
         self.sent += 1
         if self.sent <= self.refusals:
-            raise brain.WindowOverflow(REFUSAL, "mimo-v2.6:9b", WINDOW)
+            raise brain.WindowOverflow(REFUSAL, "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", WINDOW)
         return {"role": "assistant", "content": "Done.", "tool_calls": []}
 
 
@@ -137,7 +139,7 @@ def refused_once(steps):
 
     def refuse(messages):
         refusals.append(len(messages))
-        raise brain.WindowOverflow(REFUSAL, "mimo-v2.6:9b", WINDOW)
+        raise brain.WindowOverflow(REFUSAL, "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", WINDOW)
 
     return [refuse if step == "refuse" else step for step in steps], refusals
 

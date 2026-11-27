@@ -23,7 +23,7 @@ ArtyCode (the `arty` command, also `arty-cli`) is a coding assistant for the ter
 ("why does the login test fail?", "add a --dry-run flag"), and it looks through the project, makes the change and
 runs the tests. The file tools and the shell always run on your computer. The thinking happens on your own
 [Arty](https://github.com/drew-codes-things/Arty) brain (its own coding model unless you pick another: the first `arty/` model it marks for coding, or
-`arty/qwen3:14b` when it marks none or can't be asked quickly; this is never saved as your choice), so your
+`arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS` (Qwen3.6 35B) when it marks none or can't be asked quickly; this is never saved as your choice), so your
 code only ever goes to your own server. You need an Arty API key, or you can approve this computer in Arty from your browser.
 The brain runs its models on [ArtyEngine](https://github.com/drew-codes-things/ArtyEngine), Arty's own
 model engine. ArtyCode sends its model requests only to the

@@ -20,8 +20,8 @@ ROWS, COLUMNS = 30, 100
 WAIT_SECONDS = 25
 ESCAPE, ENTER = b"\x1b", b"\r"
 BRAIN_MODELS = [{"id": "arty/qwen3:14b", "description": "14B, all tools"},
-                {"id": "arty/mimo-v2.6:9b", "description": "9B, sees images"},
-                {"id": "own/Coder", "description": "private coder"}]
+                {"id": "arty/helper-model:9b", "description": "9B, sees images"},
+                {"id": "own/Paint", "description": "private coder"}]
 ESCAPE_SEQUENCE = re.compile(r"\x1b(\[[0-9;?]*[A-Za-z]|[()][0-9A-Za-z]|[=>])")
 
 
@@ -135,7 +135,7 @@ def start(tmp_path):
 def test_a_whole_slash_model_lists_every_model_in_a_real_terminal_before_enter(start):
     terminal = start(FakeBrain())
     terminal.type(b"/model")
-    assert terminal.sees("arty/mimo-v2.6:9b")
+    assert terminal.sees("arty/helper-model:9b")
     assert terminal.sees("9B, sees images") and terminal.sees("private coder") and terminal.sees("current")
 
 
@@ -145,7 +145,7 @@ def test_enter_on_a_whole_slash_model_opens_the_picker_with_every_model(start):
     assert terminal.sees("9B, sees images")
     terminal.type(ENTER)
     assert terminal.sees("Switch to which?")
-    assert terminal.sees("own/Coder") and terminal.sees("(current)")
+    assert terminal.sees("own/Paint") and terminal.sees("(current)")
     terminal.type(ESCAPE)
     terminal.type(b"/")
     assert terminal.sees("/help")
@@ -176,9 +176,9 @@ def test_a_list_that_arrives_after_slash_model_was_typed_opens_the_menu_by_itsel
     terminal = start(brain)
     terminal.type(b"/model")
     terminal.read_for(1.5)
-    assert "mimo-v2.6:9b" not in terminal.shown
+    assert "helper-model:9b" not in terminal.shown
     brain.release()
-    assert terminal.sees("mimo-v2.6:9b") and terminal.sees("private coder")
+    assert terminal.sees("helper-model:9b") and terminal.sees("private coder")
 
 
 def test_a_list_that_arrives_long_after_slash_model_was_typed_still_opens_the_menu_by_itself(start):
@@ -187,6 +187,6 @@ def test_a_list_that_arrives_long_after_slash_model_was_typed_still_opens_the_me
     terminal = start(brain)
     terminal.type(b"/model")
     terminal.read_for(6.5)
-    assert "mimo-v2.6:9b" not in terminal.shown
+    assert "helper-model:9b" not in terminal.shown
     brain.release()
-    assert terminal.sees("mimo-v2.6:9b") and terminal.sees("private coder")
+    assert terminal.sees("helper-model:9b") and terminal.sees("private coder")

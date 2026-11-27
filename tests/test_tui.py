@@ -1,3 +1,4 @@
+import re
 import stat
 import sys
 import threading
@@ -14,7 +15,7 @@ from prompt_toolkit.output import DummyOutput
 from arty_cli import context, permissions, prompt_line, tui
 
 COMMANDS = {"/model": "switch model", "/mode": "how much is asked", "/help": "this list"}
-MODELS = {"arty/qwen3:14b": "14B, all tools", "arty/mimo-v2.6:9b": "9B, sees images"}
+MODELS = {"arty/qwen3:14b": "14B, all tools", "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS": "35B, sees images"}
 ESCAPE, CTRL_C, CTRL_D, CTRL_R, SHIFT_TAB, UP, DOWN = "\x1b", "\x03", "\x04", "\x12", "\x1b[Z", "\x1b[A", "\x1b[B"
 ALT_ENTER = "\x1b\r"
 PASTE_START, PASTE_END = "\x1b[200~", "\x1b[201~"
@@ -247,17 +248,17 @@ def test_arrows_move_through_the_menu_and_tab_takes_the_choice(started):
 
 def test_after_slash_model_the_menu_lists_the_models(started):
     interface, typed = started
-    typed.send_text("/model arty/m")
-    assert until(lambda: "arty/mimo-v2.6:9b  9B, sees images" in plain(interface.menu_text()))
+    typed.send_text("/model arty/h")
+    assert until(lambda: "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS  35B, sees images" in plain(interface.menu_text()))
     assert "qwen3" not in plain(interface.menu_text())
 
 
 def test_a_whole_slash_model_lists_every_model_with_what_it_does_without_a_space(started):
     interface, typed = started
     typed.send_text("/model")
-    assert until(lambda: "arty/qwen3:14b     14B, all tools" in plain(interface.menu_text()))
+    assert until(lambda: re.search(r"arty/qwen3:14b +14B, all tools", plain(interface.menu_text())))
     shown = plain(interface.menu_text())
-    assert "arty/mimo-v2.6:9b  9B, sees images" in shown and "switch model" not in shown
+    assert "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS  35B, sees images" in shown and "switch model" not in shown
     assert typed_text(interface) == "/model"
 
 
@@ -265,8 +266,8 @@ def test_typing_more_after_a_whole_slash_model_narrows_the_list(started):
     interface, typed = started
     typed.send_text("/model")
     assert until(lambda: "qwen3" in plain(interface.menu_text()))
-    typed.send_text(" arty/m")
-    assert until(lambda: "qwen3" not in plain(interface.menu_text()) and "mimo" in plain(interface.menu_text()))
+    typed.send_text(" arty/h")
+    assert until(lambda: "qwen3" not in plain(interface.menu_text()) and "Qwen3.6" in plain(interface.menu_text()))
 
 
 def test_enter_on_a_whole_slash_model_sends_it_instead_of_taking_the_first_model(started):
@@ -285,14 +286,14 @@ def test_tab_and_the_arrows_pick_a_model_after_a_whole_slash_model(started):
     typed.send_text("\t")
     assert until(lambda: typed_text(interface) == "/model arty/qwen3:14b")
     typed.send_text(CTRL_C + "/model")
-    assert until(lambda: typed_text(interface) == "/model" and "mimo" in plain(interface.menu_text()))
+    assert until(lambda: typed_text(interface) == "/model" and "Qwen3.6" in plain(interface.menu_text()))
     typed.send_text(DOWN)
-    assert until(lambda: typed_text(interface) == "/model arty/mimo-v2.6:9b")
+    assert until(lambda: typed_text(interface) == "/model arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS")
     typed.send_text("\r")
-    assert until(lambda: interface.messages.empty() and typed_text(interface) == "/model arty/mimo-v2.6:9b")
+    assert until(lambda: interface.messages.empty() and typed_text(interface) == "/model arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS")
     typed.send_text("\r")
     assert until(lambda: not interface.messages.empty())
-    assert interface.messages.get_nowait() == "/model arty/mimo-v2.6:9b"
+    assert interface.messages.get_nowait() == "/model arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
 
 
 def test_a_whole_slash_mode_lists_the_modes(started):
@@ -326,7 +327,7 @@ def test_a_menu_asked_for_while_the_list_is_still_loading_waits_for_it_and_then_
     interface.host.models = lambda: MODELS if arrived else {}
     interface.host.await_models = arrive
     typed.send_text("/model")
-    assert until(lambda: "mimo-v2.6:9b" in plain(interface.menu_text()))
+    assert until(lambda: "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS" in plain(interface.menu_text()))
     assert waited == [tui.MODEL_WAIT_SECONDS] and typed_text(interface) == "/model"
 
 
@@ -334,7 +335,7 @@ def test_a_list_that_is_already_there_is_not_waited_for(started):
     interface, typed = started
     interface.host.await_models = lambda seconds: pytest.fail("waited for a list that was there")
     typed.send_text("/model")
-    assert until(lambda: "mimo-v2.6:9b" in plain(interface.menu_text()))
+    assert until(lambda: "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS" in plain(interface.menu_text()))
 
 
 def test_a_list_that_arrives_after_slash_model_was_typed_opens_the_menu_without_another_key(started):
@@ -346,7 +347,7 @@ def test_a_list_that_arrives_after_slash_model_was_typed_opens_the_menu_without_
     assert not until(interface.menu_is_open, 0.5)
     arrived.append(True)
     interface.refresh_menu()
-    assert until(lambda: "mimo-v2.6:9b" in plain(interface.menu_text()))
+    assert until(lambda: "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS" in plain(interface.menu_text()))
     assert typed_text(interface) == "/model"
 
 
@@ -588,9 +589,16 @@ def test_the_footer_shows_no_context_when_it_is_unknown():
 def test_the_footer_shows_what_the_host_reports(started, monkeypatch):
     interface, _typed = started
     monkeypatch.setattr(interface, "room", lambda: 110)
-    interface.host.details = ("arty/mimo-v2.6:9b", "shell-look", context.ContextRoom(3_100, 24_000))
+    interface.host.details = ("arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS", "shell-look", context.ContextRoom(3_100, 24_000))
     shown = plain(interface.bar_text())
-    assert shown.rstrip().endswith("arty/mimo-v2.6:9b · ⎇ shell-look · 3.1k / 24.0k · 87% context left")
+    assert shown.rstrip().endswith("arty/Qwen3.6-35B-A3B · ⎇ shell-look · 3.1k / 24.0k · 87% context left")
+
+
+def test_the_footer_shortens_a_long_hugging_face_model_name():
+    assert tui.footer_model("arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS") == "arty/Qwen3.6-35B-A3B"
+    assert tui.footer_model("hf.co/owner/Tiny-gguf:Q8_0") == "Tiny"
+    assert tui.footer_model("arty/qwen3:14b") == "arty/qwen3:14b"
+    assert tui.footer_model("outside/hf.co/odd") == "outside/hf.co/odd"
 
 
 def test_a_question_mark_in_an_empty_box_opens_the_shortcuts_and_escape_closes_them(started):

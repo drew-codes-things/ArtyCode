@@ -50,6 +50,8 @@ MAX_KEPT_ENTRIES = 10_000
 ZERO_WIDTH_ESCAPE = "[ZeroWidthEscape]"
 SCROLLED_HINT = "  ↓ {} more lines below · pgdn or the mouse wheel to scroll down"
 JOIN_SECONDS = 2.0
+HUGGING_FACE_MODEL = re.compile(r"(?P<prefix>(?:arty/)?)hf\.co/[^/:]+/(?P<repo>[^/:]+):[^/]+")
+GGUF_TAIL = re.compile(r"-gguf$", re.IGNORECASE)
 QUIT_SECONDS = 2.0
 KEY_PREFIX_SECONDS = 0.15
 ESCAPE_SECONDS = 0.05
@@ -386,6 +388,13 @@ def context_used_text(room: context.ContextRoom) -> str:
     return CONTEXT_USED.format(waiting.tokens_text(room.used), waiting.tokens_text(room.limit))
 
 
+def footer_model(model: str) -> str:
+    named = HUGGING_FACE_MODEL.fullmatch(model)
+    if not named:
+        return model
+    return named.group("prefix") + re.sub(GGUF_TAIL, "", named.group("repo"))
+
+
 def footer_pieces(mode: str, shared: bool, model: str, branch: str, room: context.ContextRoom | None, width: int):
     mode_part = [(MODE_STYLES.get(mode, "class:accent"), f"{mode} mode")]
     hint = [("class:dim", f" {MODE_HINT}")]
@@ -394,7 +403,7 @@ def footer_pieces(mode: str, shared: bool, model: str, branch: str, room: contex
     context_part = [("class:dim", CONTEXT_LEFT.format(room.left_percent))] if room else []
     used_part = [("class:dim", context_used_text(room))] if room else []
     branch_part = [("class:dim", BRANCH_MARK + branch)] if branch else []
-    model_part = [("class:dim", model)] if model else []
+    model_part = [("class:dim", footer_model(model))] if model else []
     optional = {"model": model_part, "branch": branch_part, "used": used_part, "shortcuts": shortcuts, "hint": hint}
     for dropped in (None, "hint", "model", "branch", "used", "shortcuts"):
         if dropped:

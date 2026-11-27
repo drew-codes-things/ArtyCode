@@ -222,7 +222,7 @@ def test_with_the_interface_the_status_goes_to_it_and_no_key_watcher_is_started(
 
 class Listing(FakeBrain):
     def available_models(self):
-        return [("arty/qwen3:14b", "14B"), ("arty/mimo-v2.6:9b", "9B, sees images")]
+        return [(settings.DEFAULT_MODEL, "35B, sees images"), ("arty/qwen3:14b", "14B")]
 
 
 def test_the_interface_is_told_when_the_model_list_arrives_in_the_background(interactive, tmp_path):
@@ -247,8 +247,8 @@ def test_slash_model_picks_from_a_list_in_the_interface(interactive, tmp_path, m
     monkeypatch.setattr(cli.settings, "remember", lambda **changes: None)
     session.command("/model")
     question, choices = console.opened[0]
-    assert choices[1] == ("2", "arty/mimo-v2.6:9b  9B, sees images")
-    assert session.client.model == "arty/mimo-v2.6:9b"
+    assert choices[1] == ("2", "arty/qwen3:14b  14B")
+    assert session.client.model == "arty/qwen3:14b"
 
 
 class Bridge:
@@ -290,7 +290,7 @@ def test_in_the_interface_the_header_comes_first_with_the_logo_details_and_its_o
     cli.chat_in_interface(session, interface, share=False)
     shown = interface.scroll.getvalue()
     assert shown.startswith("  " + cli.look.LOGO[0] + "\n") and "ArtyCode " + cli.__version__ in shown
-    assert "  model    arty/qwen3:14b\n" in shown and "  context  " in shown
+    assert f"  model    {settings.DEFAULT_MODEL}\n" in shown and "  context  " in shown
     assert "Esc stops a request" in shown and "Enter while Arty works queues" in shown
     assert "Ctrl-C stops a request" not in shown and "╭" not in shown
 
@@ -423,7 +423,7 @@ def test_the_footer_gets_the_model_branch_and_context_left(interactive, tmp_path
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     host = cli.SessionHost(session)
-    assert host.footer_details() == ("arty/qwen3:14b", "main", None)
+    assert host.footer_details() == (settings.DEFAULT_MODEL, "main", None)
     host.measure()
     model, branch, room = host.footer_details()
     assert 50 <= room.left_percent < 100

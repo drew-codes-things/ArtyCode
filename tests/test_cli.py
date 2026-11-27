@@ -662,7 +662,7 @@ def test_the_welcome_names_the_folder_model_and_mode_on_their_own_rows(ready, mo
     chat_with(monkeypatch, "/exit")
     rows = capsys.readouterr().err.splitlines()
     assert any(row.split(maxsplit=1) == ["Folder", welcome.shown_folder(ready, Path.home())] for row in rows)
-    assert any(row.split()[:2] == ["Model", "arty/qwen3:14b"] for row in rows)
+    assert any(row.split()[:2] == ["Model", settings.DEFAULT_MODEL] for row in rows)
     assert any(row.split()[:2] == ["Mode", "default:"] and "Shift+Tab" in row for row in rows)
 
 

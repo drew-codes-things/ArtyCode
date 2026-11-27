@@ -66,10 +66,6 @@ def test_unknown_keys_in_a_saved_config_are_ignored_and_dropped_on_the_next_save
     assert set(json.loads(path.read_text())) == ARTY_ONLY_FIELDS
 
 
-def test_the_default_model_is_the_one_that_writes_real_tool_calls():
-    assert settings.DEFAULT_MODEL == "arty/qwen3:14b"
-
-
 def test_a_saved_old_default_moves_to_the_new_default_but_a_chosen_model_stays(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"base_url": "http://brain.lan:8081/v1", "model": "arty/qwen2.5-coder:14b"}))
@@ -198,3 +194,11 @@ def test_writing_private_json_goes_through_the_retrying_replace(tmp_path, monkey
     target = tmp_path / "saved.json"
     settings.write_private_json(target, {"a": 1})
     assert json.loads(target.read_text()) == {"a": 1} and len(attempts) == 2
+
+
+def test_the_default_model_is_the_big_main_and_the_old_default_stays_a_choice(tmp_path):
+    assert settings.DEFAULT_MODEL == "arty/hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS"
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"model": "arty/qwen3:14b"}))
+    assert settings.model_was_chosen(path, environ={})
+    assert settings.load(path, environ={}).model == "arty/qwen3:14b"

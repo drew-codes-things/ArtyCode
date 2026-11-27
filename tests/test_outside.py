@@ -70,13 +70,13 @@ def test_the_model_list_shows_arty_and_outside_models(monkeypatch):
             serving([(200, ARTY_LIST), (200, ARTY_LIST)], "application/json") as (arty_url, _arty):
         client = client_for(outside_url, remote_url=f"{arty_url}/v1", api_key=ARTY_KEY)
         listed = [model for model, _ in client.available_models()]
-    assert listed == ["arty/qwen3:14b", "outside/Qwen3-14B-Q4_K_M", "outside/friend/Big-Model"]
+    assert listed == ["arty/qwen3:14b", "outside/Qwen3-14B-Q4_K_M", "outside/remote/model"]
 
 
 def test_with_only_an_outside_server_the_list_is_its_models():
     with outside_server() as (url, _):
         listed = client_for(url).available_models()
-    assert [model for model, _ in listed] == ["outside/Qwen3-14B-Q4_K_M", "outside/friend/Big-Model"]
+    assert [model for model, _ in listed] == ["outside/Qwen3-14B-Q4_K_M", "outside/remote/model"]
     assert all(about.startswith("on 127.0.0.1") for _, about in listed)
 
 
@@ -177,9 +177,9 @@ def test_a_tool_call_sent_in_pieces_is_put_back_together():
 
 
 def test_an_offline_outside_model_is_marked_in_the_model_list():
-    with outside_server(offline={"friend/Big-Model"}) as (url, _):
+    with outside_server(offline={"remote/model"}) as (url, _):
         listed = dict(client_for(url).available_models())
-    assert listed["outside/friend/Big-Model"].endswith("(offline)")
+    assert listed["outside/remote/model"].endswith("(offline)")
     assert "offline" not in listed["outside/Qwen3-14B-Q4_K_M"]
 
 
@@ -191,9 +191,9 @@ def test_an_offline_outside_model_says_it_is_offline_without_waiting(monkeypatch
 
 
 def test_an_offline_arty_model_is_marked_in_the_model_list():
-    listed = json.dumps({"data": [{"id": "arty/remote/friend/big-model", "description": "offline · all tools", "available": False},
+    listed = json.dumps({"data": [{"id": "arty/remote/starfire/model", "description": "offline · all tools", "available": False},
                                   {"id": "arty/qwen3:14b", "description": "14.8B · all tools"}]})
     with serving([(200, listed), (200, listed)], "application/json") as (arty_url, _):
         found = dict(brain.Brain(settings.Settings(remote_url=f"{arty_url}/v1", api_key=ARTY_KEY)).available_models())
-    assert found["arty/remote/friend/big-model"] == "all tools (offline)"
+    assert found["arty/remote/starfire/model"] == "all tools (offline)"
     assert found["arty/qwen3:14b"] == "14.8B · all tools"
