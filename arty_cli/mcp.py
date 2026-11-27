@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -38,6 +39,9 @@ EVENT_STREAM = "text/event-stream"
 SIGN_IN_KEY = "signIn"
 SIGN_IN_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 UNAUTHORISED = 401
+FORBIDDEN = 403
+CHALLENGE_HEADER = "WWW-Authenticate"
+AUTH_WORDS = re.compile(r"auth|sign.?in|log.?in|credential|token", re.IGNORECASE)
 CONNECTED, NEEDS_SIGN_IN, NOT_STARTED = "connected", "needs sign-in again", "didn't start"
 
 
@@ -49,7 +53,14 @@ class SignInNeeded(McpError):
     pass
 
 
-class AuthRequired(McpError):
+class HttpAnswer(McpError):
+    def __init__(self, message: str, status: int, challenge: str = ""):
+        super().__init__(message)
+        self.status = status
+        self.challenge = challenge
+
+
+class AuthRequired(HttpAnswer, SignInNeeded):
     pass
 
 
@@ -247,11 +258,15 @@ def streamed_messages(response):
 
 class WebServer:
     def __init__(self, config: ServerConfig, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS,
-                 credentials=None):
+                 credentials=None, follows_redirects=True, deadline_seconds=None, max_answer_bytes=None):
         self.config = config
         self.start_seconds = start_seconds
         self.call_seconds = call_seconds
         self.credentials = credentials
+        self.follows_redirects = follows_redirects
+        self.ends_at = None if deadline_seconds is None else time.monotonic() + deadline_seconds
+        self.deadline_seconds = deadline_seconds
+        self.max_answer_bytes = max_answer_bytes
         self.lock = threading.Lock()
         self.session = ""
         self.next_id = 0
@@ -288,26 +303,54 @@ class WebServer:
         return self.credentials.take_notice() if self.credentials is not None else ""
 
     def opened(self, request, seconds: float):
-        if self.credentials is None:
+        if self.credentials is None and self.follows_redirects:
             return urllib.request.urlopen(request, timeout=seconds)
         return SIGNED_IN_OPENER.open(request, timeout=seconds)
+
+    def seconds_left(self, seconds: float) -> float:
+        if self.ends_at is None:
+            return seconds
+        left = self.ends_at - time.monotonic()
+        if left <= 0:
+            raise McpError(f"the MCP server {self.config.name} took longer than {self.deadline_seconds:g} s")
+        return min(seconds, left)
+
+    def guarded(self, response):
+        total = 0
+        for raw in response:
+            total += len(raw)
+            self.check_size(total)
+            self.seconds_left(0)
+            yield raw
+
+    def check_size(self, total: int) -> None:
+        if self.max_answer_bytes is not None and total > self.max_answer_bytes:
+            raise McpError(f"the MCP server {self.config.name} sent more than {self.max_answer_bytes} bytes")
 
     def post(self, message: dict, seconds: float, renewed: bool = False):
         headers = self.headers()
         request = urllib.request.Request(self.config.url, data=json.dumps(message).encode(), headers=headers,
                                          method="POST")
         try:
-            response = self.opened(request, seconds)
+            response = self.opened(request, self.seconds_left(seconds))
         except urllib.error.HTTPError as error:
             if error.code == UNAUTHORISED and self.credentials is not None and not renewed:
                 self.renew(headers["Authorization"].removeprefix("Bearer "))
                 return self.post(message, seconds, renewed=True)
-            raised = AuthRequired if error.code == UNAUTHORISED else McpError
-            raise raised(f"the MCP server {self.config.name} answered {error.code} {error.reason}") from None
+            raise self.refused(error) from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as error:
             raise McpError(f"couldn't reach the MCP server {self.config.name} at {self.config.url}: {error}") from None
         self.needs_sign_in = False
         return response
+
+    def refused(self, error: urllib.error.HTTPError) -> HttpAnswer:
+        challenge = error.headers.get(CHALLENGE_HEADER, "") if error.headers else ""
+        if error.code == UNAUTHORISED and self.credentials is None:
+            self.needs_sign_in = True
+            return AuthRequired(f"{self.config.name} now asks for a sign-in: run arty mcp login {self.config.name} "
+                                f"(the server answered {error.code} {error.reason})", error.code, challenge)
+        return HttpAnswer(f"the MCP server {self.config.name} answered {error.code} {error.reason}", error.code,
+                          challenge)
 
     def renew(self, rejected: str) -> None:
         try:
@@ -326,7 +369,7 @@ class WebServer:
     def answer_in(self, response, wanted: int, method: str, seconds: float) -> dict:
         streamed = EVENT_STREAM in (response.headers.get("Content-Type") or "")
         try:
-            texts = streamed_messages(response) if streamed else [response.read().decode("utf-8", errors="replace")]
+            texts = streamed_messages(self.guarded(response)) if streamed else [self.whole_answer(response)]
             for text in texts:
                 message = json.loads(text) if text.strip() else None
                 if not isinstance(message, dict):
@@ -336,14 +379,25 @@ class WebServer:
                     continue
                 if message.get("id") == wanted:
                     return self.result_of(message, method)
-        except (OSError, ValueError, http.client.HTTPException) as error:
+        except (OSError, ValueError, RecursionError, http.client.HTTPException) as error:
             raise McpError(f"the MCP server {self.config.name} sent an unreadable answer to {method}: {error}") from None
         raise McpError(f"the MCP server {self.config.name} didn't answer {method}")
+
+    def whole_answer(self, response) -> str:
+        limit = self.max_answer_bytes
+        raw = response.read() if limit is None else response.read(limit + 1)
+        self.check_size(len(raw))
+        return raw.decode("utf-8", errors="replace")
 
     def result_of(self, message: dict, method: str) -> dict:
         if "error" in message:
             error = message["error"] if isinstance(message["error"], dict) else {}
-            raise McpError(f"{self.config.name} refused {method}: {error.get('message', 'no details')}")
+            detail = str(error.get("message", "no details"))
+            if self.credentials is None and AUTH_WORDS.search(detail):
+                self.needs_sign_in = True
+                raise AuthRequired(f"{self.config.name} now asks for a sign-in: run arty mcp login {self.config.name}",
+                                   UNAUTHORISED)
+            raise McpError(f"{self.config.name} refused {method}: {detail}")
         result = message.get("result")
         return result if isinstance(result, dict) else {}
 
@@ -532,7 +586,7 @@ class Hub:
 
     def troubled(self, config: ServerConfig, problem: str, needs_sign_in: bool) -> str:
         self.trouble[config.name] = Trouble(config, problem, needs_sign_in)
-        if needs_sign_in and f"/mcp login {config.name}" not in problem:
+        if needs_sign_in and f"login {config.name}" not in problem:
             problem += f". Sign in again with /mcp login {config.name}"
         return problem
 

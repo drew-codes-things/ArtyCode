@@ -21,8 +21,12 @@ EXIT_GOOD, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 EXIT_INTERRUPTED = 130
 SUCCESS_FROM, SUCCESS_BEFORE = 200, 300
 AUTH_CHALLENGE = "WWW-Authenticate"
+FORBIDDEN = 403
 OPEN_TYPE = "http"
 OPEN_CHECK_SECONDS = 20
+OPEN_DEADLINE_SECONDS = 60
+OPEN_MAX_ANSWER_BYTES = 1024 * 1024
+PLAIN_ENTRY_KEYS = {"type", "url"}
 HELP_WORDS = ("", "list", "help", "-h", "--help")
 LIST_HINT = "In a chat, /mcp lists your MCP servers, whether each is connected and its tools."
 PASTE_TRIES = 3
@@ -92,6 +96,7 @@ class World:
     is_interactive: Callable = screen.is_interactive
     callback: Callable = oauth.Callback
     wait_seconds: float = oauth.SIGN_IN_SECONDS
+    open_server: Callable = mcp.WebServer
 
 
 def service_named(wanted: str) -> Service | None:
@@ -203,8 +208,8 @@ def is_signed_in_entry(entry: dict | None, name: str) -> bool:
     return entry is not None and entry.get(mcp.SIGN_IN_KEY) == name
 
 
-def is_ours(entry: dict | None, url: str, name: str) -> bool:
-    return entry is None or (entry.get("url") == url and is_signed_in_entry(entry, name))
+def is_plain_entry(entry: dict | None) -> bool:
+    return entry is not None and set(entry) == PLAIN_ENTRY_KEYS and entry.get("type") == OPEN_TYPE
 
 
 def opened_callback(world: World):
@@ -284,8 +289,10 @@ def stepped(terminal: Terminal, label: str, work, done: Callable[[object], str])
 
 
 def signed_in(terminal: Terminal, name: str, label: str, url: str, store: sign_ins.Store, world: World,
-              bound_issuer: str = "", hints: dict | None = None) -> sign_ins.Record:
-    discovery = stepped(terminal, f"Find {label}'s sign-in", lambda: oauth.discover(url, world.fetch, hints),
+              bound_issuer: str = "", hints: dict | None = None,
+              published: oauth.Discovery | None = None) -> sign_ins.Record:
+    discovery = stepped(terminal, f"Find {label}'s sign-in",
+                        lambda: published or oauth.discover(url, world.fetch, hints),
                         lambda found: f"Signs in at {found.issuer}")
     if bound_issuer and oauth.comparable(discovery.issuer) != oauth.comparable(bound_issuer):
         raise SignInStopped(f"{label} now signs in at {discovery.issuer}, not {bound_issuer} as before, so ArtyCode "
@@ -336,24 +343,62 @@ def unheard_redirect() -> str:
     return f"http://{oauth.LOOPBACK_HOST}:{port}{oauth.CALLBACK_PATH}"
 
 
+@dataclass(frozen=True)
+class SignInOffer:
+    hints: dict = field(default_factory=dict)
+    published: oauth.Discovery | None = None
+
+
 def is_open(status: int) -> bool:
     return SUCCESS_FROM <= status < SUCCESS_BEFORE
 
 
-def first_answer(url: str, world: World) -> tuple[int, dict]:
+def first_answer(url: str, world: World) -> tuple[int, dict, str]:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": mcp.initialize_params()}).encode()
     status, headers, _body = world.fetch(url, body, {"Content-Type": "application/json",
                                                      "Accept": f"application/json, {mcp.EVENT_STREAM}"}, "POST")
-    return status, headers
+    return status, headers, oauth.header(headers, mcp.SESSION_HEADER) if is_open(status) else ""
 
 
-def open_connection(label: str, name: str, url: str) -> mcp.ServerConfig | None:
+def first_answer_outcome(answer: tuple[int, dict, str]) -> str:
+    status = answer[0]
+    if is_open(status):
+        return "Answered without a sign-in"
+    if status == oauth.UNAUTHORISED:
+        return "Needs a sign-in"
+    return f"Answered {status}, so looking for a sign-in"
+
+
+def end_first_session(url: str, session: str, world: World) -> None:
+    if not session:
+        return
+    try:
+        world.fetch(url, None, {mcp.SESSION_HEADER: session, mcp.VERSION_HEADER: mcp.PROTOCOL_VERSION}, "DELETE")
+    except oauth.OAuthError:
+        return
+
+
+def published_sign_in(url: str, world: World) -> oauth.Discovery | None:
+    try:
+        return oauth.discover(url, world.fetch, {})
+    except oauth.OAuthError:
+        return None
+
+
+def offer_from(error: mcp.HttpAnswer) -> SignInOffer:
+    return SignInOffer(oauth.challenge_parameters(error.challenge))
+
+
+def opened_or_offer(label: str, name: str, url: str, world: World) -> mcp.ServerConfig | SignInOffer:
     config = mcp.ServerConfig(name, "", [], {}, "yours", url=url)
-    server = mcp.WebServer(config, start_seconds=OPEN_CHECK_SECONDS)
+    server = world.open_server(config, start_seconds=OPEN_CHECK_SECONDS, follows_redirects=False,
+                               deadline_seconds=OPEN_DEADLINE_SECONDS, max_answer_bytes=OPEN_MAX_ANSWER_BYTES)
     try:
         server.start()
-    except mcp.AuthRequired:
-        return None
+    except mcp.HttpAnswer as error:
+        if error.status not in (oauth.UNAUTHORISED, FORBIDDEN):
+            raise SignInStopped(f"{label} didn't ask for a sign-in, but ArtyCode couldn't use it: {error}.") from None
+        return offer_from(error)
     except mcp.McpError as error:
         raise SignInStopped(f"{label} didn't ask for a sign-in, but ArtyCode couldn't use it: {error}.") from None
     finally:
@@ -361,31 +406,36 @@ def open_connection(label: str, name: str, url: str) -> mcp.ServerConfig | None:
     return config
 
 
-def added_without_sign_in(terminal: Terminal, personal: Path, service: Service, name: str,
-                          world: World) -> tuple[mcp.ServerConfig | None, dict]:
-    terminal.show_step(f"Check whether {service.label} needs a sign-in")
-    status, headers = first_answer(service.url, world)
-    config = open_connection(service.label, name, service.url) if is_open(status) else None
-    if config is None:
-        terminal.show_outcome("Needs a sign-in", False)
-        return None, oauth.challenge_parameters(oauth.header(headers, AUTH_CHALLENGE))
-    terminal.show_outcome("No sign-in needed", False)
-    path = save_open_entry(personal, name, service.url)
-    terminal.note(f"Saved {name} in {path}; it needs no sign-in.", "green")
-    return config, {}
+def anonymous_answer(terminal: Terminal, service: Service, name: str,
+                     world: World) -> mcp.ServerConfig | SignInOffer:
+    status, headers, session = stepped(terminal, f"Check whether {service.label} needs a sign-in",
+                                       lambda: first_answer(service.url, world), first_answer_outcome)
+    if status == oauth.UNAUTHORISED:
+        return SignInOffer(oauth.challenge_parameters(oauth.header(headers, AUTH_CHALLENGE)))
+    if not is_open(status):
+        return SignInOffer()
+    end_first_session(service.url, session, world)
+    if is_catalogue_address(service.url):
+        return SignInOffer()
+    published = published_sign_in(service.url, world)
+    if published is not None:
+        return SignInOffer(published=published)
+    return opened_or_offer(service.label, name, service.url, world)
 
 
 def added(terminal: Terminal, personal: Path, service: Service, name: str, store: sign_ins.Store,
           world: World) -> mcp.ServerConfig:
     if not oauth.is_safe_address(service.url):
-        raise SignInStopped(f"{service.url!r} isn't an https address, so ArtyCode won't sign in to it.")
-    if not is_ours(saved_entry(personal, name), service.url, name):
+        raise SignInStopped(f"{service.url!r} isn't an https address, so ArtyCode won't add it.")
+    if saved_entry(personal, name) is not None:
         raise SignInStopped(f"You already have an MCP server called {name}. Pick another name with --name, or "
                             f"remove it first with arty mcp remove {name}.")
-    without_sign_in, hints = added_without_sign_in(terminal, personal, service, name, world)
-    if without_sign_in is not None:
-        return without_sign_in
-    signed_in(terminal, name, service.label, service.url, store, world, hints=hints)
+    found = anonymous_answer(terminal, service, name, world)
+    if isinstance(found, mcp.ServerConfig):
+        path = save_open_entry(personal, name, service.url)
+        terminal.note(f"Saved {name} in {path}; it needs no sign-in.", "green")
+        return found
+    signed_in(terminal, name, service.label, service.url, store, world, hints=found.hints, published=found.published)
     path = save_entry(personal, name, service.url)
     terminal.note(f"Saved {name} in {path}; the sign-in is kept in {store.path}.", "green")
     return mcp.ServerConfig(name, "", [], {}, "yours", url=service.url, sign_in=name)
@@ -396,7 +446,8 @@ def signed_in_again(terminal: Terminal, personal: Path, name: str, store: sign_i
     record = store.get(name)
     entry = saved_entry(personal, name)
     url = entry.get("url") if entry is not None else (record.server_url if record else "")
-    if not isinstance(url, str) or not url or (entry is not None and not is_signed_in_entry(entry, name)):
+    is_other_entry = entry is not None and not is_signed_in_entry(entry, name) and not is_plain_entry(entry)
+    if not isinstance(url, str) or not url or is_other_entry:
         raise SignInStopped(f"There's no signed-in MCP server called {name} in your settings. Add one with "
                             "/mcp add or arty mcp add.")
     if record is not None and record.server_url != url:
@@ -405,7 +456,7 @@ def signed_in_again(terminal: Terminal, personal: Path, name: str, store: sign_i
     service = service_named(name)
     label = service.label if service and service.url == url else name
     signed_in(terminal, name, label, url, store, world, record.issuer if record else "")
-    if entry is None:
+    if entry is None or is_plain_entry(entry):
         save_entry(personal, name, url)
     terminal.note(f"Signed in to {name} again.", "green")
     return mcp.ServerConfig(name, "", [], {}, "yours", url=url, sign_in=name)
@@ -413,7 +464,7 @@ def signed_in_again(terminal: Terminal, personal: Path, name: str, store: sign_i
 
 def removed(terminal: Terminal, personal: Path, name: str, store: sign_ins.Store, fetch=oauth.fetched) -> bool:
     entry = saved_entry(personal, name)
-    if entry is not None and not is_signed_in_entry(entry, name):
+    if entry is not None and not is_signed_in_entry(entry, name) and not is_plain_entry(entry):
         terminal.note(f"{name} isn't a service you signed in to; change it in {personal_settings_path(personal)}.",
                       "error")
         return False
@@ -423,7 +474,7 @@ def removed(terminal: Terminal, personal: Path, name: str, store: sign_ins.Store
     if not (dropped_entry or dropped_sign_in):
         terminal.note(f"There's no MCP server called {name} in your settings.", "error")
         return False
-    terminal.note(f"Removed {name} and its saved sign-in.", "green")
+    terminal.note(f"Removed {name} and its saved sign-in." if dropped_sign_in else f"Removed {name}.", "green")
     if dropped_sign_in and record is not None and record.revocation_endpoint:
         revoke_at_service(terminal, name, record, fetch)
     return True

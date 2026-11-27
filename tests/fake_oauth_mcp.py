@@ -21,6 +21,7 @@ class Provider:
         self.registration_open = True
         self.offers_s256 = True
         self.resource_override = ""
+        self.anonymous = False
         self.sign_in_base = ""
         self.offers_revocation = False
         self.revocation_status = 200
@@ -139,7 +140,7 @@ def handler_for(provider: Provider):
         def mcp(self, message: dict):
             given = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
             provider.mcp_requests.append({"message": message, "authorization": given})
-            if given not in provider.access_tokens:
+            if given not in provider.access_tokens and not (provider.anonymous and not given):
                 metadata = f"{provider.base}/.well-known/oauth-protected-resource/mcp"
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", f'Bearer resource_metadata="{metadata}", scope="read"')

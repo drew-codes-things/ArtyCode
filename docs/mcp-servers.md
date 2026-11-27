@@ -67,14 +67,19 @@ notion (yours): connected with <n> tools
 
 Each one was checked to let ArtyCode register itself and sign in without a client set up by hand. Any other service
 that does the same works by its address: `/mcp add https://mcp.example.com/mcp [name]` or
-`arty mcp add https://mcp.example.com/mcp --name example`. GitHub's and Asana's hosted MCP servers need a client
+`arty mcp add https://mcp.example.com/mcp --name example`. Before it signs in, ArtyCode asks the server the plain
+way, with no sign-in: if the server publishes sign-in details it signs in as described below, and only if it
+publishes none and its tools list works is the server saved with no sign-in at all (an entry of just
+`{"type": "http", "url": "..."}`, like the Cloudflare docs server at `https://docs.mcp.cloudflare.com/mcp`). If such a
+server later asks for a sign-in, ArtyCode says so and `arty mcp login <name>` turns the entry into a signed-in one.
+Adding a name you already have is refused; remove it first. GitHub's and Asana's hosted MCP servers need a client
 registered by hand, so use a token in `headers` for those.
 
 | Command | What it does |
 |---|---|
-| `/mcp add [service or address] [name]`, `arty mcp add [service or address] [--name NAME]` | Sign in and add it |
-| `/mcp login <name>`, `arty mcp login <name>` | Sign in to it again |
-| `/mcp remove <name>`, `arty mcp remove <name>` | Remove it and its saved sign-in, and ask the service to forget the sign-in if it offers that |
+| `/mcp add [service or address] [name]`, `arty mcp add [service or address] [--name NAME]` | Sign in and add it (or add it with no sign-in if the server needs none) |
+| `/mcp login <name>`, `arty mcp login <name>` | Sign in to it again, or sign in for the first time to an entry that was added with no sign-in |
+| `/mcp remove <name>`, `arty mcp remove <name>` | Remove it (an entry added with no sign-in too) and its saved sign-in, and ask the service to forget the sign-in if it offers that |
 | `/mcp` | Every server: connected with how many tools, needs sign-in again, or why it didn't start |
 | `arty mcp`, `arty mcp list` | How to use these commands (the list itself is `/mcp` in a chat) |
 
@@ -90,7 +95,8 @@ real one; it gives up after 5 minutes. When the service says which account you s
   addresses must be https; a server on the internet can't send ArtyCode to this computer, a private network
   (`10.x`, `192.168.x`, `169.254.x`, `fc00::/7` and the like) or names such as `localhost`, `*.local` and
   `*.internal`. Only an MCP server on this computer may use a sign-in server on this computer. None of these requests
-  follow a redirect, and an answer over 1 MB is not read.
+  follow a redirect, and an answer over 1 MB is not read. The same holds for the plain check `mcp add` makes first: it
+  follows no redirect, stops after 60 seconds and reads no more than 1 MB.
 
 - **What is saved.** Your `settings.json` gets `"notion": {"url": "https://mcp.notion.com/mcp", "signIn": "notion"}`,
   with no token in it. The tokens go in `mcp-sign-ins.json` in the same config folder, readable only by you (mode

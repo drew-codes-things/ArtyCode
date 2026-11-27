@@ -164,7 +164,7 @@ arty --remote                                # chat, shared with your phone and 
 | `/init` | Look through the project and write `ARTY.md` (notes read every session) |
 | `?` or `/help` | The commands and keys, in short groups (your own commands last) |
 | `/resume` | Pick an earlier conversation and carry on with it |
-| `/mcp add` | Pick an online service (Notion, Linear, Sentry, Stripe and more) and sign in to it in your browser; its tools work straight away. Also `arty mcp add <service>` |
+| `/mcp add` | Pick an online service (Notion, Linear, Sentry, Stripe and more) and sign in to it in your browser (a server that needs no sign-in is added without one); its tools work straight away. Also `arty mcp add <service>` |
 | **Esc** | Stop the running request, keeping every step that finished |
 | **Shift+Tab** | Move on to the next mode: default, auto-edit, plan, then default again |
 | **Ctrl-O** or `/last` | Everything the last step with output gave back |

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from arty_cli import cli, mcp, mcp_sign_in, oauth, screen, settings, sign_ins, tools
-from tests import fake_http_mcp, fake_oauth_mcp
+from tests import fake_http_mcp, fake_oauth_mcp, fake_probe_mcp
 from tests.scripted import ScriptedBrain, session_for
 from tests.test_oauth import cut_short_server, no_redirect
 
@@ -924,7 +924,7 @@ def test_adding_a_server_that_needs_no_sign_in_saves_a_plain_entry(home, open_se
     assert entry == {"type": "http", "url": url}
     assert stored("open") is None and opened == []
     assert "needs no sign-in" in shown
-    assert recorded.deleted == [fake_http_mcp.SESSION]
+    assert recorded.deleted == [fake_http_mcp.SESSION, fake_http_mcp.SESSION]
 
 
 def test_slash_mcp_add_connects_a_server_that_needs_no_sign_in(home, open_server, monkeypatch):
@@ -950,3 +950,289 @@ def test_a_server_that_answers_without_sign_in_but_cannot_be_used_saves_nothing(
     code, shown = signed_in_through_cli(url, name="open")
     assert code == mcp_sign_in.EXIT_FAILED and "couldn't use it: the tool list was unreadable" in shown
     assert not (personal() / "settings.json").exists()
+
+
+@pytest.fixture
+def probe_server():
+    started = []
+
+    def start(answer=fake_probe_mcp.healthy):
+        server, holder = fake_probe_mcp.serving(answer)
+        started.append(server)
+        return holder
+
+    yield start
+    for server in started:
+        server.shutdown()
+        server.server_close()
+
+
+def settings_table() -> dict:
+    return json.loads((personal() / "settings.json").read_text())
+
+
+def test_a_server_that_works_anonymously_but_publishes_a_sign_in_is_signed_in_to(home, provider):
+    found, url = provider
+    found.anonymous = True
+    opened = []
+    code, shown = signed_in_through_cli(url, world=desktop(opened))
+    assert code == 0, shown
+    assert settings_table()["mcpServers"]["fake"] == {"url": url, "signIn": "fake"}
+    assert stored().access_token in found.access_tokens and len(opened) == 1
+
+
+def test_a_server_that_works_anonymously_but_publishes_a_sign_in_can_be_signed_in_to_again(home, provider):
+    found, url = provider
+    found.anonymous = True
+    signed_in_through_cli(url)
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "login", "fake"], terminal, desktop()) == 0, terminal.err.getvalue()
+
+
+def test_a_catalogue_service_is_never_saved_without_a_sign_in(home, monkeypatch):
+    service = mcp_sign_in.CATALOGUE[0]
+    monkeypatch.setattr(mcp_sign_in, "first_answer", lambda url, world: (200, {}, ""))
+    monkeypatch.setattr(mcp_sign_in, "opened_or_offer", lambda *args: pytest.fail("tried an anonymous connection"))
+    with pytest.raises(mcp_sign_in.SignInStopped):
+        mcp_sign_in.added(quiet_terminal(), personal(), service, "notion", sign_ins.Store(personal()),
+                          canned_world({}, {}, {service.url: (200, {}, b"")}))
+
+
+def in_band_auth_error(handler, message) -> None:
+    if message and message.get("method") == "initialize":
+        return fake_probe_mcp.rpc(handler, message, error={"code": -32001, "message": "Authentication required"})
+    fake_probe_mcp.send(handler, 404)
+
+
+def forbidden(handler, message) -> None:
+    fake_probe_mcp.send(handler, 403, b"no")
+
+
+@pytest.mark.parametrize("answer", [in_band_auth_error, forbidden])
+def test_an_answer_that_asks_for_auth_without_a_401_goes_on_to_the_sign_in_path(home, probe_server, answer):
+    holder = probe_server(answer)
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="odd")
+    assert code == mcp_sign_in.EXIT_FAILED and "doesn't publish its details" in shown
+    assert "couldn't use it" not in shown and not (personal() / "settings.json").exists()
+
+
+def test_a_signed_in_server_is_never_replaced_by_adding_it_again(home, provider):
+    found, url = provider
+    signed_in_through_cli(url)
+    before = (settings_table(), stored())
+    found.anonymous = True
+    code, shown = signed_in_through_cli(url)
+    assert code == mcp_sign_in.EXIT_FAILED and "already have an MCP server called fake" in shown
+    assert "remove it first" in shown
+    assert (settings_table(), stored()) == before
+
+
+def test_adding_a_plain_entry_again_is_refused_and_remove_then_makes_it_work(home, open_server):
+    _recorded, url = open_server
+    assert signed_in_through_cli(url, name="open")[0] == 0
+    code, shown = signed_in_through_cli(url, name="open")
+    assert code == mcp_sign_in.EXIT_FAILED and "remove it first with arty mcp remove open" in shown
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "remove", "open"], terminal, desktop()) == 0, terminal.err.getvalue()
+    assert "open" not in settings_table()["mcpServers"]
+    assert signed_in_through_cli(url, name="open")[0] == 0
+
+
+def test_slash_mcp_remove_takes_a_plain_entry_away_and_stops_its_tools(home, open_server, monkeypatch):
+    _recorded, url = open_server
+    session_world(monkeypatch, desktop())
+    session = session_for(home, ScriptedBrain([]))
+    session.extras = cli.extras_module.Extras(hub=hub_for(home))
+    try:
+        session.command(f"/mcp add {url} open")
+        session.command("/mcp remove open")
+        assert "open" not in settings_table()["mcpServers"]
+        assert session.extras.hub.tool("mcp__open__lookup") is None
+    finally:
+        session.extras.close()
+
+
+def test_a_plain_entry_with_headers_is_still_left_alone_by_remove(home):
+    personal().mkdir(parents=True)
+    entry = {"type": "http", "url": "https://a.example/mcp", "headers": {"X-Key": "1"}}
+    (personal() / "settings.json").write_text(json.dumps({"mcpServers": {"mine": entry}}))
+    assert mcp_sign_in.run(["mcp", "remove", "mine"], quiet_terminal(), desktop()) == mcp_sign_in.EXIT_FAILED
+    assert settings_table()["mcpServers"]["mine"] == entry
+
+
+def test_logging_in_to_a_plain_entry_that_now_asks_for_a_sign_in_converts_it(home, provider):
+    found, url = provider
+    personal().mkdir(parents=True)
+    (personal() / "settings.json").write_text(json.dumps({"mcpServers": {"fake": {"type": "http", "url": url}}}))
+    terminal = quiet_terminal()
+    assert mcp_sign_in.run(["mcp", "login", "fake"], terminal, desktop()) == 0, terminal.err.getvalue()
+    assert settings_table()["mcpServers"]["fake"] == {"url": url, "signIn": "fake"}
+    assert stored().access_token in found.access_tokens
+
+
+def test_a_plain_entry_whose_server_now_wants_a_sign_in_says_how_to_sign_in(home, provider):
+    _found, url = provider
+    config = mcp.ServerConfig("fake", "", [], {}, "yours", url=url)
+    hub = mcp.Hub(tools.Workspace(home))
+    problems = hub.start([config])
+    assert len(problems) == 1 and "fake now asks for a sign-in: run arty mcp login fake" in problems[0]
+    assert problems[0].count("login") == 1
+    assert hub.states()[0].status == mcp.NEEDS_SIGN_IN
+
+
+def test_a_plain_entry_whose_tool_call_gets_a_401_says_how_to_sign_in(home, probe_server):
+    def refusing_calls(handler, message):
+        if message and message.get("method") == "tools/call":
+            return fake_probe_mcp.send(handler, 401, headers={"WWW-Authenticate": "Bearer"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(refusing_calls)
+    hub = mcp.Hub(tools.Workspace(home))
+    hub.start([mcp.ServerConfig("odd", "", [], {}, "yours", url=f"{holder.address}/mcp")])
+    try:
+        assert hub.run("mcp__odd__lookup", {}).startswith("Error: odd now asks for a sign-in: run arty mcp login odd")
+    finally:
+        hub.close()
+
+
+def test_a_hostile_deeply_nested_answer_is_a_note_not_a_traceback(home, probe_server):
+    def nested(handler, message):
+        if message and message.get("method") == "tools/list":
+            return fake_probe_mcp.send(handler, 200, b"[" * 200_000, {"Content-Type": "application/json"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(nested)
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="deep")
+    assert code == mcp_sign_in.EXIT_FAILED and "Traceback" not in shown and "Nothing was saved" in shown
+
+
+def test_a_hostile_deeply_nested_answer_in_slash_mcp_add_is_a_note(home, probe_server, monkeypatch):
+    def nested(handler, message):
+        if message and message.get("method") == "tools/list":
+            return fake_probe_mcp.send(handler, 200, b"[" * 200_000, {"Content-Type": "application/json"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(nested)
+    session_world(monkeypatch, desktop())
+    session = session_for(home, ScriptedBrain([]))
+    session.extras = cli.extras_module.Extras(hub=hub_for(home))
+    session.command(f"/mcp add {holder.address}/mcp deep")
+    assert "Nothing was saved" in session.terminal.err.getvalue()
+
+
+def test_the_anonymous_check_never_follows_a_redirect(home, probe_server):
+    other = probe_server(lambda handler, message: fake_probe_mcp.send(handler, 200, b"{}"))
+
+    def redirecting(handler, message):
+        if message and message.get("method") == "initialize" and len(holder.methods()) > 1:
+            return fake_probe_mcp.send(handler, 302, headers={"Location": f"{other.address}/internal"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(redirecting)
+    code, _shown = signed_in_through_cli(f"{holder.address}/mcp", name="hop")
+    assert code == mcp_sign_in.EXIT_FAILED and other.requests == []
+
+
+def test_a_server_that_keeps_the_anonymous_check_going_is_stopped_at_the_deadline(home, probe_server, monkeypatch):
+    def slow_list(handler, message):
+        if message and message.get("method") == "tools/list":
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            for _beat in range(20):
+                handler.wfile.write(b": keep going\n\n")
+                handler.wfile.flush()
+                time.sleep(0.2)
+            return None
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(slow_list)
+    monkeypatch.setattr(mcp_sign_in, "OPEN_DEADLINE_SECONDS", 1)
+    started = time.monotonic()
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="slow")
+    assert code == mcp_sign_in.EXIT_FAILED and "took longer than" in shown and time.monotonic() - started < 3
+
+
+def test_an_oversized_anonymous_answer_is_refused(home, probe_server, monkeypatch):
+    def huge(handler, message):
+        if message and message.get("method") == "tools/list":
+            return fake_probe_mcp.send(handler, 200, b" " * 5_000, {"Content-Type": "application/json"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(huge)
+    monkeypatch.setattr(mcp_sign_in, "OPEN_MAX_ANSWER_BYTES", 1_000)
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="big")
+    assert code == mcp_sign_in.EXIT_FAILED and "more than" in shown and not (personal() / "settings.json").exists()
+
+
+def test_a_401_after_an_anonymous_start_keeps_the_challenge_for_the_sign_in(home, probe_server):
+    def late_401(handler, message):
+        if message and message.get("method") == "tools/list":
+            return fake_probe_mcp.send(handler, 401, headers={"WWW-Authenticate": 'Bearer scope="read"'})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(late_401)
+    offered = mcp_sign_in.opened_or_offer("Odd", "odd", f"{holder.address}/mcp", desktop())
+    assert isinstance(offered, mcp_sign_in.SignInOffer) and offered.hints["scope"] == "read"
+
+
+def test_a_403_with_a_challenge_does_not_fetch_the_metadata_it_names(home):
+    fetched = []
+    challenge = 'Bearer resource_metadata="https://meta.example/custom"'
+    answers = {HOSTILE_SERVER: (403, {"WWW-Authenticate": challenge}, b"")}
+
+    def fetch(url, *rest):
+        fetched.append(url)
+        return answers.get(url, (404, {}, b"{}"))
+
+    world = canned_world({}, {}, fetch=fetch)
+    mcp_sign_in.run(["mcp", "add", HOSTILE_SERVER, "--name", "x"], quiet_terminal(), world)
+    assert "https://meta.example/custom" not in fetched
+
+
+@pytest.mark.parametrize("status, wording", [(404, "Answered 404"), (500, "Answered 500"), (403, "403")])
+def test_the_status_line_says_what_the_server_answered(home, status, wording):
+    answers = {HOSTILE_SERVER: (status, {}, b"")}
+    terminal = quiet_terminal()
+    mcp_sign_in.run(["mcp", "add", HOSTILE_SERVER, "--name", "x"], terminal,
+                    canned_world({}, {}, fetch=lambda url, *rest: answers.get(url, (404, {}, b"{}"))))
+    shown = terminal.err.getvalue()
+    assert wording in shown and "Needs a sign-in" not in shown.split("Find")[0]
+
+
+def test_an_unreachable_server_closes_the_check_step_with_what_went_wrong(home):
+    def unreachable(url, *rest):
+        raise oauth.Unavailable(f"Couldn't reach {url}: refused")
+
+    terminal = quiet_terminal()
+    code = mcp_sign_in.run(["mcp", "add", HOSTILE_SERVER, "--name", "x"], terminal,
+                           canned_world({}, {}, fetch=unreachable))
+    shown = terminal.err.getvalue()
+    assert code == mcp_sign_in.EXIT_FAILED and "Couldn't reach" in shown.split("Nothing was saved")[0]
+    assert shown.count("Check whether") == 1 and "└ Couldn't reach" in shown
+
+
+def test_the_anonymous_connection_goes_through_the_world(home):
+    started = []
+
+    class Stub:
+        def __init__(self, config, **limits):
+            started.append((config.url, limits))
+
+        def start(self):
+            return []
+
+        def close(self):
+            return ""
+
+    answers = {HOSTILE_SERVER: (200, {}, b"{}")}
+    world = canned_world({}, {}, answers, open_server=Stub,
+                         fetch=lambda url, *rest: answers.get(url, (404, {}, b"{}")))
+    code = mcp_sign_in.run(["mcp", "add", HOSTILE_SERVER, "--name", "stub"], quiet_terminal(), world)
+    assert code == 0 and [url for url, _limits in started] == [HOSTILE_SERVER]
+    assert settings_table()["mcpServers"]["stub"] == {"type": "http", "url": HOSTILE_SERVER}
+
+
+def test_an_http_address_that_is_not_this_computer_is_turned_away_in_plain_words(home):
+    code, shown = signed_in_through_cli("http://192.168.1.50:8080/mcp")
+    assert code == mcp_sign_in.EXIT_FAILED and "isn't an https address, so ArtyCode won't add it" in shown
