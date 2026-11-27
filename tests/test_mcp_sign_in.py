@@ -1443,7 +1443,33 @@ def test_resource_metadata_naming_a_sign_in_server_with_no_details_stops_the_add
     assert not (personal() / "settings.json").exists()
 
 
-@pytest.mark.parametrize("status", [500, 503])
+@pytest.mark.parametrize("status", [405, 403, 401, 400, 406, 501])
+def test_a_working_server_whose_well_known_answers_are_refusals_is_still_saved_without_a_sign_in(home, probe_server,
+                                                                                                    status):
+    holder = probe_server()
+
+    def refusing(handler, message):
+        if message is None:
+            return fake_probe_mcp.send(handler, status)
+        fake_probe_mcp.healthy(handler, message)
+
+    holder.answer = refusing
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="plain")
+    assert code == 0, shown
+    assert settings_table()["mcpServers"]["plain"] == {"type": "http", "url": f"{holder.address}/mcp"}
+
+
+def test_details_that_answer_503_behind_resource_metadata_show_the_503(home, probe_server):
+    holder = probe_server()
+    answers = {"/.well-known/oauth-protected-resource/mcp": names_a_sign_in_server(holder.address)}
+    answers.update({path: (503, {}) for path in ("/.well-known/oauth-authorization-server",
+                                                "/.well-known/openid-configuration")})
+    holder.answer = well_known_answers(answers)
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="odd")
+    assert code == mcp_sign_in.EXIT_FAILED and "answered 503" in shown and "doesn't publish" not in shown
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
 def test_a_server_error_on_every_well_known_address_stops_the_add(home, probe_server, status):
     holder = probe_server()
 

@@ -23,7 +23,9 @@ EXIT_INTERRUPTED = 130
 SUCCESS_FROM, SUCCESS_BEFORE = 200, 300
 AUTH_CHALLENGE = "WWW-Authenticate"
 FORBIDDEN = 403
-CLEAN_NOT_FOUND = (200, 404, 410)
+CLIENT_ERRORS = range(400, 500)
+TOO_MANY_REQUESTS = 429
+NOT_IMPLEMENTED = 501
 OPEN_TYPE = "http"
 OPEN_CHECK_SECONDS = 20
 OPEN_DEADLINE_SECONDS = 60
@@ -380,6 +382,11 @@ def end_first_session(url: str, session: str, world: World) -> None:
         return
 
 
+def is_nothing_published(status: int) -> bool:
+    is_refusal = status in CLIENT_ERRORS and status != TOO_MANY_REQUESTS
+    return is_open(status) or is_refusal or status == NOT_IMPLEMENTED
+
+
 def published_sign_in(label: str, url: str, world: World) -> oauth.Discovery | None:
     answered = []
 
@@ -388,17 +395,18 @@ def published_sign_in(label: str, url: str, world: World) -> oauth.Discovery | N
         answered.append((address, found[0]))
         return found
 
+    def stopped(reason: str) -> SignInStopped:
+        return SignInStopped(f"ArtyCode couldn't tell whether {label} needs a sign-in: {reason}")
+
     try:
         return oauth.discover(url, recording, {})
-    except oauth.NotPublished:
-        unclear = [(address, status) for address, status in answered if status not in CLEAN_NOT_FOUND]
-        if unclear:
-            address, status = unclear[0]
-            raise SignInStopped(f"ArtyCode couldn't tell whether {label} needs a sign-in: {address} answered "
-                                f"{status}.") from None
-        return None
     except oauth.OAuthError as error:
-        raise SignInStopped(f"ArtyCode couldn't tell whether {label} needs a sign-in: {error}") from None
+        unclear = [(address, status) for address, status in answered if not is_nothing_published(status)]
+        if unclear:
+            raise stopped(f"{unclear[0][0]} answered {unclear[0][1]}.") from None
+        if isinstance(error, oauth.NotPublished):
+            return None
+        raise stopped(str(error)) from None
 
 
 def refusal_of(label: str, error: mcp.HttpAnswer) -> SignInOffer:
