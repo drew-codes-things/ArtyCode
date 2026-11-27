@@ -49,6 +49,10 @@ class SignInNeeded(McpError):
     pass
 
 
+class AuthRequired(McpError):
+    pass
+
+
 class NoRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -298,7 +302,8 @@ class WebServer:
             if error.code == UNAUTHORISED and self.credentials is not None and not renewed:
                 self.renew(headers["Authorization"].removeprefix("Bearer "))
                 return self.post(message, seconds, renewed=True)
-            raise McpError(f"the MCP server {self.config.name} answered {error.code} {error.reason}") from None
+            raised = AuthRequired if error.code == UNAUTHORISED else McpError
+            raise raised(f"the MCP server {self.config.name} answered {error.code} {error.reason}") from None
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as error:
             raise McpError(f"couldn't reach the MCP server {self.config.name} at {self.config.url}: {error}") from None
         self.needs_sign_in = False

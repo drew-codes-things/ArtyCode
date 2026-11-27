@@ -904,3 +904,49 @@ def test_an_unreadable_address_given_to_arty_mcp_add_is_a_usage_note(home):
     terminal = quiet_terminal()
     assert mcp_sign_in.run(["mcp", "add", "https://["], terminal, desktop()) == mcp_sign_in.EXIT_USAGE
     assert "arty mcp add" in terminal.err.getvalue()
+
+
+@pytest.fixture
+def open_server():
+    recorded = fake_http_mcp.Recorded()
+    server, url = fake_http_mcp.serving(recorded, token=None)
+    yield recorded, url
+    server.shutdown()
+    server.server_close()
+
+
+def test_adding_a_server_that_needs_no_sign_in_saves_a_plain_entry(home, open_server):
+    recorded, url = open_server
+    opened = []
+    code, shown = signed_in_through_cli(url, name="open", world=desktop(opened))
+    assert code == 0, shown
+    entry = json.loads((personal() / "settings.json").read_text())["mcpServers"]["open"]
+    assert entry == {"type": "http", "url": url}
+    assert stored("open") is None and opened == []
+    assert "needs no sign-in" in shown
+    assert recorded.deleted == [fake_http_mcp.SESSION]
+
+
+def test_slash_mcp_add_connects_a_server_that_needs_no_sign_in(home, open_server, monkeypatch):
+    _recorded, url = open_server
+    session_world(monkeypatch, desktop())
+    session = session_for(home, ScriptedBrain([]))
+    session.extras = cli.extras_module.Extras(hub=hub_for(home))
+    try:
+        session.command(f"/mcp add {url} open")
+        shown = session.terminal.err.getvalue()
+        assert "open (yours): connected with 2 tools" in shown
+        assert session.extras.hub.run("mcp__open__lookup", {"q": "x"}) == "found x"
+    finally:
+        session.extras.close()
+
+
+def test_a_server_that_answers_without_sign_in_but_cannot_be_used_saves_nothing(home, open_server, monkeypatch):
+    _recorded, url = open_server
+    def failing(self):
+        raise mcp.McpError("the tool list was unreadable")
+
+    monkeypatch.setattr(mcp.WebServer, "start", failing)
+    code, shown = signed_in_through_cli(url, name="open")
+    assert code == mcp_sign_in.EXIT_FAILED and "couldn't use it: the tool list was unreadable" in shown
+    assert not (personal() / "settings.json").exists()

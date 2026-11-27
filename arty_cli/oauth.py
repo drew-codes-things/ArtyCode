@@ -298,9 +298,9 @@ def optional_endpoint(metadata: dict, name: str, server_url: str) -> str:
     return found if is_safe_endpoint(found, server_url) else ""
 
 
-def discover(server_url: str, fetch=fetched) -> Discovery:
+def discover(server_url: str, fetch=fetched, hints: dict | None = None) -> Discovery:
     checked_address(server_url, "MCP server address")
-    hints = unauthorised_hints(server_url, fetch)
+    hints = unauthorised_hints(server_url, fetch) if hints is None else hints
     resource = protected_resource(server_url, hints, fetch)
     servers = text_list(resource, "authorization_servers", server_url) or [origin_of(server_url)]
     issuer = checked_address(servers[0], "sign-in server address", server_url)

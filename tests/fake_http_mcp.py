@@ -17,7 +17,7 @@ class Recorded:
         self.deleted = []
 
 
-def handler_for(recorded: Recorded):
+def handler_for(recorded: Recorded, token: str | None = "secret-token"):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -28,7 +28,7 @@ def handler_for(recorded: Recorded):
             if "method" not in message:
                 recorded.client_answers.append(message)
                 return self.empty(202)
-            if self.headers.get("Authorization") != "Bearer secret-token":
+            if token is not None and self.headers.get("Authorization") != f"Bearer {token}":
                 return self.empty(401)
             if "id" not in message:
                 return self.empty(202)
@@ -80,7 +80,7 @@ def handler_for(recorded: Recorded):
     return Handler
 
 
-def serving(recorded: Recorded):
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(recorded))
+def serving(recorded: Recorded, token: str | None = "secret-token"):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(recorded, token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}/mcp"
