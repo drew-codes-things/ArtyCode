@@ -41,6 +41,7 @@ PRIVATE_NAME_ENDINGS = (".localhost", ".local", ".internal", ".home.arpa")
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MAX_ANSWER_BYTES = 1024 * 1024
 READ_CHUNK_BYTES = 8192
+SOCKET_SEARCH_DEPTH = 3
 CALLBACK_REQUEST_SECONDS = 10
 TOO_MANY_REQUESTS = 429
 FIRST_SERVER_ERROR = 500
@@ -112,8 +113,18 @@ def read_some(answer, size: int) -> bytes:
     return reader(size)
 
 
+def socket_of(answer):
+    layer = answer
+    for _depth in range(SOCKET_SEARCH_DEPTH):
+        found = getattr(getattr(getattr(layer, "fp", None), "raw", None), "_sock", None)
+        if found is not None:
+            return found
+        layer = getattr(layer, "fp", None)
+    return None
+
+
 def set_read_timeout(answer, seconds: float) -> None:
-    found = getattr(getattr(getattr(answer, "fp", None), "raw", None), "_sock", None)
+    found = socket_of(answer)
     if found is not None:
         found.settimeout(seconds)
 
@@ -360,7 +371,12 @@ def discover(server_url: str, fetch=fetched, hints: dict | None = None) -> Disco
     resource = protected_resource(server_url, hints, fetch)
     servers = text_list(resource, "authorization_servers", server_url) or [origin_of(server_url)]
     issuer = checked_address(servers[0], "sign-in server address", server_url)
-    metadata = authorization_server(issuer, fetch)
+    try:
+        metadata = authorization_server(issuer, fetch)
+    except NotPublished as error:
+        if resource or hints.get("resource_metadata"):
+            raise OAuthError(str(error)) from None
+        raise
     scope = hints.get("scope") or " ".join(text_list(resource, "scopes_supported", server_url))
     return Discovery(server_url, text_field(resource, "resource", server_url) or server_url, metadata["issuer"],
                      checked_address(metadata.get("authorization_endpoint"), "sign-in page address", server_url),

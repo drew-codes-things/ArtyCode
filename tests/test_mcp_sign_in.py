@@ -1411,3 +1411,90 @@ def test_sign_in_details_that_cannot_be_used_are_reported_and_nothing_is_saved(h
     code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="odd")
     assert code == mcp_sign_in.EXIT_FAILED and "couldn't tell whether" in shown
     assert not (personal() / "settings.json").exists()
+
+
+def well_known_answers(answers: dict):
+    def answer(handler, message):
+        if message is None:
+            wanted = answers.get(handler.path)
+            if wanted is not None:
+                status, body = wanted
+                return fake_probe_mcp.send(handler, status, json.dumps(body).encode() if body else b"",
+                                           {"Content-Type": "application/json"})
+            return fake_probe_mcp.send(handler, 404)
+        fake_probe_mcp.healthy(handler, message)
+
+    return answer
+
+
+def names_a_sign_in_server(address: str) -> tuple[int, dict]:
+    return 200, {"resource": f"{address}/mcp", "authorization_servers": [address]}
+
+
+@pytest.mark.parametrize("status", [404, 503])
+def test_resource_metadata_naming_a_sign_in_server_with_no_details_stops_the_add(home, probe_server, status):
+    holder = probe_server()
+    answers = {"/.well-known/oauth-protected-resource/mcp": names_a_sign_in_server(holder.address)}
+    answers.update({path: (status, {}) for path in ("/.well-known/oauth-authorization-server",
+                                                   "/.well-known/openid-configuration")})
+    holder.answer = well_known_answers(answers)
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="odd")
+    assert code == mcp_sign_in.EXIT_FAILED and "ArtyCode couldn't tell whether" in shown
+    assert not (personal() / "settings.json").exists()
+
+
+@pytest.mark.parametrize("status", [500, 503])
+def test_a_server_error_on_every_well_known_address_stops_the_add(home, probe_server, status):
+    holder = probe_server()
+
+    def failing(handler, message):
+        if message is None:
+            return fake_probe_mcp.send(handler, status)
+        fake_probe_mcp.healthy(handler, message)
+
+    holder.answer = failing
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="odd")
+    assert code == mcp_sign_in.EXIT_FAILED and "ArtyCode couldn't tell whether" in shown and str(status) in shown
+    assert not (personal() / "settings.json").exists()
+
+
+def test_plain_not_found_answers_with_no_hint_still_mean_no_sign_in(home, probe_server):
+    holder = probe_server()
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="clean")
+    assert code == 0, shown
+    assert settings_table()["mcpServers"]["clean"] == {"type": "http", "url": f"{holder.address}/mcp"}
+
+
+def test_a_dripping_401_body_is_stopped_at_the_deadline(home, probe_server, monkeypatch):
+    def dripping(handler, message):
+        time.sleep(1)
+        handler.send_response(401)
+        handler.send_header("Content-Length", "10")
+        handler.end_headers()
+        handler.wfile.write(b"x")
+        handler.wfile.flush()
+        time.sleep(4)
+
+    holder = probe_server(dripping)
+    monkeypatch.setattr(mcp_sign_in, "OPEN_DEADLINE_SECONDS", 2)
+    started = time.monotonic()
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="drip")
+    assert code == mcp_sign_in.EXIT_FAILED and time.monotonic() - started < 2.7
+
+
+def test_the_deadline_messages_end_with_one_full_stop(home, probe_server, monkeypatch):
+    holder = probe_server(lambda handler, message: trickling_body(handler, message))
+    monkeypatch.setattr(mcp_sign_in, "OPEN_DEADLINE_SECONDS", 1)
+    _code, first = signed_in_through_cli(f"{holder.address}/mcp", name="first")
+    assert "Not signed in: The check took longer than 1 s. Nothing was saved." in first
+
+    def trickling_list(handler, message):
+        if message and message.get("method") == "tools/list":
+            return trickling_body(handler, message)
+        fake_probe_mcp.healthy(handler, message)
+
+    later = probe_server(trickling_list)
+    _code, second = signed_in_through_cli(f"{later.address}/mcp", name="second")
+    assert ("ArtyCode couldn't use it: the MCP server second: the check took longer than 1 s. Nothing was saved."
+            in second)
+    assert ".." not in first + second

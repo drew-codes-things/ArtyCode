@@ -98,7 +98,9 @@ real one; it gives up after 5 minutes. When the service says which account you s
   follow a redirect, and an answer over 1 MB is not read. The plain check `mcp add` makes first follows no redirect
   either, and all of it (every request and every read) shares one 60 second clock and reads no more than 1 MB of any
   one answer. A server saved with no sign-in connects without following redirects too. If the sign-in details a server
-  publishes can't be used, `mcp add` says so and saves nothing.
+  publishes can't be used, or can't be looked up (a server error or a missing sign-in server behind published
+  resource details), `mcp add` says so and saves nothing; only plain "not found" answers everywhere count as a
+  server that needs no sign-in.
 
 - **What is saved.** Your `settings.json` gets `"notion": {"url": "https://mcp.notion.com/mcp", "signIn": "notion"}`,
   with no token in it. The tokens go in `mcp-sign-ins.json` in the same config folder, readable only by you (mode

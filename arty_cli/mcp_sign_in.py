@@ -23,6 +23,7 @@ EXIT_INTERRUPTED = 130
 SUCCESS_FROM, SUCCESS_BEFORE = 200, 300
 AUTH_CHALLENGE = "WWW-Authenticate"
 FORBIDDEN = 403
+CLEAN_NOT_FOUND = (200, 404, 410)
 OPEN_TYPE = "http"
 OPEN_CHECK_SECONDS = 20
 OPEN_DEADLINE_SECONDS = 60
@@ -380,9 +381,21 @@ def end_first_session(url: str, session: str, world: World) -> None:
 
 
 def published_sign_in(label: str, url: str, world: World) -> oauth.Discovery | None:
+    answered = []
+
+    def recording(address: str, *rest):
+        found = world.fetch(address, *rest)
+        answered.append((address, found[0]))
+        return found
+
     try:
-        return oauth.discover(url, world.fetch, {})
+        return oauth.discover(url, recording, {})
     except oauth.NotPublished:
+        unclear = [(address, status) for address, status in answered if status not in CLEAN_NOT_FOUND]
+        if unclear:
+            address, status = unclear[0]
+            raise SignInStopped(f"ArtyCode couldn't tell whether {label} needs a sign-in: {address} answered "
+                                f"{status}.") from None
         return None
     except oauth.OAuthError as error:
         raise SignInStopped(f"ArtyCode couldn't tell whether {label} needs a sign-in: {error}") from None

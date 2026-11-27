@@ -321,7 +321,7 @@ class WebServer:
         try:
             return self.deadline.left(seconds)
         except oauth.OAuthError as error:
-            raise McpError(f"the MCP server {self.config.name}: {str(error).lower()}") from None
+            raise McpError(f"the MCP server {self.config.name}: {str(error).lower().rstrip('.')}") from None
 
     def limit_reads(self, response, seconds: float) -> None:
         if self.deadline is not None:

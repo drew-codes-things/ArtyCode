@@ -48,6 +48,9 @@ def handler_for(recorded: Recorded, token: str | None = "secret-token"):
                 return self.json_answer(message, {"content": [{"type": "text", "text": text}]})
             return self.json_answer(message, None)
 
+        def do_GET(self):
+            self.empty(404)
+
         def do_DELETE(self):
             recorded.deleted.append(self.headers.get("Mcp-Session-Id"))
             self.empty(200)
