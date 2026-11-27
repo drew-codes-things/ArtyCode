@@ -6,14 +6,13 @@ import re
 import subprocess
 import sys
 import threading
-import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from arty_cli import __version__, sign_ins
+from arty_cli import __version__, oauth, sign_ins
 
 PROTOCOL_VERSION = "2025-06-18"
 SETTINGS_FILE = "settings.json"
@@ -41,7 +40,10 @@ SIGN_IN_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 UNAUTHORISED = 401
 FORBIDDEN = 403
 CHALLENGE_HEADER = "WWW-Authenticate"
-AUTH_WORDS = re.compile(r"auth|sign.?in|log.?in|credential|token", re.IGNORECASE)
+AUTH_ERROR_CODES = (401, "invalid_token")
+PLAIN_ENTRY_KEYS = {"type", "url"}
+PLAIN_TYPE = "http"
+READ_CHUNK_BYTES = 8192
 CONNECTED, NEEDS_SIGN_IN, NOT_STARTED = "connected", "needs sign-in again", "didn't start"
 
 
@@ -82,6 +84,7 @@ class ServerConfig:
     url: str = ""
     headers: dict = field(default_factory=dict)
     sign_in: str = ""
+    plain: bool = False
 
 
 @dataclass(frozen=True)
@@ -134,7 +137,8 @@ def web_config_from(name: str, entry: dict, source: str, path: Path) -> tuple[Se
         if missing:
             return None, (f"MCP server {name} in {path}: the header {header} uses "
                           f"{', '.join('${' + variable + '}' for variable in missing)}, which isn't set")
-    return ServerConfig(name, "", [], {}, source, url=url, headers=filled, sign_in=sign_in), ""
+    plain = source == "yours" and set(entry) == PLAIN_ENTRY_KEYS and entry.get("type") == PLAIN_TYPE
+    return ServerConfig(name, "", [], {}, source, url=url, headers=filled, sign_in=sign_in, plain=plain), ""
 
 
 def config_from(name: str, entry, source: str, path: Path) -> tuple[ServerConfig | None, str]:
@@ -166,6 +170,11 @@ def configs(personal_folder: Path, workspace, include_project: bool) -> tuple[li
             else:
                 found[config.name] = config
     return list(found.values()), problems
+
+
+def is_auth_error(error: dict) -> bool:
+    data = error.get("data") if isinstance(error.get("data"), dict) else {}
+    return error.get("code") in AUTH_ERROR_CODES or data.get("error") in AUTH_ERROR_CODES
 
 
 def content_text(content: list) -> str:
@@ -258,14 +267,13 @@ def streamed_messages(response):
 
 class WebServer:
     def __init__(self, config: ServerConfig, start_seconds=START_SECONDS, call_seconds=CALL_SECONDS,
-                 credentials=None, follows_redirects=True, deadline_seconds=None, max_answer_bytes=None):
+                 credentials=None, follows_redirects=True, deadline=None, max_answer_bytes=None):
         self.config = config
         self.start_seconds = start_seconds
         self.call_seconds = call_seconds
         self.credentials = credentials
         self.follows_redirects = follows_redirects
-        self.ends_at = None if deadline_seconds is None else time.monotonic() + deadline_seconds
-        self.deadline_seconds = deadline_seconds
+        self.deadline = deadline
         self.max_answer_bytes = max_answer_bytes
         self.lock = threading.Lock()
         self.session = ""
@@ -308,20 +316,36 @@ class WebServer:
         return SIGNED_IN_OPENER.open(request, timeout=seconds)
 
     def seconds_left(self, seconds: float) -> float:
-        if self.ends_at is None:
+        if self.deadline is None:
             return seconds
-        left = self.ends_at - time.monotonic()
-        if left <= 0:
-            raise McpError(f"the MCP server {self.config.name} took longer than {self.deadline_seconds:g} s")
-        return min(seconds, left)
+        try:
+            return self.deadline.left(seconds)
+        except oauth.OAuthError as error:
+            raise McpError(f"the MCP server {self.config.name}: {str(error).lower()}") from None
 
-    def guarded(self, response):
-        total = 0
-        for raw in response:
-            total += len(raw)
+    def limit_reads(self, response, seconds: float) -> None:
+        if self.deadline is not None:
+            oauth.set_read_timeout(response, self.seconds_left(seconds))
+
+    def guarded(self, response, seconds: float):
+        total, pending = 0, []
+        while True:
+            self.limit_reads(response, seconds)
+            chunk = oauth.read_some(response, READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
             self.check_size(total)
-            self.seconds_left(0)
-            yield raw
+            head, newline, tail = chunk.rpartition(b"\n")
+            if not newline:
+                pending.append(chunk)
+                continue
+            complete = b"".join(pending) + head + newline
+            pending = [tail] if tail else []
+            for line in complete.split(b"\n")[:-1]:
+                yield line + b"\n"
+        if pending:
+            yield b"".join(pending)
 
     def check_size(self, total: int) -> None:
         if self.max_answer_bytes is not None and total > self.max_answer_bytes:
@@ -345,7 +369,7 @@ class WebServer:
 
     def refused(self, error: urllib.error.HTTPError) -> HttpAnswer:
         challenge = error.headers.get(CHALLENGE_HEADER, "") if error.headers else ""
-        if error.code == UNAUTHORISED and self.credentials is None:
+        if error.code == UNAUTHORISED and self.credentials is None and self.config.plain:
             self.needs_sign_in = True
             return AuthRequired(f"{self.config.name} now asks for a sign-in: run arty mcp login {self.config.name} "
                                 f"(the server answered {error.code} {error.reason})", error.code, challenge)
@@ -369,7 +393,8 @@ class WebServer:
     def answer_in(self, response, wanted: int, method: str, seconds: float) -> dict:
         streamed = EVENT_STREAM in (response.headers.get("Content-Type") or "")
         try:
-            texts = streamed_messages(self.guarded(response)) if streamed else [self.whole_answer(response)]
+            texts = (streamed_messages(self.guarded(response, seconds)) if streamed
+                     else [self.whole_answer(response, seconds)])
             for text in texts:
                 message = json.loads(text) if text.strip() else None
                 if not isinstance(message, dict):
@@ -380,24 +405,34 @@ class WebServer:
                 if message.get("id") == wanted:
                     return self.result_of(message, method)
         except (OSError, ValueError, RecursionError, http.client.HTTPException) as error:
+            self.seconds_left(0)
             raise McpError(f"the MCP server {self.config.name} sent an unreadable answer to {method}: {error}") from None
         raise McpError(f"the MCP server {self.config.name} didn't answer {method}")
 
-    def whole_answer(self, response) -> str:
-        limit = self.max_answer_bytes
-        raw = response.read() if limit is None else response.read(limit + 1)
-        self.check_size(len(raw))
-        return raw.decode("utf-8", errors="replace")
+    def whole_answer(self, response, seconds: float) -> str:
+        chunks, total = [], 0
+        while True:
+            self.limit_reads(response, seconds)
+            chunk = oauth.read_some(response, READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            self.check_size(total)
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8", errors="replace")
 
     def result_of(self, message: dict, method: str) -> dict:
         if "error" in message:
             error = message["error"] if isinstance(message["error"], dict) else {}
             detail = str(error.get("message", "no details"))
-            if self.credentials is None and AUTH_WORDS.search(detail):
-                self.needs_sign_in = True
-                raise AuthRequired(f"{self.config.name} now asks for a sign-in: run arty mcp login {self.config.name}",
-                                   UNAUTHORISED)
-            raise McpError(f"{self.config.name} refused {method}: {detail}")
+            refused = f"{self.config.name} refused {method}: {detail}"
+            if self.credentials is None and is_auth_error(error):
+                if self.config.plain:
+                    self.needs_sign_in = True
+                    raise AuthRequired(f"{self.config.name} now asks for a sign-in: run arty mcp login "
+                                       f"{self.config.name} ({detail})", UNAUTHORISED)
+                raise HttpAnswer(refused, UNAUTHORISED)
+            raise McpError(refused)
         result = message.get("result")
         return result if isinstance(result, dict) else {}
 
@@ -552,7 +587,7 @@ class Hub:
         if not config.url:
             return Server(config, self.workspace, self.start_seconds, self.call_seconds)
         if not config.sign_in:
-            return WebServer(config, self.start_seconds, self.call_seconds)
+            return WebServer(config, self.start_seconds, self.call_seconds, follows_redirects=not config.plain)
         if self.sign_ins is None:
             raise sign_ins.SignInError(f"there is no saved sign-in called {config.sign_in}")
         credentials = self.sign_ins.credentials(config.sign_in, config.url)

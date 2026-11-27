@@ -95,8 +95,10 @@ real one; it gives up after 5 minutes. When the service says which account you s
   addresses must be https; a server on the internet can't send ArtyCode to this computer, a private network
   (`10.x`, `192.168.x`, `169.254.x`, `fc00::/7` and the like) or names such as `localhost`, `*.local` and
   `*.internal`. Only an MCP server on this computer may use a sign-in server on this computer. None of these requests
-  follow a redirect, and an answer over 1 MB is not read. The same holds for the plain check `mcp add` makes first: it
-  follows no redirect, stops after 60 seconds and reads no more than 1 MB.
+  follow a redirect, and an answer over 1 MB is not read. The plain check `mcp add` makes first follows no redirect
+  either, and all of it (every request and every read) shares one 60 second clock and reads no more than 1 MB of any
+  one answer. A server saved with no sign-in connects without following redirects too. If the sign-in details a server
+  publishes can't be used, `mcp add` says so and saves nothing.
 
 - **What is saved.** Your `settings.json` gets `"notion": {"url": "https://mcp.notion.com/mcp", "signIn": "notion"}`,
   with no token in it. The tokens go in `mcp-sign-ins.json` in the same config folder, readable only by you (mode

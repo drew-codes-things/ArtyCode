@@ -327,6 +327,7 @@ def test_an_existing_server_of_the_same_name_is_not_overwritten(home, provider):
     (personal() / "settings.json").write_text(json.dumps({"mcpServers": {"fake": {"command": "mine"}}, "hooks": {}}))
     code, shown = signed_in_through_cli(url)
     assert code == mcp_sign_in.EXIT_FAILED and "already have an MCP server called fake" in shown
+    assert "arty mcp login" not in shown
     assert json.loads((personal() / "settings.json").read_text())["mcpServers"]["fake"] == {"command": "mine"}
 
 
@@ -1000,20 +1001,25 @@ def test_a_catalogue_service_is_never_saved_without_a_sign_in(home, monkeypatch)
 
 def in_band_auth_error(handler, message) -> None:
     if message and message.get("method") == "initialize":
-        return fake_probe_mcp.rpc(handler, message, error={"code": -32001, "message": "Authentication required"})
+        return fake_probe_mcp.rpc(handler, message, error={"code": 401, "message": "Authentication required"})
     fake_probe_mcp.send(handler, 404)
 
 
 def forbidden(handler, message) -> None:
-    fake_probe_mcp.send(handler, 403, b"no")
+    if message and message.get("method") == "tools/list":
+        return fake_probe_mcp.send(handler, 403, b"no")
+    fake_probe_mcp.healthy(handler, message)
 
 
-@pytest.mark.parametrize("answer", [in_band_auth_error, forbidden])
-def test_an_answer_that_asks_for_auth_without_a_401_goes_on_to_the_sign_in_path(home, probe_server, answer):
+@pytest.mark.parametrize("answer, said", [(in_band_auth_error, "Authentication required"),
+                                          (forbidden, "answered 403 Forbidden")])
+def test_an_answer_that_asks_for_auth_without_a_401_reports_what_the_server_said(home, probe_server, answer, said):
     holder = probe_server(answer)
     code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="odd")
-    assert code == mcp_sign_in.EXIT_FAILED and "doesn't publish its details" in shown
+    assert code == mcp_sign_in.EXIT_FAILED and said in shown and "publishes no sign-in" in shown
     assert "couldn't use it" not in shown and not (personal() / "settings.json").exists()
+    discovery_requests = [path for command, path, _headers, _body in holder.requests if command == "GET"]
+    assert len(discovery_requests) == len(set(discovery_requests))
 
 
 def test_a_signed_in_server_is_never_replaced_by_adding_it_again(home, provider):
@@ -1023,7 +1029,7 @@ def test_a_signed_in_server_is_never_replaced_by_adding_it_again(home, provider)
     found.anonymous = True
     code, shown = signed_in_through_cli(url)
     assert code == mcp_sign_in.EXIT_FAILED and "already have an MCP server called fake" in shown
-    assert "remove it first" in shown
+    assert "remove it first" in shown and "arty mcp login fake" in shown
     assert (settings_table(), stored()) == before
 
 
@@ -1032,6 +1038,7 @@ def test_adding_a_plain_entry_again_is_refused_and_remove_then_makes_it_work(hom
     assert signed_in_through_cli(url, name="open")[0] == 0
     code, shown = signed_in_through_cli(url, name="open")
     assert code == mcp_sign_in.EXIT_FAILED and "remove it first with arty mcp remove open" in shown
+    assert "arty mcp login open" in shown
     terminal = quiet_terminal()
     assert mcp_sign_in.run(["mcp", "remove", "open"], terminal, desktop()) == 0, terminal.err.getvalue()
     assert "open" not in settings_table()["mcpServers"]
@@ -1072,7 +1079,7 @@ def test_logging_in_to_a_plain_entry_that_now_asks_for_a_sign_in_converts_it(hom
 
 def test_a_plain_entry_whose_server_now_wants_a_sign_in_says_how_to_sign_in(home, provider):
     _found, url = provider
-    config = mcp.ServerConfig("fake", "", [], {}, "yours", url=url)
+    config = mcp.ServerConfig("fake", "", [], {}, "yours", url=url, plain=True)
     hub = mcp.Hub(tools.Workspace(home))
     problems = hub.start([config])
     assert len(problems) == 1 and "fake now asks for a sign-in: run arty mcp login fake" in problems[0]
@@ -1088,7 +1095,7 @@ def test_a_plain_entry_whose_tool_call_gets_a_401_says_how_to_sign_in(home, prob
 
     holder = probe_server(refusing_calls)
     hub = mcp.Hub(tools.Workspace(home))
-    hub.start([mcp.ServerConfig("odd", "", [], {}, "yours", url=f"{holder.address}/mcp")])
+    hub.start([mcp.ServerConfig("odd", "", [], {}, "yours", url=f"{holder.address}/mcp", plain=True)])
     try:
         assert hub.run("mcp__odd__lookup", {}).startswith("Error: odd now asks for a sign-in: run arty mcp login odd")
     finally:
@@ -1168,7 +1175,8 @@ def test_an_oversized_anonymous_answer_is_refused(home, probe_server, monkeypatc
 def test_a_401_after_an_anonymous_start_keeps_the_challenge_for_the_sign_in(home, probe_server):
     def late_401(handler, message):
         if message and message.get("method") == "tools/list":
-            return fake_probe_mcp.send(handler, 401, headers={"WWW-Authenticate": 'Bearer scope="read"'})
+            challenge = f'Bearer scope="read", resource_metadata="{holder.address}/custom"'
+            return fake_probe_mcp.send(handler, 401, headers={"WWW-Authenticate": challenge})
         fake_probe_mcp.healthy(handler, message)
 
     holder = probe_server(late_401)
@@ -1236,3 +1244,170 @@ def test_the_anonymous_connection_goes_through_the_world(home):
 def test_an_http_address_that_is_not_this_computer_is_turned_away_in_plain_words(home):
     code, shown = signed_in_through_cli("http://192.168.1.50:8080/mcp")
     assert code == mcp_sign_in.EXIT_FAILED and "isn't an https address, so ArtyCode won't add it" in shown
+
+
+def hand_written_hub(home, holder, entry: dict, source: str = "yours") -> mcp.Hub:
+    personal().mkdir(parents=True, exist_ok=True)
+    written = {"mcpServers": {"w": {**entry, "url": f"{holder.address}/mcp"}}}
+    (personal() / "settings.json").write_text(json.dumps(written))
+    configs, problems = mcp.configs(personal(), tools.Workspace(home), False)
+    assert problems == []
+    hub = mcp.Hub(tools.Workspace(home))
+    hub.start(configs)
+    return hub
+
+
+@pytest.mark.parametrize("said", ["Error assigning the issue to that user", "author not found",
+                                  "prompt is over the tokenizer limit", "the blog index is rebuilding",
+                                  "logging backend is down"])
+def test_a_server_error_that_only_looks_like_auth_keeps_the_servers_own_words(home, probe_server, said):
+    def failing_calls(handler, message):
+        if message and message.get("method") == "tools/call":
+            return fake_probe_mcp.rpc(handler, message, error={"code": -32000, "message": said})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(failing_calls)
+    hub = hand_written_hub(home, holder, {"headers": {"X-Api-Key": "k"}})
+    try:
+        assert hub.run("mcp__w__lookup", {}) == f"Error: w refused tools/call: {said}"
+        assert hub.states()[0].status == mcp.CONNECTED
+    finally:
+        hub.close()
+
+
+def test_a_hand_written_entry_with_headers_keeps_the_plain_401_wording(home, probe_server):
+    holder = probe_server(lambda handler, message: fake_probe_mcp.send(handler, 401))
+    hub = hand_written_hub(home, holder, {"headers": {"Authorization": "Bearer old"}})
+    state = hub.states()[0]
+    assert state.status == mcp.NOT_STARTED
+    assert "w answered 401 Unauthorized" in state.problem and "arty mcp login" not in state.problem
+
+
+def test_a_plain_entry_gets_the_sign_in_advice_for_a_real_auth_error_code_only(home, probe_server):
+    def refusing(handler, message):
+        if message and message.get("method") == "tools/call":
+            return fake_probe_mcp.rpc(handler, message, error={"code": 401, "message": "token expired"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(refusing)
+    hub = hand_written_hub(home, holder, {"type": "http"})
+    try:
+        assert "w now asks for a sign-in: run arty mcp login w" in hub.run("mcp__w__lookup", {})
+        assert hub.states()[0].status == mcp.NEEDS_SIGN_IN
+    finally:
+        hub.close()
+
+
+def test_a_project_entry_never_gets_the_sign_in_advice(home, probe_server):
+    holder = probe_server(lambda handler, message: fake_probe_mcp.send(handler, 401))
+    config = mcp.ServerConfig("w", "", [], {}, "this project", url=f"{holder.address}/mcp")
+    hub = mcp.Hub(tools.Workspace(home))
+    problems = hub.start([config])
+    assert "arty mcp login" not in problems[0] and hub.states()[0].status == mcp.NOT_STARTED
+
+
+def test_the_chat_connection_right_after_the_check_follows_no_redirect(home, probe_server, monkeypatch):
+    other = probe_server(lambda handler, message: fake_probe_mcp.send(handler, 200, b"{}"))
+    starts = []
+
+    def answered(handler, message):
+        if message is not None and message.get("method") == "initialize":
+            starts.append(1)
+            if len(starts) == 3:
+                return fake_probe_mcp.send(handler, 302, headers={"Location": f"{other.address}/internal"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(answered)
+    session_world(monkeypatch, desktop())
+    session = session_for(home, ScriptedBrain([]))
+    session.extras = cli.extras_module.Extras(hub=hub_for(home))
+    try:
+        session.command(f"/mcp add {holder.address}/mcp hop")
+    finally:
+        session.extras.close()
+    assert other.requests == []
+
+
+def trickling_body(handler, message):
+    body = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": {}}).encode()
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    for index in range(len(body)):
+        handler.wfile.write(body[index:index + 1])
+        handler.wfile.flush()
+        time.sleep(0.3)
+
+
+def test_one_deadline_covers_the_first_answer_too(home, probe_server, monkeypatch):
+    holder = probe_server(lambda handler, message: trickling_body(handler, message))
+    monkeypatch.setattr(mcp_sign_in, "OPEN_DEADLINE_SECONDS", 1)
+    started = time.monotonic()
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="slow")
+    assert code == mcp_sign_in.EXIT_FAILED and "took longer than" in shown and time.monotonic() - started < 4
+
+
+def test_one_deadline_covers_every_stage_added_together(home, probe_server, monkeypatch):
+    def pausing(handler, message):
+        time.sleep(0.6)
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(pausing)
+    monkeypatch.setattr(mcp_sign_in, "OPEN_DEADLINE_SECONDS", 2)
+    started = time.monotonic()
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="slow")
+    assert code == mcp_sign_in.EXIT_FAILED and "took longer than" in shown and time.monotonic() - started < 5
+
+
+def test_a_body_in_slow_pieces_is_stopped_at_the_deadline_while_it_is_read(home, probe_server, monkeypatch):
+    def trickling_list(handler, message):
+        if message and message.get("method") == "tools/list":
+            return trickling_body(handler, message)
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(trickling_list)
+    monkeypatch.setattr(mcp_sign_in, "OPEN_DEADLINE_SECONDS", 1)
+    started = time.monotonic()
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="slow")
+    assert code == mcp_sign_in.EXIT_FAILED and "took longer than" in shown and time.monotonic() - started < 4
+
+
+def test_one_endless_line_is_cut_off_at_the_size_cap_while_it_is_read(home, probe_server, monkeypatch):
+    sent = []
+
+    def endless_line(handler, message):
+        if message and message.get("method") == "tools/list":
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.end_headers()
+            try:
+                for _piece in range(400):
+                    handler.wfile.write(b"x" * 10_000)
+                    handler.wfile.flush()
+                    sent.append(10_000)
+                    time.sleep(0.02)
+            except OSError:
+                return None
+            return None
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(endless_line)
+    monkeypatch.setattr(mcp_sign_in, "OPEN_MAX_ANSWER_BYTES", 100_000)
+    started = time.monotonic()
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="big")
+    assert code == mcp_sign_in.EXIT_FAILED and "more than" in shown
+    assert time.monotonic() - started < 3 and sum(sent) < 1_500_000
+
+
+def test_sign_in_details_that_cannot_be_used_are_reported_and_nothing_is_saved(home, probe_server):
+    def odd_details(handler, message):
+        if message is None and "oauth-protected-resource" in handler.path:
+            return fake_probe_mcp.send(handler, 200, json.dumps({"resource": "https://other.example/mcp"}).encode(),
+                                       {"Content-Type": "application/json"})
+        fake_probe_mcp.healthy(handler, message)
+
+    holder = probe_server(odd_details)
+    code, shown = signed_in_through_cli(f"{holder.address}/mcp", name="odd")
+    assert code == mcp_sign_in.EXIT_FAILED and "couldn't tell whether" in shown
+    assert not (personal() / "settings.json").exists()

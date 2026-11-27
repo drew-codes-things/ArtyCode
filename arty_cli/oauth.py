@@ -1,4 +1,6 @@
 import base64
+import contextlib
+import contextvars
 import hashlib
 import html
 import http.client
@@ -38,6 +40,7 @@ LOOPBACK_NAMES = ("localhost",)
 PRIVATE_NAME_ENDINGS = (".localhost", ".local", ".internal", ".home.arpa")
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MAX_ANSWER_BYTES = 1024 * 1024
+READ_CHUNK_BYTES = 8192
 CALLBACK_REQUEST_SECONDS = 10
 TOO_MANY_REQUESTS = 429
 FIRST_SERVER_ERROR = 500
@@ -63,12 +66,56 @@ class WrongAnswer(OAuthError):
     pass
 
 
+class NotPublished(OAuthError):
+    pass
+
+
 class NoRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
 
 
 NO_REDIRECTS = urllib.request.build_opener(NoRedirects)
+
+
+class Deadline:
+    def __init__(self, seconds: float):
+        self.seconds = seconds
+        self.ends_at = time.monotonic() + seconds
+
+    def left(self, most: float) -> float:
+        remaining = self.ends_at - time.monotonic()
+        if remaining <= 0:
+            raise Unavailable(f"The check took longer than {self.seconds:g} s.")
+        return min(most, remaining)
+
+
+CURRENT_DEADLINE = contextvars.ContextVar("current_deadline", default=None)
+
+
+@contextlib.contextmanager
+def within(deadline: Deadline):
+    token = CURRENT_DEADLINE.set(deadline)
+    try:
+        yield deadline
+    finally:
+        CURRENT_DEADLINE.reset(token)
+
+
+def seconds_allowed(most: float) -> float:
+    deadline = CURRENT_DEADLINE.get()
+    return most if deadline is None else deadline.left(most)
+
+
+def read_some(answer, size: int) -> bytes:
+    reader = getattr(answer, "read1", None) or answer.read
+    return reader(size)
+
+
+def set_read_timeout(answer, seconds: float) -> None:
+    found = getattr(getattr(getattr(answer, "fp", None), "raw", None), "_sock", None)
+    if found is not None:
+        found.settimeout(seconds)
 
 
 @dataclass(frozen=True)
@@ -200,7 +247,15 @@ def text_list(found: dict, name: str, where: str) -> list[str]:
 
 
 def capped(answer, url: str) -> bytes:
-    raw = answer.read(MAX_ANSWER_BYTES + 1)
+    chunks, total = [], 0
+    while total <= MAX_ANSWER_BYTES:
+        set_read_timeout(answer, seconds_allowed(REQUEST_SECONDS))
+        chunk = read_some(answer, min(READ_CHUNK_BYTES, MAX_ANSWER_BYTES + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    raw = b"".join(chunks)
     if len(raw) > MAX_ANSWER_BYTES:
         raise OAuthError(f"{url} sent more than {MAX_ANSWER_BYTES // 1024} KB, so ArtyCode stopped reading it.")
     missing = getattr(answer, "length", None)
@@ -211,7 +266,7 @@ def capped(answer, url: str) -> bytes:
 
 def answer_to(request: urllib.request.Request) -> tuple[int, dict, bytes]:
     try:
-        with NO_REDIRECTS.open(request, timeout=REQUEST_SECONDS) as response:
+        with NO_REDIRECTS.open(request, timeout=seconds_allowed(REQUEST_SECONDS)) as response:
             return response.status, dict(response.headers.items()), capped(response, request.full_url)
     except urllib.error.HTTPError as error:
         return error.code, dict(error.headers.items()) if error.headers else {}, capped(error, request.full_url)
@@ -223,6 +278,7 @@ def fetched(url: str, data: bytes | None = None, headers: dict | None = None,
         return answer_to(urllib.request.Request(url, data=data, method=method,
                                                 headers={"User-Agent": f"arty-cli/{__version__}", **(headers or {})}))
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as error:
+        seconds_allowed(0)
         raise Unavailable(f"Couldn't reach {url}: {error}") from None
     except ValueError as error:
         raise OAuthError(f"ArtyCode can't use the address {url}: {error}") from None
@@ -282,7 +338,7 @@ def origin_of(url: str) -> str:
 def authorization_server(issuer: str, fetch) -> dict:
     _url, found = first_json(well_known_urls(issuer, (AUTHORIZATION_SERVER, OPENID_CONFIGURATION), True), fetch)
     if not found:
-        raise OAuthError(f"The sign-in server {issuer} doesn't publish its details, so ArtyCode can't sign in there.")
+        raise NotPublished(f"The sign-in server {issuer} doesn't publish its details, so ArtyCode can't sign in there.")
     if comparable(text_field(found, "issuer", issuer)) != comparable(issuer):
         raise OAuthError(f"The sign-in server {issuer} names itself {found.get('issuer')!r}; not trusting it.")
     if PKCE_METHOD not in text_list(found, "code_challenge_methods_supported", issuer):

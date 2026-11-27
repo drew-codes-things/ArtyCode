@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import re
@@ -378,32 +379,38 @@ def end_first_session(url: str, session: str, world: World) -> None:
         return
 
 
-def published_sign_in(url: str, world: World) -> oauth.Discovery | None:
+def published_sign_in(label: str, url: str, world: World) -> oauth.Discovery | None:
     try:
         return oauth.discover(url, world.fetch, {})
-    except oauth.OAuthError:
+    except oauth.NotPublished:
         return None
+    except oauth.OAuthError as error:
+        raise SignInStopped(f"ArtyCode couldn't tell whether {label} needs a sign-in: {error}") from None
 
 
-def offer_from(error: mcp.HttpAnswer) -> SignInOffer:
-    return SignInOffer(oauth.challenge_parameters(error.challenge))
+def refusal_of(label: str, error: mcp.HttpAnswer) -> SignInOffer:
+    hints = oauth.challenge_parameters(error.challenge)
+    if "resource_metadata" in hints:
+        return SignInOffer(hints)
+    raise SignInStopped(f"{label} publishes no sign-in details, and {error}.")
 
 
 def opened_or_offer(label: str, name: str, url: str, world: World) -> mcp.ServerConfig | SignInOffer:
     config = mcp.ServerConfig(name, "", [], {}, "yours", url=url)
     server = world.open_server(config, start_seconds=OPEN_CHECK_SECONDS, follows_redirects=False,
-                               deadline_seconds=OPEN_DEADLINE_SECONDS, max_answer_bytes=OPEN_MAX_ANSWER_BYTES)
+                               deadline=oauth.CURRENT_DEADLINE.get() or oauth.Deadline(OPEN_DEADLINE_SECONDS),
+                               max_answer_bytes=OPEN_MAX_ANSWER_BYTES)
     try:
         server.start()
     except mcp.HttpAnswer as error:
         if error.status not in (oauth.UNAUTHORISED, FORBIDDEN):
             raise SignInStopped(f"{label} didn't ask for a sign-in, but ArtyCode couldn't use it: {error}.") from None
-        return offer_from(error)
+        return refusal_of(label, error)
     except mcp.McpError as error:
         raise SignInStopped(f"{label} didn't ask for a sign-in, but ArtyCode couldn't use it: {error}.") from None
     finally:
         server.close()
-    return config
+    return dataclasses.replace(config, plain=True)
 
 
 def anonymous_answer(terminal: Terminal, service: Service, name: str,
@@ -417,7 +424,7 @@ def anonymous_answer(terminal: Terminal, service: Service, name: str,
     end_first_session(service.url, session, world)
     if is_catalogue_address(service.url):
         return SignInOffer()
-    published = published_sign_in(service.url, world)
+    published = published_sign_in(service.label, service.url, world)
     if published is not None:
         return SignInOffer(published=published)
     return opened_or_offer(service.label, name, service.url, world)
@@ -427,10 +434,14 @@ def added(terminal: Terminal, personal: Path, service: Service, name: str, store
           world: World) -> mcp.ServerConfig:
     if not oauth.is_safe_address(service.url):
         raise SignInStopped(f"{service.url!r} isn't an https address, so ArtyCode won't add it.")
-    if saved_entry(personal, name) is not None:
+    existing = saved_entry(personal, name)
+    if existing is not None:
+        again = (f" To sign in to it again, run arty mcp login {name}."
+                 if is_signed_in_entry(existing, name) or is_plain_entry(existing) else "")
         raise SignInStopped(f"You already have an MCP server called {name}. Pick another name with --name, or "
-                            f"remove it first with arty mcp remove {name}.")
-    found = anonymous_answer(terminal, service, name, world)
+                            f"remove it first with arty mcp remove {name}.{again}")
+    with oauth.within(oauth.Deadline(OPEN_DEADLINE_SECONDS)):
+        found = anonymous_answer(terminal, service, name, world)
     if isinstance(found, mcp.ServerConfig):
         path = save_open_entry(personal, name, service.url)
         terminal.note(f"Saved {name} in {path}; it needs no sign-in.", "green")
